@@ -23,7 +23,7 @@ pub struct LaunchFingerprint {
 /// `blake3` hex of a file's bytes, streamed in chunks so memory stays bounded. An
 /// unreadable file records a sentinel so one permission problem does not drop the whole
 /// fingerprint (that would just force a normal rebuild).
-fn content_hash(path: &Path) -> IdeResult<String> {
+pub(super) fn content_hash(path: &Path) -> IdeResult<String> {
     let mut file = match fs::File::open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok("missing".into()),

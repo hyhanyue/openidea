@@ -9,12 +9,11 @@ license.workspace = true
 blake3.workspace = true
 dunce.workspace = true
 ide-core.workspace = true
+ide-vfs.workspace = true
 zip.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
 tracing.workspace = true
 dirs.workspace = true
-
-[dev-dependencies]
 tempfile.workspace = true

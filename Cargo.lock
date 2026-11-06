@@ -4160,6 +4160,7 @@ dependencies = [
  "dirs 6.0.0",
  "dunce",
  "ide-core",
+ "ide-vfs",
  "serde",
  "serde_json",
  "specta",

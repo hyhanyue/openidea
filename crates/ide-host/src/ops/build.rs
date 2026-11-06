@@ -751,6 +751,12 @@ pub async fn build_run(
                 &settings,
             )
         };
+        // An explicit Maven build must not change outputs during a launch rollback.
+        let _maven_output_guard =
+            (plan.system == compile::BuildSystem::Maven).then(|| project.java_launch_snapshots.lock());
+        if token.is_cancelled() {
+            return Err(IdeError::cancelled());
+        }
         let result = compile::run(&root, &plan, &token, &|e| {
             let _ = on_event.send(e);
         })?;

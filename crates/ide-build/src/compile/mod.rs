@@ -4,6 +4,7 @@
 //! for the Build tool window, the Problems view and the editor.
 
 mod fingerprint;
+mod maven_outputs;
 mod parse;
 
 pub use fingerprint::{LaunchFingerprint, launch_fingerprint};
@@ -769,7 +770,47 @@ pub fn build_for_launch(
     cancel: &CancellationToken,
 ) -> IdeResult<Vec<PathBuf>> {
     let plan = launch_plan(root, model, module, test)?;
-    let result = run(root, &plan, cancel, &|_| {})?;
+    if cancel.is_cancelled() {
+        return Err(IdeError::cancelled());
+    }
+    let backups = if plan.system == BuildSystem::Maven
+        && let Some(m) = &model.maven
+        && let Some(top) = maven_reactor(m, &rel_str(root, module))
+    {
+        // Maven can clean test outputs on a main launch and build reactor parents
+        // and plugins that aren't on the runtime classpath.
+        maven_outputs::backup(reactor_projects(m, top).iter().map(|p| subdir(root, &p.dir)), cancel)?
+    } else {
+        Vec::new()
+    };
+    if cancel.is_cancelled() {
+        return Err(IdeError::cancelled());
+    }
+    if let Err(mut error) = run_for_launch(root, &plan, cancel) {
+        for backup in backups {
+            if let Err(restore) = backup.restore() {
+                tracing::error!(%restore, "Cannot roll back Maven launch outputs");
+                error.message.push_str(&format!("\n{restore}"));
+            }
+        }
+        return Err(error);
+    }
+    if plan.system == BuildSystem::Maven
+        && let Some(m) = &model.maven
+    {
+        return Ok(maven_launch_projects(root, m, module, test)
+            .iter()
+            .flat_map(|p| launch_class_dirs(plan.system, &subdir(root, &p.dir), test && subdir(root, &p.dir) == module))
+            .collect());
+    }
+    Ok(launch_class_dirs(plan.system, module, test))
+}
+
+fn run_for_launch(root: &Path, plan: &BuildPlan, cancel: &CancellationToken) -> IdeResult<()> {
+    let result = run(root, plan, cancel, &|_| {})?;
+    if cancel.is_cancelled() {
+        return Err(IdeError::cancelled());
+    }
     if !result.success {
         let errors: Vec<String> = result
             .messages
@@ -783,15 +824,7 @@ pub fn build_for_launch(
             .collect();
         return Err(IdeError::internal(format!("Build failed:\n{}", errors.join("\n"))));
     }
-    if plan.system == BuildSystem::Maven
-        && let Some(m) = &model.maven
-    {
-        return Ok(maven_launch_projects(root, m, module, test)
-            .iter()
-            .flat_map(|p| launch_class_dirs(plan.system, &subdir(root, &p.dir), test && subdir(root, &p.dir) == module))
-            .collect());
-    }
-    Ok(launch_class_dirs(plan.system, module, test))
+    Ok(())
 }
 
 fn launch_class_dirs(system: BuildSystem, module: &Path, test: bool) -> Vec<PathBuf> {
@@ -1252,6 +1285,101 @@ mod tests {
             build_for_launch(root, &model, &root.join("app"), false, &cancel).unwrap_err().kind,
             ide_core::error::ErrorKind::Cancelled
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_maven_launch_restores_previous_reactor_classes() {
+        use std::fs;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "app/pom.xml", "<project/>");
+        let previous = [
+            ("app/target/classes/Main.class", "old app"),
+            ("app/target/classes/settings.properties", "old resources"),
+            ("app/target/test-classes/MainTest.class", "old test"),
+            ("middle/target/classes/Dependency.class", "old upstream"),
+            ("unrelated/target/classes/Other.class", "other project"),
+        ];
+        for (file, value) in previous {
+            write(root, file, value);
+        }
+        let unrelated = root.join("unrelated/target/classes");
+        let inode = fs::metadata(&unrelated).unwrap().ino();
+        let script = root.join("mvnw");
+        write(
+            root,
+            "mvnw",
+            r#"#!/bin/sh
+rm -rf app/target middle/target
+mkdir -p app/target/classes middle/target/classes lib/target/classes
+echo partial > app/target/classes/Partial.class
+echo newer > middle/target/classes/Dependency.class
+echo first > lib/target/classes/First.class
+exit 1
+"#,
+        );
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut model = reactor_model();
+        model.maven.as_mut().unwrap().projects[0].command = script.to_string_lossy().into_owned();
+
+        let module = root.join("app");
+        assert!(build_for_launch(root, &model, &module, false, &CancellationToken::new()).is_err());
+        for (file, value) in previous {
+            assert_eq!(fs::read_to_string(root.join(file)).unwrap(), value);
+        }
+        assert!(!root.join("app/target/classes/Partial.class").exists());
+        assert_eq!(fs::metadata(&unrelated).unwrap().ino(), inode);
+        // There was no previous output to restore in lib.
+        assert!(root.join("lib/target/classes/First.class").is_file());
+
+        let rebuild = plan(root, &model, BuildKind::Rebuild, Some(&module), None).unwrap();
+        assert!(!run(root, &rebuild, &CancellationToken::new(), &|_| {}).unwrap().success);
+        assert!(!root.join("app/target/classes/Main.class").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_maven_launch_restores_classes_after_stopping_the_builder() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "app/pom.xml", "<project/>");
+        write(root, "app/target/classes/Main.class", "old output");
+        write(
+            root,
+            "mvnw",
+            r#"#!/bin/sh
+rm -rf app/target
+mkdir -p app/target/classes
+echo partial > app/target/classes/Partial.class
+touch building
+sleep 30
+"#,
+        );
+        let script = root.join("mvnw");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut model = reactor_model();
+        model.maven.as_mut().unwrap().projects[0].command = script.to_string_lossy().into_owned();
+        let cancel = CancellationToken::new();
+
+        std::thread::scope(|scope| {
+            let build = scope.spawn(|| build_for_launch(root, &model, &root.join("app"), true, &cancel));
+            let start = Instant::now();
+            while !root.join("building").is_file() && !build.is_finished() && start.elapsed() < Duration::from_secs(5) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            cancel.cancel();
+            assert_eq!(build.join().unwrap().unwrap_err().kind, ide_core::error::ErrorKind::Cancelled);
+            assert!(root.join("building").is_file(), "cancelled before Maven touched its outputs");
+        });
+        assert_eq!(fs::read_to_string(root.join("app/target/classes/Main.class")).unwrap(), "old output");
+        assert!(!root.join("app/target/classes/Partial.class").exists());
     }
 
     #[test]
