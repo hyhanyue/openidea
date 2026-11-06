@@ -48,7 +48,7 @@ import { basename, relativePath, useProject } from "@/platform/project";
 import { editorService } from "@/workbench/contributions";
 import { fileIconName } from "@/ui";
 import { NO_SERVER, debounce, docOf, isUnavailable, lspRequest, reportLspError } from "./lsp";
-import { offsetToPos, rangeToOffsets } from "./positions";
+import { comparePos, offsetToPos, rangeToOffsets } from "./positions";
 import {
   SYNTAX_NOTE,
   declarationFallback,
@@ -284,7 +284,8 @@ export async function gotoTargets(view: EditorView, kind: GotoKind, at?: number)
   }
   const doc = docOf(view);
   if (!doc) return;
-  const pos = offsetToPos(view.state.doc, offset);
+  const text = view.state.doc;
+  const pos = offsetToPos(text, offset);
   let locs: DeclarationTarget[];
   let fromSyntax = false;
   const declaration = kind === "definition" || kind === "declaration";
@@ -346,13 +347,14 @@ export async function gotoTargets(view: EditorView, kind: GotoKind, at?: number)
     );
     return;
   }
-  // IDEA: ⌘B on a declaration shows its usages.
-  if (kind === "definition" && isSelfTarget(locs, doc.path, pos)) {
+  const showUsages = async () => {
     if (!(await executeAction("find.showUsages"))) showHint(view, "No usages found");
-    return;
-  }
+  };
   if (locs.length === 1) {
-    await navigateTo(locs[0]!);
+    // IDEA: ⌘B on a declaration shows its usages.
+    const target = locs[0]!;
+    if (kind === "definition" && isSelfTarget(target, doc.path, pos)) return showUsages();
+    await navigateTo(target);
     // After the editor applied the navigation's selection (which dismisses hints).
     if (fromSyntax)
       setTimeout(() => {
@@ -361,12 +363,30 @@ export async function gotoTargets(view: EditorView, kind: GotoKind, at?: number)
       }, 150);
     return;
   }
-  const name = nameAt(view, offset);
+  const word = navigationWord(view, offset);
+  const name = word ? view.state.sliceDoc(word.from, word.to) : null;
+  const items = await locationItems(locs);
+  if (kind === "definition" && !fromSyntax && word && view.state.doc === text) {
+    const start = offsetToPos(text, word.from);
+    // A containing range (e.g. a whole function) alone may also include a reference.
+    const self = locs.findIndex((loc) => comparePos(loc.range.start, start) === 0 && isSelfTarget(loc, doc.path, pos));
+    if (self >= 0) {
+      const item = items[self]!;
+      const label = tx`Show Usages`;
+      item.detail = item.detail ? `${label} · ${item.detail}` : label;
+      item.run = () => {
+        if (view.state.doc !== text || !view.dom.isConnected) return;
+        view.dispatch({ selection: EditorSelection.cursor(offset) });
+        view.focus();
+        return showUsages();
+      };
+    }
+  }
   openPopup({
     kind: "list",
     anchor: caretAnchor(view, offset),
     title: chooserTitle(kind, name, locs.length, fromSyntax),
-    items: await locationItems(locs),
+    items,
     pin: pinToFind(name ?? "", locs),
   });
 }

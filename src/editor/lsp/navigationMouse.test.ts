@@ -1,8 +1,12 @@
 import { registerNavigationProvider } from "../navigationProviders";
+import { createElement } from "react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import type { commands } from "@/platform/ipc";
+import type { commands, Location } from "@/platform/ipc";
+import { _setActiveEditor } from "@/editor/api";
+import { setContext } from "@/platform/context";
 import { usePlatform } from "@/platform/platformInfo";
 import { resetNavigationModifier } from "@/platform/navigationModifier";
 import { installKeyboardDispatcher, useKeymap } from "@/platform/keymap";
@@ -14,7 +18,16 @@ vi.mock("@/platform/ipc", async (orig) => {
   // Go to Implementation streams (`lspGotoImplementation`); here it answers all at once.
   const lspGotoImplementation: typeof commands.lspGotoImplementation = (_request, doc, pos) =>
     lspGoto(doc, pos, "implementation");
-  return { ...real, isTauri: () => true, commands: { ...real.commands, lspGoto, lspGotoImplementation } };
+  return {
+    ...real,
+    isTauri: () => true,
+    commands: {
+      ...real.commands,
+      lspGoto,
+      lspGotoImplementation,
+      lspDocumentHighlights: async () => ({ status: "ok", data: [] }),
+    },
+  };
 });
 vi.mock("@tauri-apps/api/core", async (orig) => ({
   ...(await orig<object>()),
@@ -23,6 +36,9 @@ vi.mock("@tauri-apps/api/core", async (orig) => ({
   },
 }));
 
+const { LspPopups } = await import("./Popups");
+const { closePopup, openPopup, useLspPopup } = await import("./popupStore");
+const { registerLspActions } = await import("./actions");
 const { gotoTargets, navigationExtension } = await import("./navigation");
 const { lspDoc } = await import("./lsp");
 const { provideEditorService } = await import("@/workbench/contributions");
@@ -225,4 +241,79 @@ describe("force click (macOS trackpad)", () => {
       expect(lspGoto).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("declaration or usages", () => {
+  const source = "interface Mapper {\n  int findById(long id);\n}";
+  const offset = source.indexOf("findById") + 2;
+  const self: Location = { path: "/p/Main.java", range: { start: { line: 1, col: 6 }, end: { line: 1, col: 14 } } };
+  const xml: Location = { path: "/p/Mapper.xml", range: { start: { line: 2, col: 4 }, end: { line: 2, col: 7 } } };
+  const showUsages = vi.fn(() => {
+    expect(useLspPopup.getState().popup).toBeNull();
+    expect(view.hasFocus).toBe(true);
+    expect(view.state.selection.main.head).toBe(offset);
+    openPopup({ kind: "list", title: "Usages", anchor: { x: 0, y: 0 }, items: [] });
+  });
+  let unregister: () => void;
+  let removeLspActions: () => void;
+  beforeEach(() => {
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } });
+    vi.mocked(view.posAtCoords).mockReturnValue(offset);
+    _setActiveEditor({ view, ctx: view.state.facet(lspDoc)! });
+    setContext("textEditorActive", true);
+    removeLspActions = registerLspActions();
+    unregister = registerAction({ id: "find.showUsages", title: "Show Usages", run: showUsages });
+    render(createElement(LspPopups));
+  });
+
+  afterEach(() => {
+    act(() => closePopup());
+    unregister();
+    removeLspActions();
+    _setActiveEditor(null);
+    setContext("textEditorActive", undefined);
+  });
+
+  it.each(["mouse", "keyboard"])("shows usages from the current declaration row via %s", async (input) => {
+    lspGoto.mockResolvedValue({ status: "ok", data: [self, xml] });
+    if (input === "mouse") {
+      click({ button: 1 });
+    } else {
+      view.dispatch({ selection: { anchor: offset } });
+      view.focus();
+      fireEvent.keyDown(view.contentDOM, { key: "b", code: "KeyB", metaKey: true });
+    }
+    const list = await screen.findByRole("listbox", { name: /Choose Declaration/ });
+    const usagesRow = screen.getByRole("option", { name: /Show Usages.*Main.java/ });
+    if (input === "mouse") fireEvent.click(usagesRow);
+    else fireEvent.keyDown(list, { key: "Enter" });
+
+    expect(await screen.findByRole("dialog", { name: "Usages" })).toBeTruthy();
+    expect(showUsages).toHaveBeenCalledOnce();
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it("still shows usages immediately for a sole current declaration", async () => {
+    lspGoto.mockResolvedValue({ status: "ok", data: [self] });
+    click({ button: 1 });
+    expect(await screen.findByRole("dialog", { name: "Usages" })).toBeTruthy();
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "the XML statement", target: xml, row: 1 },
+    {
+      name: "a same-file definition whose range encloses the caret",
+      target: { ...self, range: { start: { line: 0, col: 0 }, end: { line: 2, col: 1 } } },
+      row: 0,
+    },
+  ])("still navigates to $name", async ({ target, row }) => {
+    const data = row === 0 ? [target, xml] : [self, target];
+    lspGoto.mockResolvedValue({ status: "ok", data });
+    click({ button: 1 });
+    await screen.findByRole("listbox", { name: /Choose Declaration/ });
+    fireEvent.click(screen.getAllByRole("option")[row]!);
+    expect(openFile).toHaveBeenCalledExactlyOnceWith(target.path, { selection: target.range.start, focus: true });
+    expect(showUsages).not.toHaveBeenCalled();
+  });
 });

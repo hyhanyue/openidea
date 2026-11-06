@@ -173,9 +173,9 @@ function identifierText(text: Text, at: NodeAt | null): string | null {
   return IDENT.test(name) ? name : null;
 }
 
-/** Whether `targets` is just the declaration the caret is on (IDEA then shows usages). */
-export function isSelfTarget(targets: readonly Location[], path: string, pos: Pos): boolean {
-  return targets.length === 1 && targets[0]!.path === path && rangeContains(targets[0]!.range, pos);
+/** Whether the target is the declaration the caret is on (IDEA then shows usages). */
+export function isSelfTarget(target: Location, path: string, pos: Pos): boolean {
+  return target.path === path && rangeContains(target.range, pos);
 }
 
 // ---------------------------------------------------------------------------
