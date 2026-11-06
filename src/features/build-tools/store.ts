@@ -26,6 +26,7 @@ import { downloadJdkActions } from "@/platform/jdk";
 import { useBuildModel } from "@/platform/buildModel";
 import { useProject } from "@/platform/project";
 import { editorService, notifications } from "@/workbench/contributions";
+import { MAVEN_IMPORT_NOTIFICATION_KEY } from "@/workbench/notificationStore";
 import { cancelTask, removeTask, upsertTask, useTasks } from "@/workbench/tasks";
 import { gradleRoots, profilesList, type GradleRunOptions, type MavenRunOptions } from "./model";
 
@@ -398,6 +399,7 @@ export async function syncTool(tool: BuildTool, buildDir: string | null = null):
   const gen = generation;
   const root = state.root;
   if (!root || useProject.getState().project?.trusted === false || !isTauri() || state.syncing[tool]) return;
+  if (tool === "maven") notifications().expire?.(MAVEN_IMPORT_NOTIFICATION_KEY);
   const request = nextRequestId();
   const taskId = `build-sync:${tool}`;
   const cancel = () => void commands.cancelRequest(request);

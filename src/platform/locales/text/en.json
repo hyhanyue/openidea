@@ -1,6 +1,9 @@
 {
   "Cannot reveal in {fileManager}": "Cannot reveal in {fileManager}",
   "This SSH project has no local filesystem mapping.": "This SSH project has no local filesystem mapping.",
+  "Maven project import failed": "Maven project import failed",
+  "JDT LS could not resolve Maven plugin {plugin} or one of its dependencies during import. Check the Maven settings and local repository, then reload Maven projects.": "JDT LS could not resolve Maven plugin {plugin} or one of its dependencies during import. Check the Maven settings and local repository, then reload Maven projects.",
+  "JDT LS could not import some Maven projects. Check the Maven settings and local repository, then reload Maven projects.": "JDT LS could not import some Maven projects. Check the Maven settings and local repository, then reload Maven projects.",
   "Cannot copy reference": "Cannot copy reference",
   "Connect through:": "Connect through:",
   "Connect through": "Connect through",

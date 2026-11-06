@@ -197,3 +197,18 @@ it("translates import recovery guidance for a root Spring Boot configuration", a
     ),
   ).rejects.toThrow("Java 模块 '.' 尚未导入");
 });
+
+it("shows the Maven import cause and plugin in the launch error", async () => {
+  await setLocale("zh");
+  ipc.javaResolveLaunch.mockResolvedValueOnce({
+    status: "error",
+    error: {
+      kind: "protocol",
+      message:
+        "JDT LS could not resolve Maven plugin org.apache.maven.plugins:maven-resources-plugin:3.4.0 or one of its dependencies during import. Check the Maven settings and local repository, then reload Maven projects.",
+    },
+  } as never);
+  await expect(
+    prepareJavaLaunch({ ...config, module: "web" }, { request: 1, signal: new AbortController().signal }),
+  ).rejects.toThrow("JDT LS 在导入时无法解析 Maven 插件 org.apache.maven.plugins:maven-resources-plugin:3.4.0");
+});

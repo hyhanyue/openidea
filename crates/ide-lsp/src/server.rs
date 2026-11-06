@@ -29,6 +29,7 @@ pub struct Running {
     pub caps: Arc<RwLock<ServerCaps>>,
     /// `workspace/didChangeWatchedFiles` registrations.
     pub watchers: Arc<RwLock<crate::file_watch::FileWatchers>>,
+    pub maven_import_failure: Arc<Mutex<Option<String>>>,
 }
 
 pub enum Conn {

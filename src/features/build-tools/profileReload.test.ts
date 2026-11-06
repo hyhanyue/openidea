@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { BuildModel, MavenModel, ProjectInfo } from "@/platform/ipc";
+import { emitLocalIdeEvent, type BuildModel, type MavenModel, type ProjectInfo } from "@/platform/ipc";
 import { useProject } from "@/platform/project";
-import { loadModel, PROFILE_RELOAD_DELAY_MS, resetBuild, setProfile, useBuild } from "./store";
+import { notifications, provideNotificationService } from "@/workbench/contributions";
+import {
+  clearNotifications,
+  installNotifyEvents,
+  notificationServiceImpl,
+  useNotifications,
+} from "@/workbench/notificationStore";
+import { loadModel, PROFILE_RELOAD_DELAY_MS, resetBuild, setProfile, syncTool, useBuild } from "./store";
 
 const mocks = vi.hoisted(() => ({ model: vi.fn(), sync: vi.fn() }));
 vi.mock("@/platform/ipc", async (original) => {
@@ -89,4 +96,28 @@ it("does not reload a project closed before the delay ran out", async () => {
   resetBuild();
   await vi.advanceTimersByTimeAsync(PROFILE_RELOAD_DELAY_MS);
   expect(mocks.sync).not.toHaveBeenCalled();
+});
+
+it("hides the previous import balloon when Maven reloads and keeps its history", async () => {
+  const uninstall = installNotifyEvents();
+  const previous = notifications();
+  provideNotificationService(notificationServiceImpl);
+  mocks.sync.mockResolvedValue(model);
+  try {
+    emitLocalIdeEvent({
+      type: "notify",
+      level: "error",
+      title: "Maven project import failed",
+      body: "Previous import failure",
+    });
+    expect(useNotifications.getState().items[0]?.balloon).toBe(true);
+    await syncTool("gradle");
+    expect(useNotifications.getState().items[0]?.balloon).toBe(true);
+    await syncTool("maven");
+    expect(useNotifications.getState().items[0]).toMatchObject({ body: "Previous import failure", balloon: false });
+  } finally {
+    uninstall();
+    clearNotifications();
+    provideNotificationService(previous);
+  }
 });

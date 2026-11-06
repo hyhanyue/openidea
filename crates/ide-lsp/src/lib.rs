@@ -634,8 +634,13 @@ impl LspManager {
                 return;
             }
         };
-        let run =
-            Running { generation, peer: peer.clone(), caps: Arc::new(RwLock::new(caps)), watchers: Default::default() };
+        let run = Running {
+            generation,
+            peer: peer.clone(),
+            caps: Arc::new(RwLock::new(caps)),
+            watchers: Default::default(),
+            maven_import_failure: Default::default(),
+        };
         server.set_initializing(Some(run.clone()));
         if let Err(e) = peer.notify("initialized", json!({})) {
             tracing::warn!("{}: {e}", server.name);

@@ -21,7 +21,7 @@ const SERVER: &str = "jdtls";
 pub(crate) mod configuration;
 mod formatter;
 mod hierarchy;
-pub(crate) mod reserved_names;
+mod reserved_names;
 pub use formatter::configure_formatter;
 /// First start imports the Maven / Gradle model, which can take minutes.
 const READY_TIMEOUT: Duration = Duration::from_secs(240);
@@ -271,6 +271,42 @@ fn not_imported(e: &IdeError) -> bool {
         || m.contains("cannot find")
 }
 
+fn missing_classpath_project(error: &IdeError) -> bool {
+    let message = error.message.to_ascii_lowercase();
+    error.kind == ErrorKind::Protocol
+        && ["references non-existing project", "does not belong to any java project", "not a java project"]
+            .iter()
+            .any(|reason| message.contains(reason))
+}
+
+fn maven_import_hint(log: &str) -> Option<String> {
+    let header = log.lines().next()?;
+    if !["Failed to configure some Maven project(s)", "Failed to import a batch of Maven projects"]
+        .iter()
+        .any(|message| header.ends_with(message))
+    {
+        return None;
+    }
+    // Log messages may contain repository URLs and credentials. Only copy a Maven
+    // coordinate from the build-plan error, never resolver details or stack frames.
+    let plugin = log.lines().find_map(|line| {
+        let (_, detail) = line.split_once("Could not calculate build plan: Plugin ")?;
+        let (coordinate, _) = detail.split_once(" or one of its dependencies could not be resolved")?;
+        (coordinate.len() <= 200
+            && coordinate.split(':').count() == 3
+            && coordinate
+                .split(':')
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))))
+        .then_some(coordinate)
+    });
+    Some(match plugin {
+        Some(plugin) => format!(
+            "JDT LS could not resolve Maven plugin {plugin} or one of its dependencies during import. Check the Maven settings and local repository, then reload Maven projects."
+        ),
+        None => "JDT LS could not import some Maven projects. Check the Maven settings and local repository, then reload Maven projects.".into(),
+    })
+}
+
 /// The java-debug bundle is not loaded into jdtls.
 fn missing_bundle(e: &IdeError) -> bool {
     let m = e.message.to_ascii_lowercase();
@@ -479,7 +515,17 @@ impl LspManager {
             success = result.is_ok(),
             "Java launch request"
         );
-        result
+        result.map_err(|error| {
+            if phase == "java.project.getClasspaths"
+                && missing_classpath_project(&error)
+                && let Some(failure) = run.maven_import_failure.lock().clone()
+                && path.join("pom.xml").is_file()
+            {
+                IdeError::new(error.kind, failure)
+            } else {
+                error
+            }
+        })
     }
 
     /// `workspace/executeCommand` on the jdtls serving `path`.
@@ -537,10 +583,18 @@ impl LspManager {
             return Ok(());
         };
         let Some(run) = server.running() else { return Ok(()) };
+        let maven = uris.iter().any(|u| u.ends_with("/pom.xml"));
         let identifiers: Vec<Value> = uris.iter().map(|u| json!({ "uri": u })).collect();
+        // Invalidate the previous attempt when the refresh is sent. ProjectStatus
+        // also arrives after failed imports and is not a success signal.
+        let mut failure = run.maven_import_failure.lock();
         run.peer
             .notify("java/projectConfigurationsUpdate", json!({ "identifiers": identifiers }))
-            .map_err(|e| crate::rpc_err(&server.name, "java/projectConfigurationsUpdate", e))
+            .map_err(|e| crate::rpc_err(&server.name, "java/projectConfigurationsUpdate", e))?;
+        if maven {
+            *failure = None;
+        }
+        Ok(())
     }
 
     /// Pause autobuild before resolving the launch classpath. That query takes the
@@ -752,9 +806,30 @@ impl LspManager {
 }
 
 impl LspManager {
+    pub(crate) fn java_import_error(&self, server: &Server, generation: u64, log: &str) {
+        if !self.execution_allowed.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        if log.contains(reserved_names::IMPORT_FAILURE) {
+            self.report_import_failure(server.root.clone(), log.to_owned());
+        }
+        if let Some(run) = server.initialized_gen(generation)
+            && let Some(body) = maven_import_hint(log)
+        {
+            *run.maven_import_failure.lock() = Some(body.clone());
+            if self.first_message(SERVER, &body) {
+                self.sink().emit(ide_core::IdeEvent::Notify {
+                    level: ide_core::event::NotifyLevel::Error,
+                    title: "Maven project import failed".into(),
+                    body: Some(body),
+                });
+            }
+        }
+    }
+
     /// JDT LS aborted its import with `message`: when reserved Windows device names
     /// below `root` are the cause, say which (once). The walk runs off the RPC thread.
-    pub(crate) fn report_import_failure(&self, root: PathBuf, message: String) {
+    fn report_import_failure(&self, root: PathBuf, message: String) {
         let Some(me) = self.me.upgrade() else { return };
         self.runtime.spawn_blocking(move || {
             let Some(body) = reserved_names::import_failure_hint(&root, &message, cfg!(windows)) else { return };
@@ -977,5 +1052,25 @@ mod tests {
         assert!(not_imported(&e));
         assert!(missing_bundle(&IdeError::invalid("No delegateCommandHandler for vscode.java.startDebugSession")));
         assert!(!missing_bundle(&e));
+    }
+
+    #[test]
+    fn maven_import_hint_only_copies_valid_plugin_coordinates() {
+        let plugin = "org.apache.maven.plugins:maven-resources-plugin:3.4.0";
+        let failure = |coordinate: &str| {
+            format!(
+                "2026年11月6日 23:49:22 Failed to configure some Maven project(s)\n\
+                org.eclipse.core.runtime.CoreException: Could not calculate build plan: Plugin {coordinate} or one of its dependencies could not be resolved:\n\
+                Could not transfer from https://user:secret@repo.example.test/private"
+            )
+        };
+        let hint = maven_import_hint(&failure(plugin)).unwrap();
+        assert!(hint.contains(plugin));
+        assert!(hint.contains("reload Maven projects"));
+        assert!(!hint.contains("secret") && !hint.contains("repo.example.test"));
+        let generic = maven_import_hint("Failed to import a batch of Maven projects").unwrap();
+        assert_eq!(maven_import_hint(&failure("https://user:secret@repo.example.test")).unwrap(), generic);
+        assert!(maven_import_hint("Failed to import Gradle projects").is_none());
+        assert!(maven_import_hint("Unrelated error\nFailed to configure some Maven project(s)").is_none());
     }
 }

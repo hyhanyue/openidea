@@ -8,6 +8,8 @@ import type { NotificationService } from "./contributions";
 
 export type NotificationLevel = "info" | "warning" | "error";
 
+export const MAVEN_IMPORT_NOTIFICATION_KEY = "lsp-maven-import";
+
 export interface IdeNotification {
   id: number;
   key?: string;
@@ -195,9 +197,13 @@ export const notificationServiceImpl: NotificationService = {
 };
 
 export function installNotifyEvents(): () => void {
-  return onIdeEvent(
-    "notify",
+  return onIdeEvent("notify", (e) => {
     // Backend text may carry values (paths, names); `{name}` catalog templates translate it.
-    (e) => void notify({ level: e.level, title: txTemplate(e.title), body: e.body ? txTemplate(e.body) : undefined }),
-  );
+    notify({
+      key: e.title === "Maven project import failed" ? MAVEN_IMPORT_NOTIFICATION_KEY : undefined,
+      level: e.level,
+      title: txTemplate(e.title),
+      body: e.body ? txTemplate(e.body) : undefined,
+    });
+  });
 }

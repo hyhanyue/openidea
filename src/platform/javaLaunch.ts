@@ -5,7 +5,7 @@
  * through jdtls when the configuration starts.
  */
 import { call, commands, IpcError, type JavaLaunchInfo, type RunConfig, type RequestId } from "@/platform/ipc";
-import { tx } from "@/platform/i18n";
+import { tx, txTemplate } from "@/platform/i18n";
 import { useBuildPresentation } from "@/platform/projectPresentation";
 
 export const CLASSPATH = "${classpath}";
@@ -200,6 +200,10 @@ export async function prepareJavaLaunch(config: RunConfig, preparation: JavaPrep
       throw new Error(
         tx`Java module '${module || "."}' is not imported. Wait for Java project import to finish. If it still fails, check the run configuration's module and whether it is included in the parent Maven or Gradle build, or open its folder as a project.`,
       );
+    if (error instanceof IpcError) {
+      const message = txTemplate(error.message);
+      if (message !== error.message) throw new IpcError({ kind: error.kind, data: error.data, message });
+    }
     throw error;
   });
   signal.throwIfAborted();

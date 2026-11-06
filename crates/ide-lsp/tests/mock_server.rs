@@ -3851,6 +3851,80 @@ async fn java_definition_consults_configuration_only_inside_key_arguments() {
     assert_eq!(s.requested("workspace/executeCommand").len(), 2);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn jdtls_reports_maven_import_failures_until_the_next_maven_refresh() {
+    let h = harness_for("java", "java", &[("jdtls", incremental_caps()), ("other", incremental_caps())], &[]);
+    let s = h.launcher.state("jdtls");
+    let other = h.launcher.state("other");
+    let pom = h.root.join("pom.xml");
+    std::fs::write(&pom, "<project/>").unwrap();
+    h.open("A.java", "class A {}");
+    h.wait_status("jdtls", ServerStatus::Ready).await;
+    h.wait_status("other", ServerStatus::Ready).await;
+    let missing = "Launch configuration 1793980162258 references non-existing project auto-reactor.";
+    s.errors.lock().insert("workspace/executeCommand".into(), (-32603, missing.into()));
+    let cancel = Default::default();
+    let launch = |module| h.mgr.java_launch(module, false, false, false, &cancel);
+    let messages = || {
+        h.events
+            .lock()
+            .iter()
+            .filter_map(|e| match e {
+                IdeEvent::Notify { title, body, .. } if title == "Maven project import failed" => body.clone(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let report = |peer: &Peer, kind, mirror| {
+        peer.notify("window/logMessage", json!({
+            "type": kind,
+            "message": format!(
+                "Failed to configure some Maven project(s)\n\
+                org.eclipse.core.runtime.CoreException: Could not calculate build plan: Plugin org.apache.maven.plugins:maven-resources-plugin:3.4.0 or one of its dependencies could not be resolved:\n\
+                Could not transfer from https://user:secret@{mirror}/private"
+            )
+        })).unwrap();
+    };
+    // The workspace/configuration round trip observes prior notifications.
+    let flush = |peer: Peer| async move {
+        peer.request::<_, Value>("workspace/configuration", json!({ "items": [] }), None).await.unwrap();
+    };
+    report(&other.peer(), 1, "repo.example.test");
+    flush(other.peer()).await;
+    report(&s.peer(), 3, "repo.example.test");
+    flush(s.peer()).await;
+    assert!(messages().is_empty());
+    assert!(launch(&h.root).await.unwrap_err().message.contains(missing));
+
+    report(&s.peer(), 1, "repo.example.test");
+    report(&s.peer(), 1, "other.example.test");
+    s.peer().notify("language/status", json!({ "type": "ProjectStatus", "message": "OK" })).unwrap();
+    flush(s.peer()).await;
+    let notice = messages();
+    assert_eq!(notice.len(), 1);
+    assert!(notice[0].contains("maven-resources-plugin:3.4.0"));
+    assert!(!notice[0].contains("secret") && !notice[0].contains("example.test"));
+    assert_eq!(launch(&h.root).await.unwrap_err().message, notice[0]);
+    let gradle = h.root.join("gradle");
+    std::fs::create_dir(&gradle).unwrap();
+    std::fs::write(gradle.join("build.gradle"), "").unwrap();
+    assert!(launch(&gradle).await.unwrap_err().message.contains(missing));
+    h.mgr.java_update_project_configs(&h.root, vec![uri_of(&gradle.join("build.gradle"))]).await.unwrap();
+    assert_eq!(launch(&h.root).await.unwrap_err().message, notice[0]);
+    h.mgr.java_update_project_configs(&h.root, vec![uri_of(&pom)]).await.unwrap();
+    assert!(launch(&h.root).await.unwrap_err().message.contains(missing));
+
+    // A fresh failure can explain the launch again without repeating the notification.
+    report(&s.peer(), 1, "repo.example.test");
+    flush(s.peer()).await;
+    assert_eq!(messages(), notice);
+    assert_eq!(launch(&h.root).await.unwrap_err().message, notice[0]);
+    h.mgr.java_update_project_configs(&h.root, vec![uri_of(&pom)]).await.unwrap();
+    s.errors.lock().clear();
+    s.respond("workspace/executeCommand", json!({ "classpaths": ["target/classes"] }));
+    assert_eq!(launch(&h.root).await.unwrap().class_paths, ["target/classes"]);
+}
+
 /// JDT LS aborts its Maven import on Windows when the project holds a file with a
 /// reserved device name (`nul` left by `2>nul`); the error names those files there
 /// and stays silent elsewhere, where such names are ordinary files.
