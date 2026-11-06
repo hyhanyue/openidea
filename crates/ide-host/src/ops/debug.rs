@@ -19,6 +19,9 @@ pub async fn debug_start(host: &Host, window: &str, mut config: LaunchConfig) ->
             .await?;
     }
     config = match_java_debug_encoding(config, cfg!(windows));
+    if config.adapter == "java-debug" {
+        java_evaluation_project(host, window, &mut config).await;
+    }
     if config.adapter == "debugpy"
         && config.request == "launch"
         && let Ok(project) = host.project(window)
@@ -125,6 +128,26 @@ fn take_java_env_files(config: &mut LaunchConfig) -> IdeResult<Option<JavaEnvFil
     serde_json::from_value(files)
         .map(Some)
         .map_err(|_| ide_core::IdeError::invalid("invalid Java debug environment file options"))
+}
+
+/// Consume OpenIDEA's module hint before forwarding the request to java-debug.
+async fn java_evaluation_project(host: &Host, window: &str, config: &mut LaunchConfig) {
+    let Some(serde_json::Value::Object(mut extra)) =
+        config.extra_json.as_deref().and_then(|e| serde_json::from_str(e).ok())
+    else {
+        return;
+    };
+    let Some(module) = extra.remove("__javaModule") else { return };
+    let selected = module.as_str();
+    if !extra.contains_key("projectName")
+        && (selected.is_some() || module.is_null())
+        && let Ok(project) = host.project(window)
+        && let Some(name) =
+            project.lsp.java_debug_project(project.root.join(selected.unwrap_or_default()), selected.is_some()).await
+    {
+        extra.insert("projectName".into(), name.into());
+    }
+    config.extra_json = Some(serde_json::Value::Object(extra).to_string());
 }
 
 /// A JVM launched by java-debug writes what java-debug decodes its output as

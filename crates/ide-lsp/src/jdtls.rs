@@ -263,6 +263,53 @@ pub fn parse_vm_location(v: &Value) -> Option<PathBuf> {
     v.get("org.eclipse.jdt.ls.core.vm.location").and_then(Value::as_str).filter(|s| !s.is_empty()).map(PathBuf::from)
 }
 
+/// Recover each project's root by removing the source entry's project-relative
+/// path from its disk path. This keeps nested modules separate from the root.
+fn debug_project_name(paths: &Value, module: &Path, module_selected: bool) -> Option<String> {
+    if paths["status"].as_bool() != Some(true) {
+        return None;
+    }
+    let paths = paths["data"].as_array()?;
+    // Without a module selection, don't infer which of several projects owns the process.
+    if !module_selected {
+        let project = &paths.first()?["projectName"];
+        if paths.iter().any(|p| &p["projectName"] != project) {
+            return None;
+        }
+    }
+    let module = dunce::canonicalize(module).ok()?;
+    let mut name = None;
+    for path in paths {
+        let Some(project) = path["projectName"].as_str().filter(|s| !s.is_empty()) else { continue };
+        let Some(entry) = path["classpathEntry"].as_str() else { continue };
+        let Ok(relative) =
+            Path::new(entry).strip_prefix(std::path::MAIN_SEPARATOR_STR).and_then(|entry| entry.strip_prefix(project))
+        else {
+            continue;
+        };
+        // An unmanaged project lives inside Eclipse's workspace and links its
+        // on-disk root as "_". The disk path already follows that link.
+        let relative = if path["projectType"].as_str() == Some("Workspace") {
+            let Ok(relative) = relative.strip_prefix("_") else { continue };
+            relative
+        } else {
+            relative
+        };
+        let Some(source) = path["path"].as_str().map(Path::new).filter(|p| p.is_absolute() && p.ends_with(relative))
+        else {
+            continue;
+        };
+        let Some(root) = source.ancestors().nth(relative.components().count()) else { continue };
+        if root == module || dunce::canonicalize(root).is_ok_and(|root| root == module) {
+            if name.is_some_and(|name| name != project) {
+                return None;
+            }
+            name = Some(project);
+        }
+    }
+    name.map(str::to_owned)
+}
+
 /// Errors that mean "jdtls has not imported this project (yet)".
 fn not_imported(e: &IdeError) -> bool {
     let m = e.message.to_ascii_lowercase();
@@ -817,6 +864,24 @@ impl LspManager {
         Ok(source.map(|s| s.to_string_lossy().into_owned()).unwrap_or(uri))
     }
 
+    /// Best-effort evaluation context from the JDT LS that started the adapter.
+    pub async fn java_debug_project(&self, module: PathBuf, module_selected: bool) -> Option<String> {
+        let server = self.servers_for(&LanguageId::new("java"), &module).into_iter().find(|s| s.name == SERVER)?;
+        let run = server.running()?;
+        let params = json!({"command": "java.project.listSourcePaths", "arguments": []});
+        let request = run.peer.request::<_, Value>("workspace/executeCommand", params, None);
+        match tokio::time::timeout(Duration::from_secs(5), request).await {
+            Ok(Ok(paths)) => tokio::task::spawn_blocking(move || debug_project_name(&paths, &module, module_selected))
+                .await
+                .ok()
+                .flatten(),
+            result => {
+                tracing::debug!("java.project.listSourcePaths: {result:?}");
+                None
+            }
+        }
+    }
+
     /// Starts (or reuses) java-debug's DAP server inside jdtls and returns its port.
     pub async fn java_debug_server(&self, path: &Path) -> IdeResult<u16> {
         let v = self.jdtls_command(path, "vscode.java.startDebugSession", Vec::new()).await.map_err(|e| {
@@ -888,6 +953,46 @@ mod tests {
         let language: ide_language::LanguageConfig =
             toml::from_str(include_str!("../../../languages/java.toml")).unwrap();
         language.language_servers.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn debug_projects_use_jdt_names_and_exact_module_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let app = root.join("different-folder");
+        let other = app.join("nested");
+        std::fs::create_dir_all(&other).unwrap();
+        let row = |root: &Path, project, source, entry: &str, kind| {
+            json!({
+                "projectName": project, "projectType": kind, "path": root.join(source),
+                "classpathEntry": entry.replace('/', std::path::MAIN_SEPARATOR_STR),
+            })
+        };
+        let eclipse = row(&app, "custom-eclipse-name", "src", "/custom-eclipse-name/src", "ECLIPSE");
+        let app_test = row(&app, "custom-eclipse-name", "test", "/custom-eclipse-name/test", "ECLIPSE");
+        let maven = row(&other, "group-artifact", "src/main/java", "/group-artifact/src/main/java", "Maven");
+        let invisible = row(&app, "different-folder_a123", "", "/different-folder_a123/_", "Workspace");
+        let invisible_src =
+            row(&app, "different-folder_a123", "src/demo", "/different-folder_a123/_/src/demo", "Workspace");
+        let conflict = row(&app, "another", "lib", "/another/lib", "ECLIPSE");
+        for (rows, module, selected, expected) in [
+            (vec![eclipse.clone(), app_test.clone()], &app, false, Some("custom-eclipse-name")),
+            (vec![maven.clone(), eclipse.clone(), app_test], &app, true, Some("custom-eclipse-name")),
+            (vec![maven.clone(), eclipse.clone()], &other, true, Some("group-artifact")),
+            (vec![maven.clone(), eclipse.clone()], &app, false, None),
+            (vec![maven.clone(), eclipse.clone()], &root, true, None),
+            (vec![maven], &app, true, None),
+            (vec![eclipse, conflict], &app, true, None),
+            (vec![invisible], &app, true, Some("different-folder_a123")),
+            (vec![invisible_src], &app, true, Some("different-folder_a123")),
+            (vec![], &app, true, None),
+        ] {
+            assert_eq!(
+                debug_project_name(&json!({"status": true, "data": rows}), module, selected).as_deref(),
+                expected
+            );
+        }
+        assert_eq!(debug_project_name(&json!({"status": false, "message": "failure"}), &app, true), None);
     }
 
     #[test]

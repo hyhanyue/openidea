@@ -83,6 +83,7 @@ describe("Java debugging (java-debug through jdtls)", () => {
     expect(l).toMatchObject({ adapter: "java-debug", request: "launch", cwd: "/p/api", args: [], env: { A: "1" } });
     expect(JSON.parse(l.extraJson!)).toMatchObject({
       debugServer: 41234,
+      __javaModule: "api",
       mainClass: "a.Main",
       classPaths: ["/p/target/classes", "/m2/a.jar"],
       javaExec: "/jdk21/bin/java",
@@ -162,7 +163,19 @@ describe("Java debugging (java-debug through jdtls)", () => {
   it("attaches to a JDWP agent", async () => {
     const l = await javaAttachConfig({ name: "mvn test", module: "", hostName: "127.0.0.1", port: 5005 }, "/p");
     expect(l).toMatchObject({ request: "attach", cwd: "/p" });
-    expect(JSON.parse(l.extraJson!)).toMatchObject({ debugServer: 41234, hostName: "127.0.0.1", port: 5005 });
+    expect(JSON.parse(l.extraJson!)).toEqual({
+      debugServer: 41234,
+      __javaModule: "",
+      hostName: "127.0.0.1",
+      port: 5005,
+      timeout: 30_000,
+    });
+  });
+
+  it("leaves module selection open when attaching from the process picker", async () => {
+    const l = await javaAttachConfig({ name: "App", hostName: "localhost", port: 5005 }, "/p");
+    expect(l).toMatchObject({ request: "attach", cwd: "/p", env: {} });
+    expect(JSON.parse(l.extraJson!)).toMatchObject({ debugServer: 41234, __javaModule: null, port: 5005 });
   });
 });
 
@@ -174,6 +187,7 @@ it.each(["sibling", "/outside/modules"])("debugs from %s with the main class mod
     expect(invoked).toContainEqual(["javaResolveLaunch", ["api", false, true, expect.any(Number)]]);
     expect(invoked).toContainEqual(["javaDebugServer", ["api"]]);
     expect(launch.cwd).toBe(cwd.startsWith("/") ? cwd : `/p/${cwd}`);
+    expect(JSON.parse(launch.extraJson!).__javaModule).toBe("api");
   }
 });
 

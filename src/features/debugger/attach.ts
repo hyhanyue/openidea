@@ -64,10 +64,7 @@ export async function attachConfig(p: AttachableProcess, root: string): Promise<
   const skip = workflowSettings().debugger.skipLibraryCode;
   switch (p.kind) {
     case "java":
-      return javaAttachConfig(
-        { name: `${p.name} (${p.pid})`, module: "", hostName: p.host ?? "localhost", port: p.port! },
-        root,
-      );
+      return javaAttachConfig({ name: `${p.name} (${p.pid})`, hostName: p.host ?? "localhost", port: p.port! }, root);
     case "node":
       return base(p, root, {
         type: "pwa-node",

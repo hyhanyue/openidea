@@ -142,6 +142,7 @@ export async function javaLaunchConfig(
     extraJson: JSON.stringify({
       __openideaEnvFiles: envFiles,
       debugServer: port,
+      __javaModule: module,
       mainClass: parsed.mainClass,
       classPaths,
       modulePaths: info.modulePaths,
@@ -158,8 +159,8 @@ export async function javaLaunchConfig(
 
 export interface JavaAttachTarget {
   name: string;
-  /** Module directory (relative to the project root) whose jdtls resolves sources. */
-  module: string;
+  /** Module directory whose jdtls resolves sources. The process picker has no module selection. */
+  module?: string;
   hostName: string;
   port: number;
 }
@@ -185,15 +186,21 @@ export async function javaAttachConfig(target: JavaAttachTarget, root: string): 
       extraJson: JSON.stringify({ projectRoot: cwd, hostName: target.hostName, port: target.port, timeout: 30_000 }),
     };
   }
-  const port = await debugServer(target.module);
+  const port = await debugServer(target.module ?? "");
   return {
     name: target.name,
     adapter: JAVA_ADAPTER,
     request: "attach",
     program: null,
     args: [],
-    cwd: target.module ? join(root, target.module) : root,
+    cwd,
     env: {},
-    extraJson: JSON.stringify({ debugServer: port, hostName: target.hostName, port: target.port, timeout: 30_000 }),
+    extraJson: JSON.stringify({
+      debugServer: port,
+      __javaModule: target.module ?? null,
+      hostName: target.hostName,
+      port: target.port,
+      timeout: 30_000,
+    }),
   };
 }
