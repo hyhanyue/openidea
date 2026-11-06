@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GradleModel, MavenModel, MavenProject, RunConfig } from "@/platform/ipc";
 import {
+  buildPath,
   expandableKeys,
   goalCompletions,
   gradleChildren,
@@ -231,6 +232,19 @@ describe("Maven runs", () => {
         profiles: {},
       }).args,
     ).toEqual(["-s", "/own/settings.xml", "test"]);
+  });
+
+  it("uses the external member directory and only its Maven profiles", () => {
+    const pom = "D:/workspace members/core/pom.xml";
+    const member = project({ pom, dir: pom.slice(0, -"/pom.xml".length), profiles: ["ci"] });
+    expect(buildPath("C:/workspace", pom)).toBe(pom);
+    expect(buildPath("/workspace", "/other/core/pom.xml")).toBe("/other/core/pom.xml");
+    const options = { offline: false, skipTests: false, profiles: { ci: true, dev: false } };
+    expect(mavenGoalConfig(member, ["test"], maven, options, true)).toMatchObject({
+      cwd: "D:/workspace members/core",
+      args: ["test", "-Pci"],
+    });
+    expect(mavenGoalConfig(member, ["test"], maven, options).args).toEqual(["test", "-P!dev,ci"]);
   });
 
   it("parses typed command lines", () => {

@@ -21,7 +21,15 @@ import { GradleView, MavenView } from "./BuildToolView";
 import { ExecutePopupHost } from "./ExecutePopup";
 import { buildToolsRunAnything } from "./runAnything";
 import { versionCatalogExtension } from "./versionCatalog";
-import { expandableKeys, gradleChildren, gradleRoots, mavenChildren, mavenRoots, gradleProjectKey } from "./model";
+import {
+  buildPath,
+  expandableKeys,
+  gradleChildren,
+  gradleRoots,
+  mavenChildren,
+  mavenRoots,
+  gradleProjectKey,
+} from "./model";
 import {
   ANALYZER_KIND,
   addProjects,
@@ -73,15 +81,14 @@ function openExecute(tool: BuildTool) {
   useBuild.setState({ executeOpen: tool });
 }
 
-/** Project-relative `pom` of a Maven project from an action argument: `{ pom }`, or `{ path }` of a pom.xml. */
+/** POM key of a Maven project from `{ pom }` or an editor file path. */
 function analyzerPom(arg: unknown): string | null {
   const { model, root, current } = useBuild.getState();
   const projects = model?.maven?.projects ?? [];
   const a = (arg ?? {}) as { pom?: unknown; path?: unknown };
   if (typeof a.pom === "string") return a.pom;
   if (typeof a.path === "string" && root) {
-    const rel = a.path.startsWith(`${root}/`) ? a.path.slice(root.length + 1) : a.path;
-    if (projects.some((p) => p.pom === rel)) return rel;
+    return projects.find((p) => p.pom === a.path || buildPath(root, p.pom) === a.path)?.pom ?? null;
   }
   return current.maven ?? null;
 }
@@ -142,7 +149,13 @@ function apply(model: BuildModel | null, registered: Partial<Record<BuildTool, (
   }
   // Import each independent build once; linking another build must not be hidden by the first sync.
   const root = useBuild.getState().root;
-  const mavenKey = `maven:${root}`;
+  const mavenKey = JSON.stringify([
+    "maven",
+    root,
+    useProject.getState().project?.workspace
+      ? model?.maven?.projects.filter((p) => !p.aggregated).map((p) => p.pom)
+      : null,
+  ]);
   if (model?.maven?.projects.length && model.maven.syncedAt == null && !synced.has(mavenKey)) {
     synced.add(mavenKey);
     requestSync("maven");
@@ -206,9 +219,8 @@ export function activate(): () => void {
       items: (_menu, { paths, dirs }) => {
         const path = paths.length === 1 && !dirs?.[0] ? paths[0]! : null;
         if (!path || !path.endsWith("/pom.xml")) return [];
-        const { model, root } = useBuild.getState();
-        const pom = root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : null;
-        if (!pom || !model?.maven?.projects.some((p) => p.pom === pom)) return [];
+        const pom = analyzerPom({ path });
+        if (!pom) return [];
         return [{ kind: "action", action: "maven.analyzeDependencies", arg: { pom }, label: "Analyze Dependencies…" }];
       },
     }),
@@ -267,7 +279,7 @@ export function activate(): () => void {
         title: "Add Maven Projects",
         category: "Maven",
         icon: "plus",
-        when: "projectOpen",
+        when: "projectOpen && !workspaceOpen",
         run: () => addProjects(),
       },
       {
@@ -275,7 +287,7 @@ export function activate(): () => void {
         title: "Unlink Maven Projects",
         category: "Maven",
         hidden: true,
-        when: MAVEN_WHEN,
+        when: `${MAVEN_WHEN} && !workspaceOpen`,
         run: ({ arg }) => unlinkProjects(analyzerPom(arg)),
       },
       {

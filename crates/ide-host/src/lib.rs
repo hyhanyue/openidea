@@ -53,7 +53,7 @@ pub struct HostConfig {
 }
 
 pub struct Host {
-    pub trust: trust::TrustStore,
+    pub trust: Arc<trust::TrustStore>,
     pub config_dir: PathBuf,
     /// Persistent user state, including credentials and recovery history.
     pub data_dir: PathBuf,
@@ -111,7 +111,7 @@ impl Host {
         let ssh = Arc::new(ide_ssh::SshManager::new(data_dir.join("ssh-passwords.json")));
         ssh.set_configs(global_settings.effective().ssh.configs);
         let host = Self {
-            trust: trust::TrustStore::load(&config_dir, &data_dir),
+            trust: Arc::new(trust::TrustStore::load(&config_dir, &data_dir)),
             proxy_password: ide_ssh::secrets::SecretFile::new(data_dir.join("proxy-password.json")),
             proxy_session_password: Mutex::default(),
             remote: Arc::new(ide_remote::RemoteService::new(ssh.clone(), data_dir.join("remote"))),

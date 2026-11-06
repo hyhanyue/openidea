@@ -128,9 +128,15 @@ export function mavenRoots(model: MavenModel): BuildNode[] {
   return out;
 }
 
+const isAbsoluteBuildPath = (path: string) => /^(?:[A-Za-z]:[\\/]|\/)/.test(path);
+
+export function buildPath(root: string, path: string): string {
+  return isAbsoluteBuildPath(path) ? path : `${root.replace(/\/$/, "")}/${path}`;
+}
+
 /** Run configurations of a Maven project: `maven` configs whose directory is the project's. */
 export function mavenRunConfigs(project: MavenProject, configs: readonly RunConfig[]): RunConfig[] {
-  return configs.filter((c) => c.kind === "maven" && normalizeDir(c.cwd) === project.dir);
+  return configs.filter((c) => c.kind === "maven" && normalizeDir(c.cwd) === normalizeDir(project.dir));
 }
 
 /** Run configurations under this build, with nested independent builds owning their own runs. */
@@ -469,8 +475,10 @@ export function mavenGoalConfig(
   goals: readonly string[],
   model: Pick<MavenModel, "profiles">,
   options: MavenRunOptions,
+  workspace = false,
 ): RunConfig {
-  const args = mavenArgs(goals, model, options);
+  const profiles = workspace ? model.profiles.filter((p) => project.profiles.includes(p.id)) : model.profiles;
+  const args = mavenArgs(goals, { profiles }, options);
   return {
     id: `maven:goal:${project.pom}:${goals.join(" ")}`,
     name: mavenConfigName(project, goals),

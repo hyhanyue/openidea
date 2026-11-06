@@ -165,3 +165,167 @@ async fn php_language_level_follows_the_member_of_the_file() {
     assert_eq!(level_elsewhere.member, None);
     host.close_project("main");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workspace_maven_model() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = dunce::canonicalize(temp.path()).unwrap();
+    let root = base.join("workspace");
+    let members = [base.join("service-a"), base.join("service-b")];
+    for (member, artifact) in members.iter().zip(["service-a", "service-b"]) {
+        std::fs::create_dir(member).unwrap();
+        std::fs::write(
+            member.join("pom.xml"),
+            format!(
+                "<project><modelVersion>4.0.0</modelVersion><groupId>test</groupId><artifactId>{artifact}</artifactId><version>1</version></project>"
+            ),
+        )
+        .unwrap();
+    }
+    Workspace::save(&root, "Services", members.to_vec(), true).unwrap();
+    let host = Host::new(HostConfig {
+        config_dir: base.join("config"),
+        data_dir: base.join("data"),
+        local_data_dir: base.join("data"),
+        languages: Arc::new(ide_language::LanguageRegistry::load(None).unwrap()),
+        syntax: Arc::default(),
+        sink_for: Box::new(|_| Arc::new(NullSink)),
+        owner: |w| w,
+        runtime: tokio::runtime::Handle::current(),
+        project_environment: false,
+    });
+    for path in [&root, &members[0], &members[1]] {
+        host.trust.decide(path, true, false).unwrap();
+        assert!(host.trust.trusted(path).unwrap());
+    }
+    let project = host.open_project("main", &root).unwrap();
+    assert!(project.is_trusted());
+    assert_eq!(project.content_roots(), members);
+    let model = ops::build::build_model(&host, "main").await.unwrap();
+    let maven = model.maven.expect("trusted workspace members have Maven POMs");
+    assert_eq!(maven.projects.iter().map(|p| p.artifact_id.as_str()).collect::<Vec<_>>(), ["service-a", "service-b"]);
+    for (build, member) in maven.projects.iter().zip(&members) {
+        assert_eq!(build.pom, ide_core::ipc_path::to_ipc(&member.join("pom.xml")));
+        assert_eq!(build.dir, ide_core::ipc_path::to_ipc(member));
+    }
+
+    // A reactor and an incidental POM with the same coordinates as a member.
+    let pom = std::fs::read_to_string(members[0].join("pom.xml")).unwrap().replace(
+        "</project>",
+        "<dependencies><dependency><groupId>example</groupId><artifactId>library</artifactId></dependency></dependencies></project>",
+    );
+    std::fs::write(root.join("pom.xml"), &pom).unwrap();
+    let child = members[0].join("module");
+    std::fs::create_dir(&child).unwrap();
+    std::fs::write(child.join("pom.xml"), pom.replace("service-a", "child")).unwrap();
+    std::fs::write(
+        members[0].join("pom.xml"),
+        pom.replace("</project>", "<packaging>pom</packaging><modules><module>module</module></modules></project>"),
+    )
+    .unwrap();
+    let maven = ops::build::build_model(&host, "main").await.unwrap().maven.unwrap();
+    assert_eq!(maven.projects[0].modules, [ide_core::ipc_path::to_ipc(&child.join("pom.xml"))]);
+    assert_eq!(maven.projects.iter().filter(|p| !p.aggregated).count(), 2);
+
+    let declaration = ops::build::maven_dependency_declaration(
+        &host,
+        "main",
+        maven.projects[0].pom.clone(),
+        ide_build::pom_edit::ArtifactKey::new("example", "library"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(declaration.path.as_ref(), members[0].join("pom.xml"));
+
+    #[cfg(unix)]
+    assert_workspace_maven_sync(&host, &root, &members).await;
+
+    host.set_project_trust(&members[1], false, false).await.unwrap();
+    let maven = ops::build::build_model(&host, "main").await.unwrap().maven.unwrap();
+    assert_eq!(maven.projects.iter().filter(|p| !p.aggregated).count(), 1);
+    assert_eq!(maven.projects[0].dir, ide_core::ipc_path::to_ipc(&members[0]));
+    host.set_project_trust(&root, false, false).await.unwrap();
+    assert!(ops::build::build_model(&host, "main").await.unwrap_err().message.contains("Restricted Mode"));
+    host.close_project("main");
+}
+
+#[cfg(unix)]
+async fn assert_workspace_maven_sync(host: &Host, workspace: &std::path::Path, members: &[std::path::PathBuf; 2]) {
+    use std::os::unix::fs::PermissionsExt;
+
+    for root in [workspace, &members[0], &members[1]] {
+        let launcher = root.join("maven-launcher");
+        // Capture the actual invocation and return distinct resolved dependencies.
+        std::fs::write(
+            &launcher,
+            format!(
+                r#"#!/bin/sh
+pwd -P > invocation
+printf '%s\n' "$@" >> invocation
+cat <<'EOF'
+[INFO] --- dependency:3.8.1:tree (default-cli) @ {0} ---
+[INFO] test:{0}:jar:1
+[INFO] +- resolved:{0}-lib:jar:1:compile
+EOF
+"#,
+                root.file_name().unwrap().to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let settings = root.join(".openidea");
+        std::fs::create_dir_all(&settings).unwrap();
+        std::fs::write(
+            settings.join("settings.toml"),
+            "[languages.java.maven]\nhome = 'maven-launcher'\nuserSettings = 'maven-settings.xml'\nlocalRepository = 'maven-repo'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("maven-settings.xml"),
+            format!(
+                "<settings><profiles><profile><id>{}-profile</id></profile></profiles></settings>",
+                root.file_name().unwrap().to_str().unwrap()
+            ),
+        )
+        .unwrap();
+    }
+    let sync = || {
+        ops::build::build_sync(
+            host,
+            "main",
+            ide_build::BuildTool::Maven,
+            RequestId::next(),
+            true,
+            vec!["service-a-profile".into(), "service-b-profile".into()],
+            None,
+            ops::Channel::new(|_| {}),
+        )
+    };
+    let model = sync().await.unwrap().maven.unwrap();
+    assert!(model.synced_at.is_some());
+    assert!(model.sync_error.is_none());
+    assert!(!model.stale);
+    for (member, name) in members.iter().zip(["service-a", "service-b"]) {
+        let invocation = std::fs::read_to_string(member.join("invocation")).unwrap();
+        let lines = invocation.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], member.to_str().unwrap());
+        assert!(lines.windows(2).any(|a| a == ["-f", member.join("pom.xml").to_str().unwrap()]));
+        assert!(lines.windows(2).any(|a| a == ["-s", member.join("maven-settings.xml").to_str().unwrap()]));
+        assert!(lines.contains(&format!("-Dmaven.repo.local={}", member.join("maven-repo").display()).as_str()));
+        assert_eq!(
+            lines.iter().filter(|s| s.starts_with("-P")).copied().collect::<Vec<_>>(),
+            [format!("-P{name}-profile")]
+        );
+        let project = model.projects.iter().find(|p| p.artifact_id == name).unwrap();
+        assert_eq!(project.dependencies[0].artifact_id, format!("{name}-lib"));
+    }
+    assert!(!workspace.join("invocation").exists());
+    assert!(!host.project("main").unwrap().build_cache_dir().join("maven.json").exists());
+
+    host.set_project_trust(&members[1], false, false).await.unwrap();
+    std::fs::remove_file(members[1].join("invocation")).unwrap();
+    let model = sync().await.unwrap().maven.unwrap();
+    assert_eq!(model.projects.iter().filter(|p| !p.aggregated).count(), 1);
+    assert!(!members[1].join("invocation").exists());
+    host.set_project_trust(&members[1], true, false).await.unwrap();
+}

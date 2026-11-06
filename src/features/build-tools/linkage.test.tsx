@@ -4,6 +4,7 @@ import { executeAction, registerAction, allActions, isActionEnabled } from "@/pl
 import { setContext } from "@/platform/context";
 import type { BuildModel, GradleModel, ProjectInfo, RunConfig } from "@/platform/ipc";
 import { useProject } from "@/platform/project";
+import { useContributions } from "@/workbench/contributions";
 import { GradleView, MavenView } from "./BuildToolView";
 import { activate } from "./index";
 import { expandableKeys, gradleChildren, gradleRoots, gradleProjectKey } from "./model";
@@ -110,6 +111,34 @@ afterEach(() => {
   dispose();
   useProject.setState({ project: null });
   setContext("projectOpen", false);
+});
+
+it("registers Maven for a workspace model and shows both external members", async () => {
+  const projects = ["/external/a", "/external/b"];
+  const maven = model.maven!;
+  mocks.model.mockResolvedValue({
+    ...model,
+    maven: {
+      ...maven,
+      projects: projects.map((dir) => ({ ...maven.projects[0]!, dir, pom: `${dir}/pom.xml`, displayName: dir })),
+    },
+  });
+  await act(async () => {
+    useProject.setState({
+      project: {
+        root: "/workspace",
+        trusted: true,
+        workspace: { version: 1, name: "Workspace", projects },
+      } as ProjectInfo,
+    });
+    setContext("workspaceOpen", true);
+  });
+  expect(useContributions.getState().toolWindows.has("maven")).toBe(true);
+  const actions = allActions();
+  expect(isActionEnabled(actions.find((a) => a.id === "maven.reload")!)).toBe(true);
+  expect(isActionEnabled(actions.find((a) => a.id === "maven.addProjects")!)).toBe(false);
+  render(<MavenView />);
+  for (const dir of projects) expect(screen.getByText(dir)).toBeVisible();
 });
 
 it("offers unlink on a root's context menu and persists a confirmed project setting", async () => {

@@ -275,6 +275,25 @@ pub(crate) fn maven_building(line: &str) -> Option<(String, u32, u32)> {
     Some((body[..open].trim().to_owned(), n.trim().parse().ok()?, m.trim().parse().ok()?))
 }
 
+fn maven_sync_repo(options: &SyncOptions) -> Option<PathBuf> {
+    // Where the build resolves its jars, and therefore where the plugin goals are read
+    // from: `-Dmaven.repo.local=` first, then `<localRepository>` of the `-s` settings,
+    // then the user's default repository (which `plugin()` resolves itself).
+    options.maven_options.iter().find_map(|a| a.strip_prefix("-Dmaven.repo.local=")).map(PathBuf::from).or_else(|| {
+        let mut args = options.maven_options.iter();
+        while let Some(arg) = args.next() {
+            let path = match arg.as_str() {
+                "-s" | "--settings" => args.next().map(String::as_str),
+                _ => arg.strip_prefix("-s=").or_else(|| arg.strip_prefix("--settings=")),
+            };
+            if let Some(path) = path {
+                return maven::local_repository_of(Path::new(path));
+            }
+        }
+        None
+    })
+}
+
 /// Runs Maven on every top-level project and caches effective plugins and dependency trees.
 pub fn sync_maven(
     root: &Path,
@@ -283,47 +302,47 @@ pub fn sync_maven(
     cancel: &CancellationToken,
     progress: &dyn Fn(SyncProgress),
 ) -> IdeResult<()> {
+    let local_repo = maven_sync_repo(options);
     let mut model = maven::load_with_linked(
         root,
-        maven::default_local_repo(),
+        local_repo.or_else(maven::default_local_repo),
         &options.profiles,
         &options.maven_settings.linked_projects,
     );
     maven::UnlinkedProjects::from_model(&model, &options.maven_settings).filter(&mut model);
+    sync_maven_model(root, cache_dir, &model, options, cancel, progress, |_| true)
+}
+
+/// Sync the loaded reactors selected by the caller, keeping the cache scoped to their project.
+pub fn sync_maven_model(
+    root: &Path,
+    cache_dir: &Path,
+    model: &MavenModel,
+    options: &SyncOptions,
+    cancel: &CancellationToken,
+    progress: &dyn Fn(SyncProgress),
+    include: impl Fn(&maven::MavenProject) -> bool,
+) -> IdeResult<()> {
+    let local_repo = maven_sync_repo(options);
     std::fs::create_dir_all(cache_dir)?;
     let mut cache = MavenCache {
         version: MAVEN_CACHE_VERSION,
-        hash: hash_files(&maven::build_files(root, &model)),
+        hash: hash_files(&maven::build_files(root, model)),
         verbose: true,
         ..MavenCache::default()
     };
-    // Where the build resolves its jars, and therefore where the plugin goals are read
-    // from: `-Dmaven.repo.local=` first, then `<localRepository>` of the `-s` settings,
-    // then the user's default repository (which `plugin()` resolves itself).
-    let local_repo: Option<PathBuf> =
-        options.maven_options.iter().find_map(|a| a.strip_prefix("-Dmaven.repo.local=")).map(PathBuf::from).or_else(
-            || {
-                let mut args = options.maven_options.iter();
-                while let Some(arg) = args.next() {
-                    let path = match arg.as_str() {
-                        "-s" | "--settings" => args.next().map(String::as_str),
-                        _ => arg.strip_prefix("-s=").or_else(|| arg.strip_prefix("--settings=")),
-                    };
-                    if let Some(path) = path {
-                        return maven::local_repository_of(Path::new(path));
-                    }
-                }
-                None
-            },
-        );
     let mut errors: Vec<String> = Vec::new();
-    for (n, top) in model.projects.iter().filter(|p| !p.aggregated).enumerate() {
+    for (n, top) in model.projects.iter().filter(|p| !p.aggregated && include(p)).enumerate() {
+        if cancel.is_cancelled() {
+            return Err(IdeError::cancelled());
+        }
         let effective = cache_dir.join(format!("effective-pom-{n}.xml"));
         let _ = std::fs::remove_file(&effective);
         // `-T1` keeps mvnd serial: its default parallel build interleaves the
         // `dependency:tree` output of concurrent modules, which the sync parses
         // as one stream. mvn is serial anyway, so this only pins the daemon.
         let mut args: Vec<String> = vec!["-B".into(), "-fae".into(), "-Dstyle.color=never".into(), "-T1".into()];
+        args.extend(["-f".into(), root.join(&top.pom).to_string_lossy().into_owned()]);
         args.extend(options.maven_options.iter().cloned());
         if options.offline {
             args.push("-o".into());

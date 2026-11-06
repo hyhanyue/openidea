@@ -19,6 +19,7 @@ import {
   T,
 } from "@/ui";
 import {
+  buildPath,
   gradleChildren,
   gradleRoots,
   gradleProjectKey,
@@ -70,7 +71,13 @@ export function nodeConfig(
         (n.kind === "phase" || n.kind === "goal") && n.project.pom === first.project.pom,
     );
     const goals = same.map((n) => (n.kind === "phase" ? n.phase : `${n.plugin.prefix}:${n.goal}`));
-    return mavenGoalConfig(first.project, goals, model.maven, settings.maven);
+    return mavenGoalConfig(
+      first.project,
+      goals,
+      model.maven,
+      settings.maven,
+      !!useProject.getState().project?.workspace,
+    );
   }
   if (first.kind === "task") {
     const build = model.gradle?.find((g) => g.dir === first.build.dir);
@@ -324,12 +331,13 @@ function BuildToolView({ tool }: { tool: BuildTool }) {
       else items.push({ label: "Create Run Configuration…", icon: "edit", run: () => void createRunConfig(config) });
     }
     if (node.kind === "mavenProject") {
-      items.push({ kind: "action", action: "maven.unlinkProjects", arg: { pom: node.project.pom } });
+      if (!useProject.getState().project?.workspace)
+        items.push({ kind: "action", action: "maven.unlinkProjects", arg: { pom: node.project.pom } });
       items.push(
         {
           label: "Open pom.xml",
           icon: "file-maven",
-          run: () => void editorService().openFile(`${root}/${node.project.pom}`),
+          run: () => void editorService().openFile(buildPath(root, node.project.pom)),
         },
         { kind: "action", action: "maven.reload", label: "Reload All Maven Projects" },
         { kind: "action", action: "maven.executeGoal" },

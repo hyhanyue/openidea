@@ -4,6 +4,7 @@
  * and task completion in the selected project).
  */
 import type { BuildTool } from "@/platform/ipc";
+import { useProject } from "@/platform/project";
 import type { RunAnythingItem, RunAnythingProvider } from "@/workbench/contributions";
 import {
   goalCompletions,
@@ -50,7 +51,10 @@ export function executeBuildLine(tool: BuildTool, text: string, projectKey?: str
     const project = mavenProjectFor(projectKey);
     const goals = parseGoalLine(text);
     if (!maven || !project || !("pom" in project) || !goals.length) return false;
-    runConfig(mavenGoalConfig(project, goals, maven, settings.maven), "run");
+    runConfig(
+      mavenGoalConfig(project, goals, maven, settings.maven, !!useProject.getState().project?.workspace),
+      "run",
+    );
   } else {
     const selected = gradleProjectFor(projectKey);
     const tasks = parseTaskLine(text);

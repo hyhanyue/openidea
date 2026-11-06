@@ -22,6 +22,7 @@ pub use gradle_deps::{GradleDependency, gradle_dependencies};
 pub use maven::{MavenDependency, MavenModel, MavenPlugin, MavenProfile, MavenProject, Omission};
 pub use sync::{
     SyncOptions, SyncProgress, maven_profiles, save_maven_profiles, sync_gradle, sync_gradle_model, sync_maven,
+    sync_maven_model,
 };
 
 use serde::{Deserialize, Serialize};
@@ -75,7 +76,18 @@ pub fn load_linked(
     settings: &ide_core::settings::MavenSettings,
     gradle_settings: &ide_core::settings::GradleSettings,
 ) -> BuildModel {
-    let maven = maven::has_projects(root, settings).then(|| {
+    let maven = load_maven(root, cache_dir, maven_repo, settings);
+    let gradle = load_gradle(root, cache_dir, gradle_settings);
+    BuildModel { maven, gradle }
+}
+
+pub fn load_maven(
+    root: &Path,
+    cache_dir: &Path,
+    maven_repo: Option<PathBuf>,
+    settings: &ide_core::settings::MavenSettings,
+) -> Option<MavenModel> {
+    maven::has_projects(root, settings).then(|| {
         let profiles = sync::maven_profiles(cache_dir);
         let repo = maven_repo.or_else(maven::default_local_repo);
         let mut m = maven::load_with_linked(root, repo, &profiles, &settings.linked_projects);
@@ -88,15 +100,17 @@ pub fn load_linked(
         }
         sync::apply_maven_cache(root, cache_dir, &mut m);
         m
-    });
-    let gradle = gradle::load_linked(root, gradle_settings)
+    })
+}
+
+pub fn load_gradle(root: &Path, cache_dir: &Path, settings: &ide_core::settings::GradleSettings) -> Vec<GradleModel> {
+    gradle::load_linked(root, settings)
         .into_iter()
         .map(|mut g| {
             sync::apply_gradle_cache(root, &gradle::cache_dir(cache_dir, &g.dir), &mut g);
             g
         })
-        .collect();
-    BuildModel { maven, gradle }
+        .collect()
 }
 
 /// Gradle project folders outside `root` as of the last sync (`includeFlat` siblings):
