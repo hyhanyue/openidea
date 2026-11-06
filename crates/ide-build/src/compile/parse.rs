@@ -158,6 +158,16 @@ fn looks_like_source_path(p: &str) -> bool {
     !p.is_empty() && !p.contains(' ') && p.rsplit(['/', '\\']).next().is_some_and(|name| name.contains('.'))
 }
 
+fn looks_like_maven_source_path(path: &str) -> bool {
+    // Paths with an explicit root or relative prefix can contain spaces. A bare
+    // candidate with whitespace or colons may instead be Maven prose or a coordinate.
+    let explicit_path = path.starts_with(['/', '\\'])
+        || matches!(path.as_bytes(), [b'a'..=b'z' | b'A'..=b'Z', b':', b'/' | b'\\', ..])
+        || ["./", "../", ".\\", "..\\"].iter().any(|prefix| path.starts_with(prefix));
+    (explicit_path || !path.contains(|c: char| c.is_whitespace() || c == ':'))
+        && path.rsplit(['/', '\\']).next().is_some_and(|name| name.contains('.'))
+}
+
 /// `[12,5] msg` (Maven) → (12, 5, msg).
 fn bracket_pos(s: &str) -> Option<(u32, Option<u32>, &str)> {
     let inner = s.strip_prefix('[')?;
@@ -244,7 +254,7 @@ fn maven_line(line: &str) -> Option<RawMessage> {
     };
     let rest = rest.trim_start();
     if let Some((path, pos)) = rest.split_once(":[")
-        && looks_like_source_path(path)
+        && looks_like_maven_source_path(path)
         && let Some((ln, col, msg)) = bracket_pos(&format!("[{pos}"))
     {
         return Some(RawMessage::new(severity, msg, ColUnit::Char).at(path, ln, col));
@@ -479,6 +489,35 @@ mod tests {
         assert_eq!(out[0].text, "cannot find symbol\nsymbol:   class Foo\nlocation: class a.A");
         assert_eq!(pos(&out[1]), (Severity::Warning, "/p/src/main/java/a/B.java", 3, Some(8)));
         assert_eq!(out[1].unit, ColUnit::Char);
+    }
+
+    #[test]
+    fn maven_bracket_locations_allow_spaces_in_explicit_paths() {
+        for path in [
+            "/p/Build Project 样例/src/main/java/demo/App.java",
+            r"C:\Build Project 样例\src\App.java",
+            r"\\server\Build Project 样例\src\App.java",
+            "./Build Project 样例/App.java",
+            "src/App.java",
+        ] {
+            let out = parse(Format::Maven, &format!("[ERROR] {path}:[5,28] 找不到符号"));
+            assert_eq!(out.len(), 1, "{path}");
+            assert_eq!(pos(&out[0]), (Severity::Error, path, 5, Some(28)));
+            assert_eq!(out[0].text, "找不到符号");
+        }
+    }
+
+    #[test]
+    fn maven_bracket_locations_ignore_non_source_output() {
+        let out = parse(
+            Format::Maven,
+            "[ERROR] org.example:demo:jar:[1,2] could not be resolved\n\
+             [ERROR] https://repo.example/metadata.xml:[1,2] transfer failed\n\
+             [ERROR] Failed to compile /p/Build Project 样例/App.java:[5,28] 找不到符号\n\
+             [ERROR]   location: class demo.App:[5,28]\n\
+             [ERROR] -> [Help 1]\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
     }
 
     #[test]
