@@ -8,7 +8,7 @@ import { useEditorRegistry } from "@/editor/api";
 import { basename, useProject } from "@/platform/project";
 import { useT } from "@/platform/i18n";
 import { ProgressBar } from "@/ui";
-import projectMark from "../../src-tauri/icons/source/openidea-mark.svg";
+import projectMark from "../../src-tauri/icons/source/idea.svg";
 import { useDistractionFree } from "./distractionFree";
 import { EditorArea } from "./EditorArea";
 import { OverlayHost } from "./OverlayHost";

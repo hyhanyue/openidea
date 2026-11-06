@@ -16,11 +16,10 @@ function removeOutput() {
 }
 try {
   const cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js");
-  const result = spawnSync(
-    process.execPath,
-    [cli, "icon", join(icons, "source", "openidea-windows.svg"), "--output", output],
-    { cwd: root, stdio: "inherit" },
-  );
+  const result = spawnSync(process.execPath, [cli, "icon", join(icons, "source", "idea.svg"), "--output", output], {
+    cwd: root,
+    stdio: "inherit",
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Icon generation failed (${result.status})`);
   for (const name of [

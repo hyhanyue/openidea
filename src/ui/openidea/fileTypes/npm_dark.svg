@@ -1,3 +1,5 @@
+<!-- Copyright 2000-2024 JetBrains s.r.o. and contributors. Use of this source code is governed by the Apache 2.0 license. -->
 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-<g stroke-linejoin="round"><path d="M8 1.5L14.5 4.75V11.25L8 14.5L1.5 11.25V4.75Z" fill="#253627" stroke="#5FB865"/><path d="M1.5 4.75L8 8L14.5 4.75M8 8V14.5" stroke="#5FB865"/></g>
+<path d="M1 15V1H15V15H1Z" fill="#C12127"/>
+<path d="M3 3H13V13H11V5H8V13H3V3Z" fill="white"/>
 </svg>

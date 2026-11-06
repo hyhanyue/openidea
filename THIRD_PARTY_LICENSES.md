@@ -54,6 +54,13 @@ Their original copyright headers and Apache-2.0 licensing are retained.
 
 At render time `src/ui/icons.tsx` may recolour monochrome icons to `currentColor`.
 
+This local customization uses the product artwork from IntelliJ IDEA 2025.3.1.
+The macOS icon is copied from the installed app's `Contents/Resources/idea.icns`.
+The artwork in `src-tauri/icons/source/idea.svg` comes from `product-backend.jar`
+and supplies the splash, project-opening logo, and generated desktop icons.
+Matching interface SVGs were copied from the installed platform and plugin JARs,
+including JSX, TSX, npm and Spring Boot icons under `src/ui/openidea/`.
+
 ## JetBrains IntelliJ Platform VCS log graph algorithms
 
 `crates/ide-vcs/src/bek.rs` and `src/features/vcs/graph.ts` adapt the Bek ordering,
@@ -81,13 +88,11 @@ the IntelliJ Platform merge implementation (`MergeRangeUtil`, `MergeResolveUtil`
 `ChunkOptimizer.LineChunkOptimizer` and `MergeConflictModel`). Modified from the
 originals. Copyright 2000-2026 JetBrains s.r.o. and contributors. Apache License 2.0 (below).
 
-`src/ui/openidea/**` holds OpenIDEA's own file-type icons drawn in the expui style for
+`src/ui/openidea/**` also holds OpenIDEA's own file-type icons drawn in the expui style for
 languages whose JetBrains icons are not open source (Go, Ruby, Dart, Lua, Zig,
 Svelte, …). Those using the page-with-corner-badge layout (`goMod`, `goWork`,
 `dotenv`, `readme`, `lock`, `license`) reuse the page outline of the Apache-2.0
 expui `fileTypes/h.svg`; that outline is modified from the original by JetBrains.
-`src/ui/openidea/runConfigurations/springBoot*.svg` (the Spring Boot run configuration
-leaf) is OpenIDEA's own drawing.
 
 The lettering in `src-tauri/icons/source/openidea-wordmark*.svg` is outlined from
 Inter Tight (Copyright 2022 The Inter Project Authors, SIL Open Font License 1.1,
