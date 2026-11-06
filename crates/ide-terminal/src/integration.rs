@@ -28,6 +28,10 @@ ZDOTDIR=$_openidea_dir
 
 const ZSHRC: &str = r#"# OpenIDEA shell integration (generated)
 ZDOTDIR=$OPENIDEA_USER_ZDOTDIR
+# macOS /etc/zshrc computes its default while ZDOTDIR still points at our scripts.
+if [[ ${HISTFILE-} == "$_openidea_dir/.zsh_history" ]]; then
+  HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history
+fi
 [[ -f $ZDOTDIR/.zshrc ]] && . $ZDOTDIR/.zshrc
 OPENIDEA_USER_ZDOTDIR=$ZDOTDIR
 ZDOTDIR=$_openidea_dir
@@ -182,5 +186,37 @@ mod tests {
         assert!(dir.join(".zshrc").is_file());
         assert_eq!(env["OPENIDEA_USER_ZDOTDIR"], "/home/me/zsh");
         assert_eq!(args, vec!["-l"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zsh_repairs_only_the_generated_history_path() {
+        if !Path::new("/bin/zsh").is_file() {
+            return;
+        }
+        // Source the wrapper with the state it sees immediately after the system zshrc.
+        let generated = "/dev/null/generated";
+        let user = "/dev/null/user zsh";
+        let script = format!("{ZSHRC}\nprintf '%s\\n' \"${{HISTFILE-<unset>}}\"");
+        for (initial, expected) in [
+            (Some("/dev/null/generated/.zsh_history"), "/dev/null/user zsh/.zsh_history"),
+            (Some("/dev/null/custom-history"), "/dev/null/custom-history"),
+            (Some(""), ""),
+            (None, "<unset>"),
+        ] {
+            let mut cmd = std::process::Command::new("/bin/zsh");
+            cmd.env_clear()
+                .env("HOME", "/dev/null/home")
+                .env("ZDOTDIR", generated)
+                .env("_openidea_dir", generated)
+                .env("OPENIDEA_USER_ZDOTDIR", user)
+                .args(["-f", "-c", &script]);
+            if let Some(value) = initial {
+                cmd.env("HISTFILE", value);
+            }
+            let output = cmd.output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), format!("{expected}\n"), "{initial:?}");
+        }
     }
 }
