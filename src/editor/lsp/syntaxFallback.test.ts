@@ -639,6 +639,22 @@ describe("modifier-hover navigation recovery", () => {
     expect(openFile).toHaveBeenCalledOnce();
   });
 
+  it("navigates from a Maven resource placeholder to its POM property", async () => {
+    const pom = { path: "/p/pom.xml", range: r(7, 16, 36), uri: null };
+    cmd.lspGoto.mockReturnValueOnce(ok([pom]));
+    const view = editor("    context-path: @project.servlet.path@", "yaml", 0, "/p/src/main/resources/application.yml");
+    move(view, 28);
+    await vi.waitFor(() => expect(view.dom.querySelector(".cm-lsp-link")?.textContent).toBe("project.servlet.path"));
+    expect(cmd.lspGoto).toHaveBeenCalledWith(7, { line: 0, col: 19 }, "definition");
+    view.contentDOM.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, metaKey: mac, ctrlKey: !mac }),
+    );
+    await vi.waitFor(() =>
+      expect(openFile).toHaveBeenCalledWith(pom.path, { selection: { line: 7, col: 16 }, focus: true }),
+    );
+    expect(cmd.lspGoto).toHaveBeenCalledOnce();
+  });
+
   it("invalidates the hover marker after dependencies change", async () => {
     cmd.lspGoto.mockReturnValueOnce(ok([target]));
     const view = editor("port: 8080", "yaml");

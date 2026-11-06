@@ -6,6 +6,7 @@ use crate::rpc::Dispatcher;
 use ide_core::{DocId, IdeResult, Location, Pos, Range, RequestId, ServerId, TextEdit, WorkspaceEdit};
 use ide_lsp::types::*;
 use ide_plugin::ProviderDocument;
+use std::path::Path;
 
 async fn prepare_actions(
     project: std::sync::Arc<crate::Project>,
@@ -204,18 +205,32 @@ pub async fn lsp_signature_help(host: &Host, window: &str, doc: DocId, pos: Pos)
 }
 
 pub async fn lsp_goto(host: &Host, window: &str, doc: DocId, pos: Pos, kind: GotoKind) -> IdeResult<Vec<Location>> {
-    if kind == GotoKind::Definition
-        && let Some(plugins) = crate::plugins::editor_plugin_host()
-    {
-        let project = host.project(window)?;
+    let project = host.project(window)?;
+    let maven = if kind == GotoKind::Definition {
         let (path, version) = project.documents.identity(doc)?;
-        if let Some(found) = plugins.navigation_at(&project.root, &path, version, pos, Some(window), |p| {
-            project.documents.by_path(p).and_then(|id| project.documents.version(id).ok())
-        }) {
+        if let Some(plugins) = crate::plugins::editor_plugin_host()
+            && let Some(found) = plugins.navigation_at(&project.root, &path, version, pos, Some(window), |p| {
+                project.documents.by_path(p).and_then(|id| project.documents.version(id).ok())
+            })
+        {
             return Ok(found.targets);
         }
-    }
-    let result = host.project(window)?.lsp.goto(doc, pos, kind).await;
+        if !project.light
+            && path.starts_with(&project.root)
+            && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("yml") || ext.eq_ignore_ascii_case("yaml"))
+        {
+            let project = project.clone();
+            blocking(move || Ok(maven_resource_definition(&project, &path, doc, pos))).await?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let result = match maven {
+        Some(target) => Ok(vec![target]),
+        None => project.lsp.goto(doc, pos, kind).await,
+    };
     if kind != GotoKind::Definition {
         return result;
     }
@@ -227,6 +242,37 @@ pub async fn lsp_goto(host: &Host, window: &str, doc: DocId, pos: Pos, kind: Got
     let mut out = result.unwrap_or_default();
     out.extend(found.into_iter().map(|l| Location { path: l.path.into(), range: l.range, uri: None }));
     Ok(out)
+}
+
+fn maven_resource_definition(project: &crate::Project, path: &Path, doc: DocId, pos: Pos) -> Option<Location> {
+    let source = project.documents.text_snapshot(doc).ok()?;
+    if source.language.as_str() != "yaml" || source.large {
+        return None;
+    }
+    // Resource filtering happens before YAML parsing, so an unquoted @name@ can appear in source.
+    let line = source.text.split('\n').nth(pos.line as usize)?;
+    let name = maven_filter_name(line, pos.col)?;
+    // An outer POM may aggregate the module without being its parent.
+    let pom = path
+        .parent()?
+        .ancestors()
+        .take_while(|dir| dir.starts_with(&project.root))
+        .map(|dir| dir.join("pom.xml"))
+        .find(|pom| pom.is_file())?;
+    let text = project.text_of(&pom).ok()?;
+    let range = ide_build::pom_edit::property_declaration(&text, name)?;
+    Some(Location::file(pom, range))
+}
+
+fn maven_filter_name(line: &str, column: u32) -> Option<&str> {
+    let mut col = 0;
+    let end = line.char_indices().find_map(|(byte, ch)| {
+        let closes = ch == '@' && col >= column;
+        col += ch.len_utf16() as u32;
+        closes.then_some(byte)
+    })?;
+    let (_, name) = line[..end].rsplit_once('@')?;
+    (!name.is_empty() && !name.chars().any(char::is_whitespace)).then_some(name)
 }
 
 /// Gutter markers from plugins (`line-markers` providers) for `doc`.

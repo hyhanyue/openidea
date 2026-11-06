@@ -113,6 +113,19 @@ pub fn declaration(text: &str, key: &ArtifactKey) -> Option<Range> {
     Some(Range::new(pos_at(text, target.start), pos_at(text, target.end)))
 }
 
+/// Range of the name of a property declared directly in the POM's `<properties>`.
+pub fn property_declaration(text: &str, name: &str) -> Option<Range> {
+    let project = xml::parse(text)?;
+    if project.name != "project" {
+        return None;
+    }
+    let property = project.child("properties")?.child(name)?;
+    let tag =
+        text[property.start + 1..property.end].split(|c: char| c.is_whitespace() || matches!(c, '/' | '>')).next()?;
+    let end = property.start + 1 + tag.len();
+    Some(Range::new(pos_at(text, end - property.name.len()), pos_at(text, end)))
+}
+
 /// Adds `exclude` to the `<exclusions>` of the dependency declaring `dependency` in `text`
 /// (a POM); `None` when the POM does not declare it.
 pub fn add_exclusion(text: &str, dependency: &ArtifactKey, exclude: &ArtifactKey) -> Option<Exclusion> {
