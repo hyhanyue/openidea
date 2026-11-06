@@ -630,7 +630,8 @@ pub(crate) async fn start_kotlin_debuggee(s: &Arc<Session>, args: &mut Value) ->
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .kill_on_drop(true);
-    if let Some(env) = args.get("env").and_then(Value::as_object) {
+    // Only the JVM needs this environment. The adapter attaches over JDWP.
+    if let Some(Value::Object(env)) = args.as_object_mut().and_then(|args| args.remove("env")) {
         for (k, v) in env {
             if let Some(v) = v.as_str() {
                 cmd.env(k, v);

@@ -4,12 +4,21 @@ use crate::Host;
 use crate::rpc::Dispatcher;
 use ide_core::{DebugSessionId, IdeResult};
 use ide_dap::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Starts a session owned by this window: its events (and those of child sessions) go here only.
-pub async fn debug_start(host: &Host, window: &str, config: LaunchConfig) -> IdeResult<DebugSessionId> {
-    host.require_trust(window)?;
-    let mut config = match_java_debug_encoding(config, cfg!(windows));
+pub async fn debug_start(host: &Host, window: &str, mut config: LaunchConfig) -> IdeResult<DebugSessionId> {
+    let project = host.project(window)?;
+    project.require_trust()?;
+    if let Some(files) = take_java_env_files(&mut config)? {
+        config = host
+            .blocking(move || {
+                project.require_trust()?;
+                files.apply(&project.root, config)
+            })
+            .await?;
+    }
+    config = match_java_debug_encoding(config, cfg!(windows));
     if config.adapter == "debugpy"
         && config.request == "launch"
         && let Ok(project) = host.project(window)
@@ -81,6 +90,41 @@ pub async fn debug_start(host: &Host, window: &str, config: LaunchConfig) -> Ide
     let result = host.debugger.start_with(config, owner, custom).await;
     flush_output();
     result
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JavaEnvFiles {
+    paths: Vec<String>,
+    // This controls interpolation. The JVM still inherits its launcher's environment.
+    include_system_env: bool,
+}
+
+impl JavaEnvFiles {
+    fn apply(self, root: &Path, mut config: LaunchConfig) -> IdeResult<LaunchConfig> {
+        let mut env = ide_run::envfile::load_for_run(root, &self.paths, self.include_system_env)?;
+        env.append(&mut config.env);
+        config.env = env;
+        Ok(config)
+    }
+}
+
+fn take_java_env_files(config: &mut LaunchConfig) -> IdeResult<Option<JavaEnvFiles>> {
+    if config.request != "launch" || !matches!(config.adapter.as_str(), "java-debug" | ide_dap::kotlin::ADAPTER) {
+        return Ok(None);
+    }
+    let Some(serde_json::Value::Object(mut extra)) =
+        config.extra_json.as_deref().and_then(|e| serde_json::from_str(e).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(files) = extra.remove("__openideaEnvFiles") else {
+        return Ok(None);
+    };
+    config.extra_json = Some(serde_json::Value::Object(extra).to_string());
+    serde_json::from_value(files)
+        .map(Some)
+        .map_err(|_| ide_core::IdeError::invalid("invalid Java debug environment file options"))
 }
 
 /// A JVM launched by java-debug writes what java-debug decodes its output as
@@ -506,6 +550,52 @@ mod tests {
 
     fn vm_args(config: &LaunchConfig) -> serde_json::Value {
         serde_json::from_str::<serde_json::Value>(config.extra_json.as_deref().unwrap()).unwrap()["vmArgs"].clone()
+    }
+
+    #[test]
+    fn jvm_debug_env_uses_project_paths_and_run_precedence() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        let member = root.join("workspace member");
+        std::fs::create_dir(&member).unwrap();
+        std::fs::write(root.join(".env"), "A=file\nORDER=first\nBASE=demo\n").unwrap();
+        std::fs::write(member.join(".env"), "A=member\nORDER=last\nEXPANDED=${BASE}/suffix\n").unwrap();
+        let extra = serde_json::json!({
+            "mainClass": "demo.App",
+            "__openideaEnvFiles": {"paths": [".env", member.join(".env")], "includeSystemEnv": false}
+        });
+        for adapter in ["java-debug", ide_dap::kotlin::ADAPTER] {
+            let mut config = launch(adapter, "launch", extra.clone());
+            config.cwd = Some(root.join("different working directory").into());
+            config.env.insert("A".into(), "explicit".into());
+            let files = take_java_env_files(&mut config).unwrap().unwrap();
+            let config = files.apply(root, config).unwrap();
+            let args = launch_arguments(&config).unwrap();
+            assert!(args.get("__openideaEnvFiles").is_none());
+            assert_eq!(args["mainClass"], "demo.App");
+            assert_eq!(args["env"]["A"], "explicit");
+            assert_eq!(args["env"]["ORDER"], "last");
+            assert_eq!(args["env"]["EXPANDED"], "demo/suffix");
+        }
+    }
+
+    #[test]
+    fn only_jvm_launch_reads_env_files_and_reports_missing_paths() {
+        let project = tempfile::tempdir().unwrap();
+        let extra = serde_json::json!({
+            "__openideaEnvFiles": {"paths": ["missing.env"], "includeSystemEnv": true}
+        });
+        for (adapter, request) in
+            [("java-debug", "attach"), (ide_dap::kotlin::ADAPTER, "attach"), ("debugpy", "launch")]
+        {
+            assert!(take_java_env_files(&mut launch(adapter, request, extra.clone())).unwrap().is_none());
+        }
+        let mut config = launch("java-debug", "launch", extra);
+        let files = take_java_env_files(&mut config).unwrap().unwrap();
+        let err = files.apply(project.path(), config).unwrap_err();
+        assert_eq!(err.kind, ide_core::error::ErrorKind::NotFound);
+        assert!(err.message.starts_with("cannot read .env file: "));
+        assert!(err.message.contains("missing.env"));
     }
 
     #[test]

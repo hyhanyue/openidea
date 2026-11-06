@@ -2,7 +2,19 @@
 //! prefixes, `#` comments, single- and double-quoted values (escapes in double
 //! quotes) and `${VAR}` references to earlier variables or the base environment.
 
+use ide_core::{IdeError, IdeResult};
 use std::collections::BTreeMap;
+use std::path::Path;
+
+/// Loads a run configuration's files relative to the project root, in order.
+pub fn load_for_run(root: &Path, files: &[String], include_system_env: bool) -> IdeResult<BTreeMap<String, String>> {
+    if files.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let base = if include_system_env { crate::system_env() } else { BTreeMap::new() };
+    let paths: Vec<_> = files.iter().map(|file| root.join(file)).collect();
+    load(&paths, &base).map_err(|e| IdeError::not_found(format!("cannot read .env file: {e}")))
+}
 
 /// Parses `text`; `lookup` resolves `${VAR}` / `$VAR` not defined earlier in the file.
 pub fn parse(text: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Vec<(String, String)> {

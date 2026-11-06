@@ -188,7 +188,7 @@ impl Connection {
             return Err(DapError::Closed);
         }
         let body = serde_json::to_vec(value).map_err(|e| DapError::Protocol(e.to_string()))?;
-        tracing::trace!(target: "ide_dap::wire", "--> {}", String::from_utf8_lossy(&body));
+        trace_wire("-->", value, &body);
         self.inner.out.send(body).map_err(|_| DapError::Closed)
     }
 
@@ -244,8 +244,19 @@ impl Connection {
     }
 }
 
+fn trace_wire(direction: &str, message: &Value, body: &[u8]) {
+    tracing::trace!(target: "ide_dap::wire", "{direction} {}", {
+        if message.pointer("/arguments/env").is_some() {
+            let mut redacted = message.clone();
+            redacted["arguments"]["env"] = json!("<redacted>");
+            std::borrow::Cow::Owned(redacted.to_string())
+        } else {
+            String::from_utf8_lossy(body)
+        }
+    });
+}
+
 fn dispatch(inner: &Inner, incoming: &mpsc::UnboundedSender<Incoming>, body: &[u8]) {
-    tracing::trace!(target: "ide_dap::wire", "<-- {}", String::from_utf8_lossy(body));
     let msg: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => {
@@ -253,6 +264,7 @@ fn dispatch(inner: &Inner, incoming: &mpsc::UnboundedSender<Incoming>, body: &[u
             return;
         }
     };
+    trace_wire("<--", &msg, body);
     match msg.get("type").and_then(Value::as_str) {
         Some("response") => {
             let Some(request_seq) = msg.get("request_seq").and_then(Value::as_i64) else {

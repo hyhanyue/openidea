@@ -103,6 +103,10 @@ export async function javaLaunchConfig(
   const classPaths = parsed.explicitClasspath
     ? parsed.explicitClasspath.split(info.pathListSeparator)
     : info.classPaths;
+  // The execution host reads these files after checking project trust.
+  const envFiles = rc.envFiles?.length
+    ? { paths: rc.envFiles, includeSystemEnv: rc.includeSystemEnv !== false }
+    : undefined;
   if (kotlin) {
     return {
       name: rc.name,
@@ -113,6 +117,7 @@ export async function javaLaunchConfig(
       cwd,
       env: { ...rc.env },
       extraJson: JSON.stringify({
+        __openideaEnvFiles: envFiles,
         projectRoot: join(root, module),
         mainClass: parsed.mainClass,
         classPaths,
@@ -135,6 +140,7 @@ export async function javaLaunchConfig(
     cwd,
     env: { ...rc.env },
     extraJson: JSON.stringify({
+      __openideaEnvFiles: envFiles,
       debugServer: port,
       mainClass: parsed.mainClass,
       classPaths,

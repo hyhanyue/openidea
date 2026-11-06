@@ -176,3 +176,18 @@ it.each(["sibling", "/outside/modules"])("debugs from %s with the main class mod
     expect(launch.cwd).toBe(cwd.startsWith("/") ? cwd : `/p/${cwd}`);
   }
 });
+
+it.each([
+  { kind: "application", debugAdapter: "java-debug", includeSystemEnv: undefined },
+  { kind: "spring-boot", debugAdapter: "java-debug", includeSystemEnv: false },
+  { kind: "application", debugAdapter: "kotlin-debug-adapter", includeSystemEnv: true },
+])("passes .env paths for $kind with $debugAdapter to the execution host", async (options) => {
+  kotlinFiles = false;
+  const envFiles = [".env", "/member with spaces/local.env"];
+  const launch = await javaLaunchConfig({ ...app, ...options, envFiles }, "/p");
+  expect(launch.env).toEqual({ A: "1" });
+  expect(JSON.parse(launch.extraJson!).__openideaEnvFiles).toEqual({
+    paths: envFiles,
+    includeSystemEnv: options.includeSystemEnv !== false,
+  });
+});

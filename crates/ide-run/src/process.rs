@@ -778,14 +778,7 @@ pub(crate) fn configure_environment(command: &mut Command, root: &Path, config: 
 
 fn launch_env(root: &Path, config: &RunConfig) -> IdeResult<LaunchEnv> {
     let extras = &config.extras;
-    let mut vars = if extras.env_files.is_empty() {
-        BTreeMap::new()
-    } else {
-        let base: BTreeMap<String, String> =
-            if extras.include_system_env { crate::system_env() } else { BTreeMap::new() };
-        let paths: Vec<PathBuf> = extras.env_files.iter().map(|f| resolve_cwd(root, Some(Path::new(f)))).collect();
-        crate::envfile::load(&paths, &base).map_err(|e| IdeError::not_found(format!("cannot read .env file: {e}")))?
-    };
+    let mut vars = crate::envfile::load_for_run(root, &extras.env_files, extras.include_system_env)?;
     if matches!(config.kind.as_str(), "python" | "pytest" | "django-test")
         && !config.env.contains_key("PYTHONUNBUFFERED")
         && !vars.contains_key("PYTHONUNBUFFERED")
