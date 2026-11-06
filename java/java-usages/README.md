@@ -69,7 +69,7 @@ is not a claim of full IntelliJ feature parity.
 ## Rebuild and delivery
 
 The checked-in jar is embedded by ide-sdk `include_bytes!`, installed as
-`java-usages-1.8.0.jar`, and added alongside existing initialization bundles.
+`java-usages-1.9.0.jar`, and added alongside existing initialization bundles.
 Users need no compiler, Maven or Python. Manifest/install version must change
 when replacing the bundle because OSGi caches bundles.
 
@@ -133,6 +133,7 @@ python3 java/java-usages/tests/read-write.py /path/to/jdtls /path/to/lombok.jar 
 OPENIDEA_USAGES_INDEX_STRESS=1 python3 java/java-usages/tests/read-write.py /path/to/jdtls /path/to/lombok.jar > /tmp/read-write-indexed.json
 python3 java/java-usages/tests/hierarchy.py /path/to/jdtls
 python3 java/java-usages/tests/implementations.py /path/to/jdtls
+python3 java/java-usages/tests/auto-build-outputs.py /path/to/jdtls
 ```
 
 The harnesses select the JDT LS configuration for the current platform. The first
@@ -148,6 +149,13 @@ Find transfer, persistence and unfiltered non-Java counts with the same fixture.
 listing, moving, declaring abstract, pulling up to an interface, conflicts reported
 before any change, and a class without supertypes. Each edit is applied to a copy of
 the fixture and compiled with javac.
+
+`auto-build-outputs.py` checks that two consecutive failed saves preserve the last
+good classes in a Maven reactor, including a class deleted by JDT. It checks the
+downstream diagnostic and runs the restored classes in an external JVM. Saving
+only the downstream repair must rebuild both modules, including after a failed
+explicit retry. The fixture uses a separate Maven repository and accepts an
+optional local mirror path.
 
 ## Class-hierarchy refactorings
 
@@ -185,6 +193,11 @@ This is an app-owned JDT LS extension, not a standard LSP feature. It uses:
   `JsonRpcHelpers.toOffset`, `JDTUtils.resolveCompilationUnit` and
   `ChangeUtil.convertToWorkspaceEdit`.
 - Public JDT model/DOM APIs for exact target identity and source-expression context.
+- Auto build rollback uses the live Eclipse Java builder and
+  `JavaModelManager.setLastBuiltState` to invalidate the resource and Java build
+  states. Verify the Eclipse auto build job's progress monitor and interruption
+  flag on upgrades, since the POST_BUILD event does not expose a build result.
+  Check that `AutoBuildJob.forceBuild` still only flags the next scheduled build.
 
 The fingerprint protects native target discovery, not all binary compatibility.
 A server update that breaks linkage or command execution falls back to standard

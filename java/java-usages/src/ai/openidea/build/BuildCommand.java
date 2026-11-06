@@ -12,12 +12,10 @@ import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.IncrementalProjectBuilder;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.SubMonitor;
-import org.eclipse.jdt.core.IClasspathEntry;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.ls.core.internal.BuildWorkspaceStatus;
 import org.eclipse.jdt.ls.core.internal.IDelegateCommandHandler;
@@ -50,13 +48,7 @@ public final class BuildCommand implements IDelegateCommandHandler {
         Set<IFolder> outputs = new LinkedHashSet<>();
         for (IProject project : workspace.getRoot().getProjects()) {
             if (!project.isOpen() || !project.hasNature(JavaCore.NATURE_ID)) continue;
-            var java = JavaCore.create(project);
-            addOutput(outputs, project, java.getOutputLocation());
-            for (IClasspathEntry entry : java.getRawClasspath()) {
-                if (entry.getEntryKind() == IClasspathEntry.CPE_SOURCE) {
-                    addOutput(outputs, project, entry.getOutputLocation());
-                }
-            }
+            outputs.addAll(BuildOutputs.folders(JavaCore.create(project)));
         }
         var state = JavaLanguageServerPlugin.getInstance().getStateLocation().toPath();
         var marker = state.resolve("openidea-rebuild-java");
@@ -82,6 +74,7 @@ public final class BuildCommand implements IDelegateCommandHandler {
             } finally {
                 boolean succeeded = result == BuildWorkspaceStatus.SUCCEED;
                 boolean rolledBack = !succeeded && backup.restore();
+                if (succeeded || rolledBack) AutoBuildOutputs.explicitBuildFinished(rolledBack);
                 if (succeeded || (!rolledBack && !rebuild)) {
                     try {
                         Files.deleteIfExists(marker);
@@ -90,13 +83,6 @@ public final class BuildCommand implements IDelegateCommandHandler {
                     }
                 }
             }
-        }
-    }
-
-    private static void addOutput(Set<IFolder> outputs, IProject project, IPath path) {
-        // A project-root output can contain arbitrary source and other project files.
-        if (path != null && project.getFullPath().isPrefixOf(path) && path.segmentCount() > 1) {
-            outputs.add(project.getFolder(path.removeFirstSegments(1)));
         }
     }
 }

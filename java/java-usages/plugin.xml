@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugin>
+  <extension point="org.eclipse.jdt.core.compilationParticipant">
+    <compilationParticipant id="openidea.autoBuildOutputs"
+        class="ai.openidea.build.AutoBuildOutputs$Participant"/>
+  </extension>
   <extension point="org.eclipse.jdt.ls.core.delegateCommandHandler">
     <delegateCommandHandler class="ai.openidea.build.BuildCommand">
       <command id="openidea.java.build"/>

@@ -9,16 +9,21 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.core.runtime.SubMonitor;
+import org.eclipse.jdt.core.IClasspathEntry;
+import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.ls.core.internal.JavaLanguageServerPlugin;
 
 /** Copies the configured output files, and undoes only changes recorded by Eclipse's resource tree. */
@@ -32,6 +37,25 @@ final class BuildOutputs implements AutoCloseable {
 
     private BuildOutputs(Path temporary) {
         this.temporary = temporary;
+    }
+
+    static Set<IFolder> folders(IJavaProject java) throws JavaModelException {
+        Set<IFolder> outputs = new LinkedHashSet<>();
+        IProject project = java.getProject();
+        addOutput(outputs, project, java.getOutputLocation());
+        for (IClasspathEntry entry : java.getRawClasspath()) {
+            if (entry.getEntryKind() == IClasspathEntry.CPE_SOURCE) {
+                addOutput(outputs, project, entry.getOutputLocation());
+            }
+        }
+        return outputs;
+    }
+
+    private static void addOutput(Set<IFolder> outputs, IProject project, IPath path) {
+        // A project-root output can contain arbitrary source and other project files.
+        if (path != null && project.getFullPath().isPrefixOf(path) && path.segmentCount() > 1) {
+            outputs.add(project.getFolder(path.removeFirstSegments(1)));
+        }
     }
 
     static BuildOutputs capture(Path state, Set<IFolder> folders, IProgressMonitor monitor)
