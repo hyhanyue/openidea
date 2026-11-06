@@ -137,6 +137,17 @@ describe("segmentLine", () => {
     expect(segs.map((s) => s.text).join("")).toBe(line.text);
   });
 
+  it("keeps the Maven source target when ANSI styling splits its location", () => {
+    const m = new ConsoleModel();
+    const path = "/Users/me/Java 项目/src/main/java/demo/App.java";
+    m.append({ kind: "stdout", text: `[\x1b[1;31mERROR\x1b[0m] \x1b[31m${path}\x1b[0m:[5,28] 找不到符号\n` });
+    const line = m.lines[0]!;
+    const links = findOutputLinks(line.text);
+    const segments = segmentLine(line.spans, links).filter((s) => s.link);
+    expect(segments.map((s) => s.text)).toEqual([path, ":[5,28]"]);
+    expect(segments.map((s) => s.link)).toEqual([links[0], links[0]]);
+  });
+
   it("returns spans unchanged without links", () => {
     expect(segmentLine([{ text: "a", fg: "x" }, { text: "b" }], [])).toEqual([
       { text: "a", style: { fg: "x" } },

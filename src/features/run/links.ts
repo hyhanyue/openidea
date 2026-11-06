@@ -61,6 +61,15 @@ function groupRange(m: RegExpMatchArray, g: number): [number, number] {
 const PATH = String.raw`(?:[A-Za-z]:[\\/]|~?\/|\.{1,2}\/)?(?:[\w.@+\-]+[\\/])*[\w@+\-][\w.@+\-]*\.[A-Za-z][\w]{0,9}`;
 
 const PATTERNS: Pattern[] = [
+  // Maven prints the absolute source path unquoted, including any spaces.
+  {
+    re: /^\[(?:ERROR|WARNING)\][ \t]+((?:\/(?!\/)|[A-Za-z]:[\\/])[^\r\n]*?\.java):\[([1-9]\d*),([1-9]\d*)\](?=\s|$)/dg,
+    build: (m) => {
+      const [start] = groupRange(m, 1);
+      const end = m.index! + m[0].length;
+      return { kind: "file", start, end, target: { path: m[1]!, line: num(m[2]), col: num(m[3]), resolve: "path" } };
+    },
+  },
   // Python: File "app/main.py", line 12, in <module>
   {
     re: /File "([^"]+)", line (\d+)/dg,

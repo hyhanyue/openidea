@@ -58,6 +58,29 @@ describe("findOutputLinks", () => {
     expect(files("(Main.java:3)")[0]).toEqual({ path: "Main.java", line: 3, resolve: "name", text: "Main.java:3" });
   });
 
+  it.each([
+    ["ERROR", "/Users/me/Java 项目/src/main/java/demo/App.java"],
+    ["ERROR", String.raw`C:\Users\me\Java 项目\src\main\java\demo\App.java`],
+    ["WARNING", "/p/src/main/java/demo/App.java"],
+  ])("links the full path in Maven %s diagnostics", (level, path) => {
+    const text = `${path}:[5,28]`;
+    const input = `[${level}] ${text} 找不到符号 (see https://example.org/help)`;
+    expect(files(input)).toEqual([{ path, line: 5, col: 28, resolve: "path", text }]);
+    expect(findOutputLinks(input).map((link) => input.slice(link.start, link.end))).toEqual([
+      text,
+      "https://example.org/help",
+    ]);
+  });
+
+  it.each([
+    "[ERROR] Failed to resolve artifact demo:App.java:[5,28] from central",
+    "[ERROR] https://example.org/src/App.java:[5,28] unavailable",
+    "[ERROR] //example.org/src/App.java:[5,28] unavailable",
+    "[ERROR] /p/src/main/java/demo/App.java:[0,28] invalid location",
+  ])("ignores Maven output without a Java source location: %s", (line) => {
+    expect(files(line)).toEqual([]);
+  });
+
   it("go and generic path:line", () => {
     expect(files("    math_test.go:12: expected 1")[0]).toMatchObject({ path: "math_test.go", line: 12 });
     expect(files("./cmd/server/main.go:8:2: undefined: x")[0]).toMatchObject({
