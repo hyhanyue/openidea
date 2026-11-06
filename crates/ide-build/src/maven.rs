@@ -183,6 +183,19 @@ struct ParentRef {
     artifact_id: String,
     version: String,
     relative_path: Option<String>,
+    has_blank_coordinate: bool,
+}
+
+impl ParentRef {
+    fn complete(&self) -> bool {
+        !self.group_id.is_empty() && !self.artifact_id.is_empty() && !self.version.is_empty()
+    }
+
+    fn matches(&self, candidate: &Self, props: &HashMap<String, String>) -> bool {
+        (self.group_id.is_empty() || self.group_id == candidate.group_id)
+            && (self.artifact_id.is_empty() || self.artifact_id == candidate.artifact_id)
+            && (self.version.is_empty() || interpolate(&self.version, props) == candidate.version)
+    }
 }
 
 impl ParentRef {
@@ -379,14 +392,16 @@ fn compiler_level(project: &Element, path: &str) -> Option<String> {
 }
 
 fn read_raw(project: &Element) -> RawPom {
-    let parent = project.child("parent").and_then(|p| {
-        Some(ParentRef {
-            group_id: p.text_of("groupId")?,
-            artifact_id: p.text_of("artifactId")?,
-            version: p.text_of("version").unwrap_or_default(),
-            // `<relativePath/>` (empty) means "look it up in the repository".
-            relative_path: p.child("relativePath").map(|r| r.text.trim().to_owned()),
-        })
+    // Maven 4 can infer omitted coordinates in both 4.1.0 and 4.0.0 build POMs.
+    let parent = project.child("parent").map(|p| ParentRef {
+        group_id: p.text_of("groupId").unwrap_or_default(),
+        artifact_id: p.text_of("artifactId").unwrap_or_default(),
+        version: p.text_of("version").unwrap_or_default(),
+        // `<relativePath/>` (empty) means "look it up in the repository".
+        relative_path: p.child("relativePath").map(|r| r.text.trim().to_owned()),
+        has_blank_coordinate: ["groupId", "artifactId", "version"]
+            .iter()
+            .any(|name| p.child(name).is_some_and(|e| e.text.trim().is_empty())),
     });
     let mut pom = RawPom {
         group_id: project.text_of("groupId"),
@@ -481,6 +496,10 @@ pub(crate) fn interpolate(s: &str, props: &HashMap<String, String>) -> String {
 struct Inherited {
     group_id: Option<String>,
     version: Option<String>,
+    parent: Option<ParentRef>,
+    parent_path: Option<PathBuf>,
+    /// A cycle, depth limit or unresolved inferred parent makes this chain unsafe to infer from.
+    incomplete_chain: bool,
     properties: Vec<(String, String)>,
     deps: Vec<RawDep>,
     managed: Vec<RawDep>,
@@ -529,11 +548,13 @@ fn merge_plugins(base: &mut Vec<RawPlugin>, own: &[RawPlugin]) {
 const MAX_PARENT_DEPTH: usize = 10;
 
 struct Resolver {
+    root: PathBuf,
     local_repo: Option<PathBuf>,
     /// The chosen profiles (`-P` entries; `!id` / `-id` deactivates).
     profiles: Vec<String>,
     poms: HashMap<PathBuf, Option<RawPom>>,
     contexts: HashMap<PathBuf, Inherited>,
+    resolving: HashSet<PathBuf>,
 }
 
 /// `~/.m2/repository`, or `<localRepository>` from `~/.m2/settings.xml`.
@@ -591,8 +612,15 @@ pub fn local_repository_of(settings: &Path) -> Option<PathBuf> {
 }
 
 impl Resolver {
-    fn new(local_repo: Option<PathBuf>, profiles: &[String]) -> Self {
-        Self { local_repo, profiles: profiles.to_vec(), poms: HashMap::new(), contexts: HashMap::new() }
+    fn new(root: &Path, local_repo: Option<PathBuf>, profiles: &[String]) -> Self {
+        Self {
+            root: dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
+            local_repo,
+            profiles: profiles.to_vec(),
+            poms: HashMap::new(),
+            contexts: HashMap::new(),
+            resolving: HashSet::new(),
+        }
     }
 
     /// The active profiles of a POM: the chosen ones, and the `activeByDefault` ones not turned
@@ -625,15 +653,83 @@ impl Resolver {
         p.is_file().then_some(p)
     }
 
-    /// The parent POM file of the POM in `dir`: in the project via `relativePath`
-    /// (default `../pom.xml`) when its coordinates match, else in the local repository.
-    fn parent_path(&mut self, dir: &Path, parent: &ParentRef) -> Option<PathBuf> {
-        if let Some(candidate) = parent.relative_candidate(dir)
-            && self.pom(&candidate).is_some_and(|p| parent.matches_ga(&p))
-        {
+    fn relative_parent_path(&self, dir: &Path, parent: &ParentRef) -> Option<PathBuf> {
+        let candidate = parent.relative_candidate(dir)?;
+        if !candidate.is_file() {
+            return None;
+        }
+        if parent.complete() {
             return Some(candidate);
         }
-        self.repo_pom(&parent.group_id, &parent.artifact_id, &parent.version)
+        // Inference without a full GAV stays within the workspace and any nested Maven root.
+        let dir = dunce::canonicalize(dir).ok()?;
+        let candidate = dunce::canonicalize(candidate).ok()?;
+        let boundary = dir.ancestors().take_while(|d| d.starts_with(&self.root)).find(|d| d.join(".mvn").is_dir());
+        (dir.starts_with(&self.root) && candidate.starts_with(boundary.unwrap_or(&self.root))).then_some(candidate)
+    }
+
+    /// Try a local POM first. A fully specified parent can also come from the repository.
+    fn local_parent(
+        &mut self,
+        dir: &Path,
+        parent: &ParentRef,
+        depth: usize,
+    ) -> Option<(PathBuf, ParentRef, Inherited)> {
+        let path = self.relative_parent_path(dir, parent)?;
+        let pom = self.pom(&path)?;
+        let explicit = parent.complete();
+        if !parent.artifact_id.is_empty() && parent.artifact_id != pom.artifact_id {
+            return None;
+        }
+        if !explicit && pom.packaging.as_deref() != Some("pom") {
+            return None;
+        }
+        let group = pom.group_id.as_deref().or_else(|| pom.parent.as_ref().map(|p| p.group_id.as_str()));
+        // Keep the usual GA lookup for explicitly declared Maven parents. If the
+        // candidate inherits its group by inference, check it after resolving its chain.
+        if explicit && group.is_none_or(|g| !g.is_empty() && g != parent.group_id) {
+            return None;
+        }
+        let ctx = self.context(&path, depth);
+        if explicit {
+            return (group == Some(parent.group_id.as_str())
+                || ctx.group_id.as_deref() == Some(parent.group_id.as_str()))
+            .then(|| (path, parent.clone(), ctx));
+        }
+        if ctx.incomplete_chain {
+            return None;
+        }
+        let props = self.properties_for(&pom, &ctx, path.parent()?);
+        let candidate = ParentRef {
+            group_id: interpolate(ctx.group_id.as_deref().unwrap_or_default(), &props),
+            artifact_id: interpolate(&pom.artifact_id, &props),
+            version: interpolate(ctx.version.as_deref().unwrap_or_default(), &props),
+            ..ParentRef::default()
+        };
+        (candidate.complete() && parent.matches(&candidate, &props)).then_some((path, candidate, ctx))
+    }
+
+    fn parent_context(&mut self, dir: &Path, parent: &ParentRef, depth: usize) -> Inherited {
+        let declared = parent.complete().then(|| parent.clone());
+        if depth == MAX_PARENT_DEPTH || parent.has_blank_coordinate {
+            return Inherited { parent: declared, incomplete_chain: true, ..Inherited::default() };
+        }
+        let resolved = self.local_parent(dir, parent, depth + 1).or_else(|| {
+            let parent = declared.as_ref()?;
+            let path = self.repo_pom(&parent.group_id, &parent.artifact_id, &parent.version)?;
+            let ctx = self.context(&path, depth + 1);
+            Some((path, parent.clone(), ctx))
+        });
+        let Some((path, parent, mut ctx)) = resolved else {
+            return Inherited { incomplete_chain: declared.is_none(), parent: declared, ..Inherited::default() };
+        };
+        if declared.is_none() {
+            ctx.group_id = Some(parent.group_id.clone());
+            ctx.version = Some(parent.version.clone());
+        }
+        ctx.parent = Some(parent);
+        ctx.parent_path = Some(path);
+        ctx
     }
 
     /// What the POM at `path` hands down to its children (its parents' plus its own).
@@ -642,17 +738,15 @@ impl Resolver {
             return c.clone();
         }
         let Some(pom) = self.pom(path) else { return Inherited::default() };
+        let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if !self.resolving.insert(canonical.clone()) {
+            return Inherited { incomplete_chain: true, ..Inherited::default() };
+        }
         let dir = path.parent().unwrap_or(Path::new("")).to_path_buf();
-        let mut ctx = match &pom.parent {
-            Some(parent) if depth < MAX_PARENT_DEPTH => match self.parent_path(&dir, parent) {
-                Some(pp) => self.context(&pp, depth + 1),
-                None => Inherited::default(),
-            },
-            _ => Inherited::default(),
-        };
-        let parent_ref = pom.parent.clone().unwrap_or_default();
-        ctx.group_id = pom.group_id.clone().or(ctx.group_id).or(Some(parent_ref.group_id.clone()));
-        ctx.version = pom.version.clone().or(ctx.version).or(Some(parent_ref.version.clone()));
+        let mut ctx = pom.parent.as_ref().map(|p| self.parent_context(&dir, p, depth)).unwrap_or_default();
+        ctx.group_id =
+            pom.group_id.clone().or(ctx.group_id).or_else(|| ctx.parent.as_ref().map(|p| p.group_id.clone()));
+        ctx.version = pom.version.clone().or(ctx.version).or_else(|| ctx.parent.as_ref().map(|p| p.version.clone()));
         merge_by(&mut ctx.properties, &pom.properties, |(k, _)| k.clone());
         merge_by(&mut ctx.deps, &pom.deps, RawDep::key);
         merge_plugins(&mut ctx.plugins, &pom.plugins);
@@ -704,7 +798,10 @@ impl Resolver {
                 ctx.managed.push(d);
             }
         }
-        self.contexts.insert(path.to_path_buf(), ctx.clone());
+        self.resolving.remove(&canonical);
+        if !ctx.incomplete_chain {
+            self.contexts.insert(path.to_path_buf(), ctx.clone());
+        }
         ctx
     }
 
@@ -744,7 +841,7 @@ impl Resolver {
         if let Some(name) = &pom.name {
             set("project.name", name);
         }
-        if let Some(p) = &pom.parent {
+        if let Some(p) = &ctx.parent {
             set("project.parent.groupId", &p.group_id);
             set("project.parent.artifactId", &p.artifact_id);
             set("project.parent.version", &p.version);
@@ -790,15 +887,13 @@ pub(crate) fn launch_inputs(
         }
         Some(())
     }
-    let mut resolver = Resolver::new(local_repo.or_else(default_local_repo), &[]);
+    let mut resolver = Resolver::new(root, local_repo.or_else(default_local_repo), &[]);
     let mut out = Vec::new();
     for project in projects {
         let dir = root.join(&project.dir);
         // Include all conventional language/resource roots, including nonstandard files under src.
         out.push(dir.join("src"));
-        let pom = root.join(&project.pom);
-        resolver.context(&pom, 0);
-        let mut path = pom;
+        let mut path = root.join(&project.pom);
         let mut seen = HashSet::new();
         loop {
             let canonical = dunce::canonicalize(&path).ok()?;
@@ -809,8 +904,11 @@ pub(crate) fn launch_inputs(
             let text = std::fs::read_to_string(&path).ok()?;
             roots(&xml::parse(&text)?, "", &dir, &mut out)?;
             let raw = resolver.pom(&path)?;
-            let Some(parent) = raw.parent else { break };
-            path = resolver.parent_path(path.parent()?, &parent)?;
+            let ctx = resolver.context(&path, 0);
+            if raw.parent.is_none() {
+                break;
+            }
+            path = ctx.parent_path?;
         }
     }
     // Also track imported BOMs read while resolving inheritance.
@@ -1199,7 +1297,7 @@ pub fn load_with_linked(
     profiles: &[String],
     linked: &[String],
 ) -> MavenModel {
-    let mut resolver = Resolver::new(local_repo, profiles);
+    let mut resolver = Resolver::new(root, local_repo, profiles);
     let mut model = MavenModel::default();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut tops = top_level_poms(root);
@@ -1293,7 +1391,7 @@ pub fn load_with_linked(
             display_name: pom.name.as_deref().map(i).filter(|n| !n.is_empty()).unwrap_or_else(|| artifact_id.clone()),
             artifact_id,
             packaging,
-            parent: pom.parent.as_ref().map(|p| format!("{}:{}:{}", p.group_id, p.artifact_id, i(&p.version))),
+            parent: ctx.parent.as_ref().map(|p| format!("{}:{}:{}", p.group_id, p.artifact_id, i(&p.version))),
             modules: modules.iter().map(|m| rel_path(root, m)).collect(),
             aggregated,
             plugins,
@@ -1567,7 +1665,10 @@ pub fn parse_effective_pom_in(
         .into_iter()
         .map(|p| {
             let raw = read_raw(p);
-            let group = raw.group_id.clone().or(raw.parent.as_ref().map(|pp| pp.group_id.clone())).unwrap_or_default();
+            let group = raw
+                .group_id
+                .or_else(|| raw.parent.filter(|p| !p.artifact_id.is_empty()).map(|p| p.group_id))
+                .unwrap_or_default();
             let plugins = raw
                 .plugins
                 .iter()
@@ -1875,6 +1976,154 @@ mod tests {
         let model = load_with_repo(root, None);
         assert_eq!(model.projects[0].modules, ["core/pom.xml"]);
         assert!(model.projects.iter().any(|p| p.pom == "core/pom.xml" && p.aggregated));
+    }
+
+    #[test]
+    fn maven_4_infers_local_parent_coordinates_and_inherits_properties() {
+        for model_version in ["4.1.0", "4.0.0"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            write(
+                root,
+                "pom.xml",
+                &format!(
+                    r#"<project xmlns="http://maven.apache.org/POM/{model_version}"><modelVersion>{model_version}</modelVersion>
+                      <groupId>demo.parent</groupId><artifactId>reactor</artifactId><version>1.2.3</version>
+                      <packaging>pom</packaging>
+                      <properties><maven.compiler.release>17</maven.compiler.release><label>from parent</label></properties>
+                      <modules><module>shorthand</module><module>relative</module><module>file</module></modules>
+                    </project>"#,
+                ),
+            );
+            for (name, parent) in [
+                ("shorthand", "<parent/>"),
+                ("relative", "<parent><relativePath>..</relativePath></parent>"),
+                (
+                    "file",
+                    "<parent><groupId>demo.parent</groupId><artifactId>reactor</artifactId><relativePath>../pom.xml</relativePath></parent>",
+                ),
+            ] {
+                write(
+                    root,
+                    &format!("{name}/pom.xml"),
+                    &format!(
+                        r#"<project xmlns="http://maven.apache.org/POM/{model_version}"><modelVersion>{model_version}</modelVersion>{parent}<artifactId>{name}</artifactId>
+                          <name>${{label}} ${{project.parent.artifactId}} ${{project.parent.version}}</name></project>"#
+                    ),
+                );
+            }
+            let model = load_with_repo(root, None);
+            assert_eq!(model.projects.len(), 4);
+            for child in &model.projects[1..] {
+                assert_eq!(child.group_id, "demo.parent");
+                assert_eq!(child.version, "1.2.3");
+                assert_eq!(child.parent.as_deref(), Some("demo.parent:reactor:1.2.3"));
+                assert_eq!(child.java_version, Some(17));
+                assert_eq!(child.display_name, "from parent reactor 1.2.3");
+                let inputs = launch_inputs(root, &[child], None).unwrap();
+                assert!(inputs.contains(&dunce::canonicalize(root.join("pom.xml")).unwrap()));
+            }
+        }
+    }
+
+    #[test]
+    fn maven_4_infers_parent_coordinates_through_the_parent_chain() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(
+            root,
+            "pom.xml",
+            r#"<project><groupId>demo</groupId><artifactId>root</artifactId><version>${revision}</version>
+              <packaging>pom</packaging><properties><revision>1.2.3</revision><java.version>17</java.version></properties>
+              <modules><module>middle</module></modules></project>"#,
+        );
+        write(
+            root,
+            "middle/pom.xml",
+            r#"<project><parent/><artifactId>middle</artifactId><packaging>pom</packaging>
+              <modules><module>leaf</module><module>explicit</module></modules></project>"#,
+        );
+        write(
+            root,
+            "middle/leaf/pom.xml",
+            r#"<project><parent><version>1.2.3</version></parent><artifactId>leaf</artifactId>
+              <properties><revision>9.9.9</revision></properties></project>"#,
+        );
+        write(
+            root,
+            "middle/explicit/pom.xml",
+            r#"<project><parent><groupId>demo</groupId><artifactId>middle</artifactId><version>1.2.3</version></parent>
+              <artifactId>explicit</artifactId></project>"#,
+        );
+        let model = load_with_repo(root, None);
+        assert_eq!(model.projects.len(), 4);
+        for child in &model.projects[2..] {
+            assert_eq!(child.parent.as_deref(), Some("demo:middle:1.2.3"));
+            assert_eq!(child.version, "1.2.3");
+            assert_eq!(child.java_version, Some(17));
+        }
+    }
+
+    #[test]
+    fn maven_4_does_not_infer_missing_conflicting_or_out_of_scope_parents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("workspace");
+        write(tmp.path(), "outside/pom.xml", PARENT);
+        write(
+            &root,
+            "pom.xml",
+            r#"<project><groupId>demo</groupId><artifactId>root</artifactId><version>1.0</version><packaging>pom</packaging>
+              <properties><java.version>17</java.version></properties></project>"#,
+        );
+        write(&root, "nested/.mvn/maven.config", "");
+        write(
+            &root,
+            "incomplete/pom.xml",
+            "<project><artifactId>incomplete</artifactId><packaging>pom</packaging></project>",
+        );
+        write(
+            &root,
+            "jar/pom.xml",
+            "<project><groupId>demo</groupId><artifactId>jar</artifactId><version>1.0</version></project>",
+        );
+        let cases = [
+            ("independent", ""),
+            ("disabled", "<parent><relativePath/></parent>"),
+            ("blank", "<parent><groupId/></parent>"),
+            ("missing", "<parent><relativePath>../missing.xml</relativePath></parent>"),
+            ("group", "<parent><groupId>other</groupId></parent>"),
+            ("artifact", "<parent><artifactId>other</artifactId></parent>"),
+            ("version", "<parent><version>2.0</version></parent>"),
+            ("outside", "<parent><relativePath>../../outside</relativePath></parent>"),
+            ("nested", "<parent/>"),
+            ("invalid", "<parent><relativePath>../incomplete</relativePath></parent>"),
+            ("non-pom", "<parent><relativePath>../jar</relativePath></parent>"),
+            ("self", "<parent><relativePath>./pom.xml</relativePath></parent>"),
+            ("cycle-a", "<parent><relativePath>../cycle-b</relativePath></parent>"),
+            ("cycle-b", "<parent><relativePath>../cycle-a</relativePath></parent>"),
+        ];
+        for (name, parent) in cases {
+            let pom = format!("{name}/pom.xml");
+            write(
+                &root,
+                &pom,
+                &format!(
+                    "<project>{parent}<groupId>own</groupId><artifactId>{name}</artifactId><version>2.3</version><packaging>pom</packaging></project>"
+                ),
+            );
+        }
+        let linked = cases.map(|(name, _)| format!("{name}/pom.xml"));
+        let model = load_with_linked(&root, None, &[], &linked);
+        assert_eq!(model.projects.len(), linked.len() + 1);
+        for child in &model.projects[1..] {
+            assert_eq!(child.parent, None, "{}", child.artifact_id);
+            assert_eq!(child.java_version, None, "{}", child.artifact_id);
+            assert_eq!(child.group_id, "own");
+            assert_eq!(child.version, "2.3");
+            if child.artifact_id != "independent" {
+                assert!(launch_inputs(&root, &[child], None).is_none(), "{}", child.artifact_id);
+            }
+        }
     }
 
     #[test]
