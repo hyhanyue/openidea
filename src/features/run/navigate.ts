@@ -34,11 +34,18 @@ async function declaresPackage(path: string, pkg: string): Promise<boolean> {
 }
 
 async function findByName(target: FileTarget): Promise<string | null> {
-  const name = target.path.split("/").pop() ?? target.path;
+  const tail = target.path.replace(/^\.?\//, "");
+  const name = tail.split("/").pop() ?? tail;
+  const matchesPath = (relPath: string) => relPath === tail || relPath.endsWith(`/${tail}`);
+  if (target.className && tail !== name) {
+    // Query with the package path before the index caps the results for a common basename.
+    const hits = await call(commands.findFiles(tail, 50)).catch(() => []);
+    const exact = hits.find((h) => matchesPath(h.relPath));
+    if (exact) return exact.path;
+  }
   try {
     const hits = await call(commands.findFiles(name, 50));
-    const tail = target.path.replace(/^\.?\//, "");
-    const exact = hits.find((h) => h.relPath === tail || h.relPath.endsWith(`/${tail}`));
+    const exact = hits.find((h) => matchesPath(h.relPath));
     if (exact) return exact.path;
     const named = hits.filter((h) => h.relPath.split("/").pop() === name);
     // A stack frame names its class: a same-named file of another package is not it.

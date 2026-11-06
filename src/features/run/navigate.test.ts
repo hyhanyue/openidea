@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { jvmFrameTarget } from "./links";
 
-const files: Record<string, string> = {
+const projectFiles: Record<string, string> = {
   "/p/src/main/java/com/acme/Util.java": "package com.acme;\nclass Util {}",
   "/p/other/Util.java": "package org.other;\nclass Util {}",
   "/p/src/main/kotlin/Orders.kt": "package com.acme.orders\nfun main() {}",
 };
+let files = { ...projectFiles };
+const openFile = vi.hoisted(() => vi.fn(async () => {}));
 const symbols = vi.hoisted(() => ({ list: [] as unknown[] }));
 
 vi.mock("@/platform/ipc", () => ({
@@ -15,18 +17,25 @@ vi.mock("@/platform/ipc", () => ({
   commands: {
     fsReadDir: async () => [],
     fsReadText: async (path: string) => files[path] ?? "",
-    findFiles: async (name: string) =>
+    findFiles: async (query: string, limit: number) =>
       Object.keys(files)
-        .filter((p) => p.endsWith(`/${name}`))
+        .filter((p) => p.endsWith(query))
+        .slice(0, limit)
         .map((path) => ({ path, relPath: path.slice(3) })),
     lspWorkspaceSymbols: async () => symbols.list,
   },
 }));
 
-const { resolveTarget } = await import("./navigate");
+vi.mock("@/workbench/contributions", () => ({
+  editorService: () => ({ openFile }),
+}));
+
+const { openTarget, resolveTarget } = await import("./navigate");
 
 describe("JVM stack frame resolution", () => {
   afterEach(() => {
+    files = { ...projectFiles };
+    openFile.mockClear();
     symbols.list = [];
   });
 
@@ -35,6 +44,28 @@ describe("JVM stack frame resolution", () => {
       "/p/src/main/java/com/acme/Util.java",
     );
     expect(await resolveTarget(jvmFrameTarget("org.other.Util", "Util.java", 3), "/p")).toBe("/p/other/Util.java");
+  });
+
+  it("opens project source at the stack line even when a basename search would omit it", async () => {
+    for (let i = 0; i < 50; i++) {
+      files[`/p/m${i}/src/main/java/com/other${i}/AService.java`] = `package com.other${i};`;
+    }
+    files["/p/decoy/src/main/java/notcom/example/demo/AService.java"] = "package notcom.example.demo;";
+    const source = "/p/application/src/main/java/com/example/demo/AService.java";
+    files[source] = "package com.example.demo;";
+    symbols.list = [
+      {
+        name: "AService",
+        kind: "class",
+        container: "com.example.demo",
+        location: { path: "jdt://contents/AService.class", uri: "jdt://contents/AService.class" },
+      },
+    ];
+
+    const target = jvmFrameTarget("com.example.demo.AService", "AService.java", 52);
+    expect(await resolveTarget(target, "/p")).toBe(source);
+    await openTarget(target, "/p");
+    expect(openFile).toHaveBeenCalledWith(source, { selection: { line: 51, col: 0 }, focus: true });
   });
 
   it("finds Kotlin files outside their package directory by their package declaration", async () => {
