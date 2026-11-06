@@ -214,17 +214,21 @@ impl Host {
                         None
                     });
                     ide_sdk::apply::configure_java_compiler(cfg, &data_dir, &effective.inspections);
+                    let project_jdk = ide_sdk::apply::jdtls_project_jdk(root, &effective);
                     ide_sdk::java::configure_jdtls(
                         cfg,
                         server_root,
                         &data_dir,
                         &jdks,
-                        ide_sdk::apply::project_jdk(root, &effective).as_ref(),
+                        project_jdk.as_ref().ok().and_then(Option::as_ref),
                         server_jdk.as_ref(),
                         min_java,
                         &bundles,
                         lombok.jar(),
                     );
+                    if let Err(error) = project_jdk {
+                        cfg.launch_error = Some(error);
+                    }
                     ide_sdk::jdtls::launch_directly(cfg);
                 }
                 ide_sdk::apply::server_protocol_overrides(cfg, &effective);

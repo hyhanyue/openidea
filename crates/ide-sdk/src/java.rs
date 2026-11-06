@@ -48,7 +48,7 @@ fn children(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn jdk_homes(root: &Path) -> impl Iterator<Item = PathBuf> {
+fn jdk_homes(root: &Path) -> impl Iterator<Item = PathBuf> + use<> {
     children(root)
         .into_iter()
         .flat_map(|dir| [dir.join("Contents/Home"), dir.join("libexec/openjdk.jdk/Contents/Home"), dir])
@@ -150,6 +150,7 @@ fn rescan(slot: &mut Option<Scan>) -> Arc<[Jdk]> {
 
 /// Scans for installed JDKs again (Settings › Detect again).
 pub fn rescan_jdks() -> Arc<[Jdk]> {
+    JAVA_PROBES.lock().unwrap_or_else(|e| e.into_inner()).clear();
     rescan(&mut JDKS.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
@@ -162,16 +163,29 @@ pub fn installed_jdks() -> Arc<[Jdk]> {
     }
 }
 
-/// Like [`installed_jdks`], but while none can run jdtls (on Java `min_java`)
+/// Runnable project and server JDKs. While no installed JDK can run jdtls on Java `min_java`,
 /// the list is rescanned (at most every [`RESCAN_AFTER`]), so a JDK installed
 /// after startup is picked up when the server is restarted.
 pub fn jdtls_jdks(min_java: u32, data_dir: &Path) -> Arc<[Jdk]> {
-    let mut slot = JDKS.lock().unwrap_or_else(|e| e.into_inner());
-    let installed = match &*slot {
-        Some(s) if jdtls_runtime(&s.jdks, min_java).is_some() || s.at.elapsed() < RESCAN_AFTER => s.jdks.clone(),
-        _ => rescan(&mut slot),
-    };
-    runtime_candidates(&installed, data_dir).into()
+    let installed = installed_jdks();
+    // jdtls launches registered runtimes to discover their libraries.
+    let runnable = |jdks: &[Jdk]| jdks.iter().filter(|jdk| java_runs(&jdk.home)).cloned().collect::<Vec<_>>();
+    let mut jdks = runnable(&installed);
+    if jdtls_runtime(&jdks, min_java).is_none() {
+        let refreshed = {
+            let mut slot = JDKS.lock().unwrap_or_else(|e| e.into_inner());
+            match &*slot {
+                Some(s) if !Arc::ptr_eq(&installed, &s.jdks) => Some(s.jdks.clone()),
+                Some(s) if s.at.elapsed() >= RESCAN_AFTER => Some(rescan(&mut slot)),
+                _ => None,
+            }
+        };
+        if let Some(refreshed) = refreshed {
+            jdks = runnable(&refreshed);
+        }
+    }
+    jdks.extend(server_runtime_downloads(data_dir).filter(|jdk| java_runs(&jdk.home)));
+    jdks.into()
 }
 
 /// Runtime-only downloads are never registered as project discovery roots.
@@ -179,10 +193,8 @@ pub fn language_server_runtimes_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("language-server-runtimes")
 }
 
-fn runtime_candidates(installed: &[Jdk], data_dir: &Path) -> Vec<Jdk> {
-    let mut jdks = installed.to_vec();
-    jdks.extend(jdk_homes(&language_server_runtimes_dir(data_dir)).filter_map(|home| jdk_at(&home)));
-    jdks
+fn server_runtime_downloads(data_dir: &Path) -> impl Iterator<Item = Jdk> {
+    jdk_homes(&language_server_runtimes_dir(data_dir)).filter_map(|home| jdk_at(&home))
 }
 
 /// For a server with `max-java`: when the `JAVA_HOME` it would get (its env,
@@ -200,6 +212,27 @@ pub fn cap_java_home(cfg: &mut LanguageServerConfig, jdks: &[Jdk]) {
 
 /// Oldest Java version jdtls runs on when its install can't tell (its launcher's check).
 pub const JDTLS_MIN_JAVA: u32 = 21;
+
+// The configuration hook runs on startup and settings changes. Let it reuse recent probes,
+// but retry after a repair or a change to the machine's ability to execute the launcher.
+static JAVA_PROBES: Mutex<BTreeMap<PathBuf, (Instant, bool)>> = Mutex::new(BTreeMap::new());
+
+pub(crate) fn java_runs(home: &Path) -> bool {
+    let java = java_executable(home);
+    let mut probes = JAVA_PROBES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&(at, runnable)) = probes.get(&java)
+        && at.elapsed() < RESCAN_AFTER
+    {
+        return runnable;
+    }
+    // Let the host decide whether it can run the binary, including through emulation.
+    let runnable = crate::exec::query(&java, &["-version"], Duration::from_secs(3)).is_some();
+    if !runnable {
+        tracing::debug!(launcher = %java.display(), "JDK launcher could not run -version");
+    }
+    probes.insert(java, (Instant::now(), runnable));
+    runnable
+}
 
 /// The JDK to run jdtls with: the first found that is new enough (`JAVA_HOME` wins).
 pub fn jdtls_runtime(jdks: &[Jdk], min_java: u32) -> Option<&Jdk> {
@@ -372,7 +405,25 @@ pub fn configure_jdtls(
     // A Lombok agent from the user's JVM arguments wins.
     let own_agent = crate::lombok::agent_in_args(cfg.args.iter().map(String::as_str));
     let agent = own_agent.as_deref().or(lombok);
-    if !cfg.args.iter().any(|a| a == "-data") {
+    let managed = language_server_runtimes_dir(data_dir);
+    let managed = dunce::canonicalize(&managed).unwrap_or(managed);
+    let project_jdks: Vec<_> = project_jdk
+        .into_iter()
+        .chain(jdks)
+        .filter(|jdk| !jdk.home.starts_with(&managed) || project_jdk == Some(*jdk))
+        .cloned()
+        .collect();
+    let mut runtimes = runtimes(&project_jdks);
+    if let Some(project) = project_jdk.or_else(|| pick_jdk(&project_jdks, project_java_version(server_root))) {
+        let name = if project.major == 8 { "JavaSE-1.8".to_owned() } else { format!("JavaSE-{}", project.major) };
+        for r in &mut runtimes {
+            if r["name"] == name {
+                r["path"] = json!(project.home.to_string_lossy());
+                r["default"] = json!(true);
+            }
+        }
+    }
+    if !cfg.args.iter().any(|a| a == "-data" || a.starts_with("-data=")) {
         // ECJ builds incrementally: classes compiled without (or with another) Lombok
         // agent would be kept, so each agent gets its own workspace and a full build.
         let mut key = match agent {
@@ -384,6 +435,9 @@ pub fn configure_jdtls(
             // A different source model needs a clean import, including new folders.
             key.push_str(&format!("-sources-{}", text_key(&paths.to_string())));
         }
+        // Eclipse retains registered VMs in the workspace even after they disappear from
+        // initialization options. A removed or unusable runtime must not carry over.
+        key.push_str(&format!("-runtimes-{}", text_key(&json!(runtimes).to_string())));
         let dir = data_dir.join("lsp").join("jdtls").join(key);
         cfg.args.extend(["-data".to_owned(), dir.to_string_lossy().into_owned()]);
     }
@@ -406,14 +460,6 @@ pub fn configure_jdtls(
     // refuses to open takes the whole Maven build with it. IDEA never notices: its JBR 21
     // accepts the same file.
     set_jvm_property(&mut cfg.args, ZIP64_LENIENCY);
-    let managed = language_server_runtimes_dir(data_dir);
-    let managed = dunce::canonicalize(&managed).unwrap_or(managed);
-    let project_jdks: Vec<_> = project_jdk
-        .into_iter()
-        .chain(jdks)
-        .filter(|jdk| !jdk.home.starts_with(&managed) || project_jdk == Some(*jdk))
-        .cloned()
-        .collect();
     let mut all: Vec<Jdk> = Vec::new();
     for j in project_jdk.into_iter().chain(jdks).chain(server_jdk) {
         if !all.contains(j) {
@@ -440,16 +486,6 @@ pub fn configure_jdtls(
         && !ide_core::java_runtime::supports_java_bundles(&jdk.home)
     {
         cfg.launch_error = Some(server_jdk_incomplete_message(&jdk, min_java));
-    }
-    let mut runtimes = runtimes(&project_jdks);
-    if let Some(project) = project_jdk.or_else(|| pick_jdk(&project_jdks, project_java_version(server_root))) {
-        let name = if project.major == 8 { "JavaSE-1.8".to_owned() } else { format!("JavaSE-{}", project.major) };
-        for r in &mut runtimes {
-            if r["name"] == name {
-                r["path"] = json!(project.home.to_string_lossy());
-                r["default"] = json!(true);
-            }
-        }
     }
     if !runtimes.is_empty() {
         merge_init_options(cfg, json!({ "settings": { "java": { "configuration": { "runtimes": runtimes } } } }));
@@ -585,6 +621,10 @@ fn parse_java_version(v: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
+    fn runtime_candidates(installed: &[Jdk], data_dir: &Path) -> Vec<Jdk> {
+        installed.iter().cloned().chain(server_runtime_downloads(data_dir)).collect()
+    }
+
     fn test_jdk(root: &Path, major: u32, name: &str) -> Jdk {
         let home = root.join(name.trim_start_matches('/'));
         std::fs::create_dir_all(home.join("bin")).unwrap();
@@ -697,6 +737,66 @@ mod tests {
         )
         .unwrap();
         assert!(jdtls_runtime(&runtime_candidates(&[], tmp.path()), 25).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn jdtls_skips_unusable_java_8_and_reports_an_explicit_choice() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let installs = root.join("jdks");
+        let bad = test_jdk(&installs, 8, "bad8");
+        let foreign = test_jdk(&installs, 8, "foreign8");
+        let good = test_jdk(&installs, 8, "good8");
+        for jdk in [&bad, &foreign, &good] {
+            std::fs::write(jdk.home.join("release"), "JAVA_VERSION=\"1.8.0_202\"\n").unwrap();
+        }
+        std::fs::write(java_executable(&foreign.home), b"\x7fELF\x02\x01\x01").unwrap();
+        std::fs::set_permissions(java_executable(&foreign.home), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(java_executable(&good.home), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(java_executable(&good.home), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let server = test_jdk(root, 25, "server25");
+        std::fs::write(root.join("pom.xml"), "<project><java.version>1.8</java.version></project>").unwrap();
+
+        let configure = |jdks, project| {
+            let mut cfg = toml::from_str("name = 'jdtls'\ncommand = 'jdtls'").unwrap();
+            configure_jdtls(&mut cfg, root, root, jdks, project, Some(&server), 25, &[], None);
+            cfg
+        };
+        add_jdk_root(&installs);
+        rescan_jdks();
+        let installs = dunce::canonicalize(&installs).unwrap();
+        let jdks: Vec<_> = jdtls_jdks(25, root).iter().filter(|jdk| jdk.home.starts_with(&installs)).cloned().collect();
+        let workspace =
+            |cfg: &LanguageServerConfig| cfg.args.windows(2).find(|args| args[0] == "-data").unwrap()[1].clone();
+        let cfg = configure(&jdks, None);
+        let with_java8 = workspace(&cfg);
+        assert_eq!(cfg.launch_error, None);
+        assert_eq!(cfg.env["JAVA_HOME"], server.home.to_string_lossy());
+        let opts = serde_json::to_value(cfg.initialization_options).unwrap();
+        assert_eq!(
+            opts.pointer("/settings/java/configuration/runtimes"),
+            Some(&json!([{ "name": "JavaSE-1.8", "path": dunce::canonicalize(&good.home).unwrap(), "default": true }]))
+        );
+
+        let mut settings = ide_core::settings::Settings::default();
+        settings.languages.java.jdk = "jdks/good8/bin/java".into();
+        let selected = crate::apply::jdtls_project_jdk(root, &settings).unwrap().unwrap();
+        assert_eq!(selected, jdks[0]);
+        settings.languages.java.jdk = "jdks/bad8".into();
+        let err = crate::apply::jdtls_project_jdk(root, &settings).unwrap_err();
+        assert!(err.contains("Project JDK") && err.contains("bad8/bin/java -version"), "{err}");
+
+        std::fs::remove_dir_all(&good.home).unwrap();
+        rescan_jdks();
+        let jdks: Vec<_> = jdtls_jdks(25, root).iter().filter(|jdk| jdk.home.starts_with(&installs)).cloned().collect();
+        let cfg = configure(&jdks, None);
+        assert_eq!(cfg.launch_error, None);
+        assert_ne!(workspace(&cfg), with_java8, "the old Eclipse workspace can retain the removed JDK");
+        let opts = serde_json::to_value(cfg.initialization_options).unwrap();
+        assert!(opts.pointer("/settings/java/configuration/runtimes").is_none());
     }
 
     #[test]

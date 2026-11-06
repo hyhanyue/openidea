@@ -17,6 +17,7 @@ use lsp_types as lsp;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 /// How long Inspect Code waits for a server that is still starting (jdtls,
@@ -62,6 +63,9 @@ impl LspManager {
     /// for `path` (by file name). Missing servers are not started, so a batch
     /// run doesn't prompt to install every language it meets.
     pub fn serves_path(&self, path: &Path) -> bool {
+        if !self.execution_allowed.load(Ordering::Acquire) {
+            return false;
+        }
         let lang = self.languages.detect(path, None);
         self.language_servers(&lang).iter().any(|ls| {
             if ls.require_root_marker

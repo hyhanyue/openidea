@@ -143,14 +143,32 @@ pub fn project_jdk(root: &Path, s: &Settings) -> Option<crate::java::Jdk> {
     }
 }
 
+/// The project JDK passed to jdtls, which executes its launcher to discover the libraries.
+pub fn jdtls_project_jdk(root: &Path, s: &Settings) -> Result<Option<crate::java::Jdk>, String> {
+    let jdk = project_jdk(root, s);
+    if let Some(jdk) = &jdk
+        && !crate::java::java_runs(&jdk.home)
+    {
+        return Err(format!(
+            "The Project JDK could not run `{} -version`. Choose a working SDK in Settings › Languages & Frameworks › Java › Project JDK, or set it to Auto.",
+            crate::java::java_executable(&jdk.home).display()
+        ));
+    }
+    Ok(jdk)
+}
+
 /// The JDK chosen to run jdtls (`languages.java.jdtlsJdk`): `Ok(None)` when not
-/// set, `Err` (the message) when it is not a JDK home.
+/// set, `Err` (the message) when the configured JDK cannot be used.
 pub fn jdtls_jdk(root: &Path, s: &Settings) -> Result<Option<crate::java::Jdk>, String> {
     match jdk_setting(root, &s.languages.java.jdtls_jdk) {
         None => Ok(None),
         Some(Ok(jdk)) if !ide_core::java_runtime::supports_java_bundles(&jdk.home) => {
             Err(crate::java::server_jdk_incomplete_message(&jdk, jdk.major.max(crate::java::JDTLS_MIN_JAVA)))
         }
+        Some(Ok(jdk)) if !crate::java::java_runs(&jdk.home) => Err(format!(
+            "The language server JDK could not run `{} -version`. Choose a working JDK in Settings › Languages & Frameworks › Java › Language Server › JDK, or set it to Auto.",
+            crate::java::java_executable(&jdk.home).display()
+        )),
         Some(Ok(jdk)) => Ok(Some(jdk)),
         Some(Err(p)) => {
             Err(format!("The language server JDK {} (Settings › Languages & Frameworks › Java).", not_a_jdk(&p)))

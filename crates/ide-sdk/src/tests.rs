@@ -578,11 +578,11 @@ fn ruff_configuration_directory_resolves_files_and_validates_pyproject() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn jdtls_jdk_setting() {
-    if cfg!(windows) {
-        return; // Unix paths
-    }
+    use std::os::unix::fs::PermissionsExt;
+
     let tmp = tempfile::tempdir().unwrap();
     fake_jdk(&tmp.path().join("jdk17"));
     let mut s = Settings::default();
@@ -591,9 +591,16 @@ fn jdtls_jdk_setting() {
     s.languages.java.jdk = "jdk17".into();
     assert_eq!(jdtls_jdk(tmp.path(), &s), Ok(None));
     s.languages.java.jdtls_jdk = "jdk17/bin".into();
+    let err = jdtls_jdk(tmp.path(), &s).unwrap_err();
+    assert!(err.contains("language server JDK") && err.contains("jdk17/bin/java -version"), "{err}");
+    fake_jdk(&tmp.path().join("working17"));
+    let java = tmp.path().join("working17/bin/java");
+    std::fs::write(&java, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o755)).unwrap();
+    s.languages.java.jdtls_jdk = "working17/bin".into();
     assert_eq!(jdtls_jdk(tmp.path(), &s).unwrap().map(|j| j.major), Some(17));
     std::fs::write(
-        tmp.path().join("jdk17/release"),
+        tmp.path().join("working17/release"),
         "JAVA_VERSION=\"25\"\nIMAGE_TYPE=\"JRE\"\nMODULES=\"java.base jdk.compiler jdk.jdi jdk.unsupported\"\n",
     )
     .unwrap();
