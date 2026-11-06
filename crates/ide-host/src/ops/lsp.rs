@@ -6,7 +6,8 @@ use crate::rpc::Dispatcher;
 use ide_core::{DocId, IdeResult, Location, Pos, Range, RequestId, ServerId, TextEdit, WorkspaceEdit};
 use ide_lsp::types::*;
 use ide_plugin::ProviderDocument;
-use std::path::Path;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
 
 async fn prepare_actions(
     project: std::sync::Arc<crate::Project>,
@@ -215,12 +216,17 @@ pub async fn lsp_goto(host: &Host, window: &str, doc: DocId, pos: Pos, kind: Got
         {
             return Ok(found.targets);
         }
-        if !project.light
+        if !project.light && path.file_name().is_some_and(|f| f == "pom.xml") {
+            let project = project.clone();
+            let config = host.config_dir.clone();
+            blocking(move || Ok(maven_pom_definition(&project, &config, path, doc, pos))).await?
+        } else if !project.light
             && path.starts_with(&project.root)
             && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("yml") || ext.eq_ignore_ascii_case("yaml"))
         {
             let project = project.clone();
-            blocking(move || Ok(maven_resource_definition(&project, &path, doc, pos))).await?
+            blocking(move || Ok(maven_resource_definition(&project, &path, doc, pos).map(|target| vec![target])))
+                .await?
         } else {
             None
         }
@@ -228,7 +234,7 @@ pub async fn lsp_goto(host: &Host, window: &str, doc: DocId, pos: Pos, kind: Got
         None
     };
     let result = match maven {
-        Some(target) => Ok(vec![target]),
+        Some(targets) => Ok(targets),
         None => project.lsp.goto(doc, pos, kind).await,
     };
     if kind != GotoKind::Definition {
@@ -242,6 +248,58 @@ pub async fn lsp_goto(host: &Host, window: &str, doc: DocId, pos: Pos, kind: Got
     let mut out = result.unwrap_or_default();
     out.extend(found.into_iter().map(|l| Location { path: l.path.into(), range: l.range, uri: None }));
     Ok(out)
+}
+
+fn maven_pom_definition(
+    project: &crate::Project,
+    config: &Path,
+    path: PathBuf,
+    doc: DocId,
+    pos: Pos,
+) -> Option<Vec<Location>> {
+    let source = project.documents.text_snapshot(doc).ok()?;
+    if source.language.as_str() != "xml" || source.large {
+        return None;
+    }
+    let workspace = ide_workspace::workspace::Workspace::load(&project.root).ok().flatten();
+    let member = workspace.as_ref().and_then(|w| {
+        w.projects.iter().filter(|root| path.starts_with(root)).max_by_key(|root| root.components().count())
+    });
+    let cache = project.build_cache_dir();
+    let (repo, cache) = if let Some(root) = member {
+        let settings = ide_workspace::SettingsStore::load(config, Some(root)).effective();
+        (ide_sdk::apply::maven_local_repository(root, &settings), cache.join(crate::project::project_key(root)))
+    } else {
+        if !path.starts_with(&project.root) {
+            return None;
+        }
+        (ide_sdk::apply::maven_local_repository(&project.root, &project.settings.effective()), cache)
+    };
+    let profiles = ide_build::maven_profiles(&cache);
+    let found =
+        ide_build::maven::pom_definition(path, source.text, pos, repo, &profiles, |path| project.text_of(path).ok())?;
+    let ide_build::maven::PomDefinition::Target { path, range, text } = found else {
+        return Some(Vec::new());
+    };
+    if path.starts_with(&project.root)
+        || workspace.is_some_and(|w| w.projects.iter().any(|root| path.starts_with(root)))
+    {
+        return Some(vec![Location::file(path, range)]);
+    }
+    let file_uri = ide_lsp::path_to_uri_string(&path);
+    // The virtual editor caches by URI, so a replaced POM gets a new snapshot.
+    let mut hash = DefaultHasher::new();
+    text.hash(&mut hash);
+    let uri = format!("{}?{:x}", file_uri.replacen("file:", "maven-pom:", 1), hash.finish());
+    project.lsp.cache_virtual_document(VirtualDocument {
+        uri: uri.clone(),
+        text,
+        language_id: source.language,
+        title: path.file_name()?.to_string_lossy().into_owned(),
+        description: Some(path.to_string_lossy().into_owned()),
+        decompiled: false,
+    });
+    Some(vec![Location { path: uri.as_str().into(), range, uri: Some(uri) }])
 }
 
 fn maven_resource_definition(project: &crate::Project, path: &Path, doc: DocId, pos: Pos) -> Option<Location> {

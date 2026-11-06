@@ -2724,12 +2724,17 @@ impl LspManager {
         if let Some(server) = server {
             self.virtual_origins.lock().entry(uri.to_owned()).or_insert(server);
         }
+        self.cache_virtual_document(doc.clone());
+        doc
+    }
+
+    /// Registers read-only contents supplied by a navigation provider in the host.
+    pub fn cache_virtual_document(&self, doc: VirtualDocument) {
         let mut cache = self.virtual_docs.lock();
-        if cache.len() >= VIRTUAL_CACHE_LIMIT {
+        if cache.len() >= VIRTUAL_CACHE_LIMIT && !cache.contains_key(&doc.uri) {
             cache.clear();
         }
-        cache.insert(uri.to_owned(), doc.clone());
-        doc
+        cache.insert(doc.uri.clone(), doc);
     }
 
     /// Called when a server sends `workspace/applyEdit`; installed by `src-tauri`

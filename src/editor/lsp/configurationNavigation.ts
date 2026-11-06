@@ -42,6 +42,15 @@ export function isConfigurationDocument(view: EditorView): boolean {
 /** Configuration names include hyphens and dots even when the editor's
  * language word rules split them. Share this range between decoration and lookup. */
 export function navigationWord(view: EditorView, offset: number): { from: number; to: number } | null {
+  const doc = docOf(view);
+  if (doc?.language === "xml" && /(?:^|[\\/])pom\.xml$/.test(doc.path)) {
+    const line = view.state.doc.lineAt(offset);
+    for (const match of line.text.matchAll(/\$\{[^{}\s<>$]+\}/g)) {
+      const start = line.from + match.index;
+      if (offset >= start && offset < start + match[0].length)
+        return { from: start + 2, to: start + match[0].length - 1 };
+    }
+  }
   if (!isConfigurationDocument(view)) return view.state.wordAt(offset);
   const line = view.state.doc.lineAt(offset);
   const nameChar = /[\p{L}\p{N}_.$-]/u;

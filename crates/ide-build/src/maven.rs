@@ -7,6 +7,9 @@
 //! project, together with imported BOMs. Nothing here runs Maven: [`crate::sync`]
 //! later replaces plugins and dependencies with the effective build.
 
+mod navigation;
+pub use navigation::{PomDefinition, pom_definition};
+
 use crate::xml::{self, Element};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -180,6 +183,25 @@ struct ParentRef {
     artifact_id: String,
     version: String,
     relative_path: Option<String>,
+}
+
+impl ParentRef {
+    fn relative_candidate(&self, dir: &Path) -> Option<PathBuf> {
+        let rel = self.relative_path.as_deref().unwrap_or("../pom.xml");
+        if rel.is_empty() {
+            return None;
+        }
+        let mut candidate = dir.join(rel);
+        if candidate.is_dir() {
+            candidate.push("pom.xml");
+        }
+        Some(candidate)
+    }
+
+    fn matches_ga(&self, pom: &RawPom) -> bool {
+        let group = pom.group_id.as_deref().or_else(|| pom.parent.as_ref().map(|p| p.group_id.as_str()));
+        pom.artifact_id == self.artifact_id && group == Some(self.group_id.as_str())
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -527,10 +549,10 @@ impl Resolver {
 
     /// The active profiles of a POM: the chosen ones, and the `activeByDefault` ones not turned
     /// off while none of the POM's other profiles is chosen (Maven's rule).
-    fn active<'a>(&self, profiles: &'a [RawProfile]) -> impl Iterator<Item = &'a RawProfile> {
+    fn active<'a>(&self, profiles: &'a [RawProfile]) -> impl Iterator<Item = (usize, &'a RawProfile)> {
         let chosen = |id: &str| profile_choice(&self.profiles, id);
         let any_chosen = profiles.iter().any(|p| chosen(&p.id) == Some(true));
-        profiles.iter().filter(move |p| chosen(&p.id).unwrap_or(p.active_by_default && !any_chosen))
+        profiles.iter().enumerate().filter(move |(_, p)| chosen(&p.id).unwrap_or(p.active_by_default && !any_chosen))
     }
 
     fn pom(&mut self, path: &Path) -> Option<RawPom> {
@@ -541,7 +563,10 @@ impl Resolver {
     }
 
     fn repo_pom(&self, group: &str, artifact: &str, version: &str) -> Option<PathBuf> {
-        if version.is_empty() || version.contains("${") {
+        let coordinate = |part: &str| {
+            !part.is_empty() && part != "." && part != ".." && !part.contains(['/', '\\', ':']) && !part.contains("${")
+        };
+        if !group.split('.').all(coordinate) || !coordinate(artifact) || !coordinate(version) {
             return None;
         }
         let mut p = self.local_repo.clone()?;
@@ -555,18 +580,10 @@ impl Resolver {
     /// The parent POM file of the POM in `dir`: in the project via `relativePath`
     /// (default `../pom.xml`) when its coordinates match, else in the local repository.
     fn parent_path(&mut self, dir: &Path, parent: &ParentRef) -> Option<PathBuf> {
-        let rel = parent.relative_path.clone().unwrap_or_else(|| "../pom.xml".into());
-        if !rel.is_empty() {
-            let mut candidate = dir.join(&rel);
-            if candidate.is_dir() {
-                candidate.push("pom.xml");
-            }
-            if let Some(p) = self.pom(&candidate) {
-                let group = p.group_id.clone().or_else(|| p.parent.as_ref().map(|pp| pp.group_id.clone()));
-                if p.artifact_id == parent.artifact_id && group.as_deref() == Some(parent.group_id.as_str()) {
-                    return Some(candidate);
-                }
-            }
+        if let Some(candidate) = parent.relative_candidate(dir)
+            && self.pom(&candidate).is_some_and(|p| parent.matches_ga(&p))
+        {
+            return Some(candidate);
         }
         self.repo_pom(&parent.group_id, &parent.artifact_id, &parent.version)
     }
@@ -595,7 +612,7 @@ impl Resolver {
         if pom.compiler_release.is_some() {
             ctx.compiler_release = pom.compiler_release.clone();
         }
-        for p in self.active(&pom.profiles) {
+        for (_, p) in self.active(&pom.profiles) {
             merge_by(&mut ctx.properties, &p.properties, |(k, _)| k.clone());
             merge_by(&mut ctx.deps, &p.deps, RawDep::key);
             merge_plugins(&mut ctx.plugins, &p.plugins);
@@ -1146,7 +1163,7 @@ pub fn load_with_linked(
         let i = |s: &str| interpolate(s, &props);
 
         let mut module_names: Vec<String> = pom.modules.clone();
-        for p in resolver.active(&pom.profiles) {
+        for (_, p) in resolver.active(&pom.profiles) {
             module_names.extend(p.modules.iter().cloned());
         }
         let mut modules: Vec<PathBuf> = Vec::new();

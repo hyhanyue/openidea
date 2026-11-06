@@ -10,6 +10,8 @@ pub struct Element {
     pub children: Vec<Element>,
     /// Byte offset of the start tag's `<`.
     pub start: usize,
+    /// Byte offset just after the start tag's `>`.
+    pub inner_start: usize,
     /// Byte offset of the end tag's `<` (`end` for an empty or unclosed element).
     pub inner_end: usize,
     /// Byte offset just past the end tag (past the start tag for `<empty/>`).
@@ -81,15 +83,22 @@ fn local(name: &str) -> String {
 /// Unbalanced end tags close the innermost matching element; unclosed elements
 /// are closed at the end of input.
 pub fn parse(text: &str) -> Option<Element> {
+    parse_with_text(text, |_| {})
+}
+
+/// Also reports the raw character data spans, excluding comments and markup.
+pub fn parse_with_text(text: &str, mut on_text: impl FnMut(std::ops::Range<usize>)) -> Option<Element> {
     let mut stack: Vec<Element> = vec![Element::default()];
     let mut rest = text;
     let at = |rest: &str| text.len() - rest.len();
     while !rest.is_empty() {
         let Some(lt) = rest.find('<') else {
+            on_text(at(rest)..text.len());
             decode_entities(rest, &mut stack.last_mut()?.text);
             break;
         };
         if lt > 0 {
+            on_text(at(rest)..at(rest) + lt);
             decode_entities(&rest[..lt], &mut stack.last_mut()?.text);
         }
         let tag = &rest[lt..];
@@ -97,6 +106,7 @@ pub fn parse(text: &str) -> Option<Element> {
             rest = body.find("-->").map_or("", |e| &body[e + 3..]);
         } else if let Some(body) = tag.strip_prefix("<![CDATA[") {
             let end = body.find("]]>").unwrap_or(body.len());
+            on_text(at(body)..at(body) + end);
             stack.last_mut()?.text.push_str(&body[..end]);
             rest = body.get(end + 3..).unwrap_or("");
         } else if tag.starts_with("<?") {
@@ -141,8 +151,14 @@ pub fn parse(text: &str) -> Option<Element> {
             let start = at(tag);
             rest = tag.get(i + 1..).unwrap_or("");
             let after = at(rest);
-            let el =
-                Element { name: local(&inner[..name_end]), start, inner_end: after, end: after, ..Element::default() };
+            let el = Element {
+                name: local(&inner[..name_end]),
+                start,
+                inner_start: after,
+                inner_end: after,
+                end: after,
+                ..Element::default()
+            };
             if empty {
                 stack.last_mut()?.children.push(el);
             } else {

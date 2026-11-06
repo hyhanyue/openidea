@@ -119,11 +119,39 @@ pub fn property_declaration(text: &str, name: &str) -> Option<Range> {
     if project.name != "project" {
         return None;
     }
-    let property = project.child("properties")?.child(name)?;
-    let tag =
-        text[property.start + 1..property.end].split(|c: char| c.is_whitespace() || matches!(c, '/' | '>')).next()?;
-    let end = property.start + 1 + tag.len();
-    Some(Range::new(pos_at(text, end - property.name.len()), pos_at(text, end)))
+    element_name_range(text, project.child("properties")?.child(name)?)
+}
+
+pub(crate) fn property_name_range(text: &str, scope: &Element, name: &str) -> Option<Range> {
+    let property = scope.child("properties")?.children_named(name).last()?;
+    element_name_range(text, property)
+}
+
+pub(crate) fn element_name_range(text: &str, element: &Element) -> Option<Range> {
+    let tag = text
+        .get(element.start + 1..element.end)?
+        .split(|c: char| c.is_whitespace() || matches!(c, '/' | '>'))
+        .next()?;
+    let end = element.start + 1 + tag.len();
+    Some(Range::new(pos_at(text, end - element.name.len()), pos_at(text, end)))
+}
+
+/// Byte offset at a UTF-16 position, without rounding into a different character or line.
+pub(crate) fn offset_at(text: &str, pos: Pos) -> Option<usize> {
+    let mut lines = text.split('\n');
+    let mut start = 0;
+    for _ in 0..pos.line {
+        start += lines.next()?.len() + 1;
+    }
+    let line = lines.next()?;
+    let mut col = 0;
+    for (byte, ch) in line.char_indices() {
+        if col >= pos.col {
+            return (col == pos.col).then_some(start + byte);
+        }
+        col += ch.len_utf16() as u32;
+    }
+    (col == pos.col).then_some(start + line.len())
 }
 
 /// Adds `exclude` to the `<exclusions>` of the dependency declaring `dependency` in `text`

@@ -639,6 +639,23 @@ describe("modifier-hover navigation recovery", () => {
     expect(openFile).toHaveBeenCalledOnce();
   });
 
+  it("underlines a complete POM property reference and navigates from the click", async () => {
+    const parent = { path: "/p/pom.xml", range: r(4, 16, 31), uri: null };
+    cmd.lspGoto.mockReturnValueOnce(ok([parent])).mockReturnValueOnce(ok([parent]));
+    const source = "<version>😀 ${example.version}</version>";
+    const view = editor(source, "xml", 0, "/p/child/pom.xml");
+    const property = source.indexOf("example");
+    move(view, property + 10);
+    await vi.waitFor(() => expect(view.dom.querySelector(".cm-lsp-link")?.textContent).toBe("example.version"));
+    expect(cmd.lspGoto).toHaveBeenCalledWith(7, { line: 0, col: property }, "definition");
+    view.contentDOM.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, metaKey: mac, ctrlKey: !mac }),
+    );
+    await vi.waitFor(() =>
+      expect(openFile).toHaveBeenCalledWith(parent.path, { selection: parent.range.start, focus: true }),
+    );
+  });
+
   it("navigates from a Maven resource placeholder to its POM property", async () => {
     const pom = { path: "/p/pom.xml", range: r(7, 16, 36), uri: null };
     cmd.lspGoto.mockReturnValueOnce(ok([pom]));
