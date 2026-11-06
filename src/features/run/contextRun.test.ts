@@ -4,7 +4,7 @@ import { useProject } from "@/platform/project";
 import { menuGroupItems, registerMenuGroup } from "@/workbench/contributions";
 import type { MenuItem } from "@/ui";
 import { choiceItems, contextMenuItems } from "./contextRun";
-import { OPTIMISTIC, produceContextChoices } from "./producers";
+import { fileTargets, OPTIMISTIC, produceContextChoices } from "./producers";
 import { gutterTestState, markerIcon, targetMenuItems } from "./runGutter";
 import { useRun } from "./store";
 import type { RunTarget } from "./targets";
@@ -162,6 +162,21 @@ describe("run gutter popup", () => {
   it("ends with Modify Run Configuration… after the executors", () => {
     const items = targetMenuItems(adds, `${ROOT}/src/m.test.ts`, text);
     expect(itemLabels(items)).toEqual(["Run 'math > adds'", "Debug 'math > adds'", "---", "Modify Run Configuration…"]);
+  });
+
+  it("offers the same Java main in the file, editor and gutter menus despite the Test suffix", () => {
+    const configs: RunConfig[] = [{ ...npmTest, id: "maven:test", kind: "maven", command: "mvn", args: ["test"] }];
+    useRun.setState({ configs });
+    const path = `${ROOT}/src/main/java/demo/ArrayTest.java`;
+    const text = "package demo;\nclass ArrayTest {\n  public static void main(String[] args) {}\n}";
+    const [main] = fileTargets({ path, root: ROOT, configs }, text);
+    expect(main).toMatchObject({ kind: "main", className: "demo.ArrayTest" });
+    expect(contextMenuItems("projectView", { paths: [path], text })[0]).toMatchObject({ label: "Run 'ArrayTest'" });
+    expect(contextMenuItems("editor", { paths: [path], text, line: 0 })[0]).toMatchObject({ label: "Run 'ArrayTest'" });
+    expect(itemLabels(targetMenuItems(main!, path, text)).slice(0, 2)).toEqual([
+      "Run 'ArrayTest'",
+      "Debug 'ArrayTest'",
+    ]);
   });
 
   it("lists each matching test configuration when several match", () => {

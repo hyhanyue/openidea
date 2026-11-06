@@ -16,7 +16,7 @@ export { jvmModuleDir } from "@/platform/javaLaunch";
  * (synced from Gradle, detected or marked in Project Structure) wins; `src/test` only
  * while no root is known for the file.
  */
-const isTestSource = (relPath: string) => {
+export const isTestSource = (relPath: string) => {
   const roots = currentRoots();
   return rootFor(roots, relPath) ? isTestPath(roots, relPath) : /(^|\/)src\/test\//.test(relPath);
 };

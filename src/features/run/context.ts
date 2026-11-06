@@ -23,7 +23,7 @@ export function fileRole(relPath: string, content?: string, windows = isWindows(
     /_test\.go$/.test(name) ||
     /Test\.php$/.test(name) ||
     /_(spec|test)\.rb$|^test_.*\.rb$/.test(name) ||
-    /(Test|Tests|Spec|IT)\.(kt|java|scala|groovy)$/.test(name) ||
+    /(Test|Tests|Spec|IT)\.(kt|scala|groovy)$/.test(name) ||
     (/(^|\/)tests\/[^/]+\.rs$/.test(relPath) && name !== "mod.rs")
   )
     return "test";

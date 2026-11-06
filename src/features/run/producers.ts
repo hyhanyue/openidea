@@ -13,7 +13,7 @@ import type { RunConfig } from "@/platform/ipc";
 import { ipcPath, isSameOrInside } from "@/platform/paths";
 import { isTestPath } from "@/platform/languageSettings";
 import { currentRoots } from "@/platform/projectRoots";
-import { applicationConfig, jvmModuleDir } from "./application";
+import { applicationConfig, isTestSource, jvmModuleDir } from "./application";
 import { useBuildModel } from "@/platform/buildModel";
 import { formatArgs } from "./configs";
 import { goGenerateConfig } from "./goGenerate";
@@ -690,6 +690,16 @@ const hasBuildTool = (rel: string, configs: readonly RunConfig[], kinds: readonl
   buildOwners(rel, configs, kinds).length > 0;
 const JVM_BUILDS = ["maven", "gradle"];
 
+function jvmFileTarget(input: ContextInput): RunTarget | null {
+  if (input.content === undefined) return null;
+  const targets = fileTargets(input, input.content);
+  return (
+    targets.find((t) => t.className && t.kind === "main") ??
+    targets.find((t) => t.className && t.kind === "suite") ??
+    null
+  );
+}
+
 /**
  * A Godot scene: `godot --path <project> res://<scene>` in the Godot project holding it
  * (a detected "Godot Project" configuration), debuggable through the editor's adapter.
@@ -741,7 +751,7 @@ export function produceFile(input: ContextInput, env: ToolEnv): Produced | null 
     }
     if (/\.t?scn$/i.test(rel)) return godotScene(rel, configs);
     // Project-aware: test files through the project's test runner, Cargo / Go / Gradle / Maven mains.
-    const role = fileRole(rel, input.content, undefined, hasDjangoTests(configs));
+    const role = lang === "java" ? null : fileRole(rel, input.content, undefined, hasDjangoTests(configs));
     if (role === "test") {
       const found = testConfigFor(rel, configs);
       const test = found && goTestNamed(found, input);
@@ -783,14 +793,12 @@ export function produceFile(input: ContextInput, env: ToolEnv): Produced | null 
       const main = contextConfig(rel, configs, input.content ?? "package main");
       if (main) return { name: main.name, scope: "file", config: main };
     }
-    if (/\.(java|kt)$/.test(rel) && hasBuildTool(rel, configs, JVM_BUILDS)) {
-      if (input.content === undefined) return null;
-      const targets = [
-        ...detectRunTargets(input.content, rel),
-        ...inheritedRunTargets(input.path, input.content),
-      ].filter((t) => t.className);
-      const target = targets.find((t) => t.kind === "main") ?? targets.find((t) => t.kind === "suite");
-      const config = target ? targetConfig(target, rel, configs, input.content) : null;
+    if ((lang === "java" || lang === "kotlin") && hasBuildTool(rel, configs, JVM_BUILDS)) {
+      const target = jvmFileTarget(input);
+      let config = target && targetConfig(target, rel, configs, input.content);
+      // Keep the legacy fallback for unrecognised tests (e.g. inherited tests) in test sources.
+      if (!target && lang === "java" && isTestSource(rel) && /(?:Test|Tests|Spec|IT)\.java$/.test(s.file))
+        config = testConfigFor(rel, configs);
       return config ? { name: config.name, scope: "file", config } : null;
     }
   }
@@ -1086,20 +1094,22 @@ export function produceContextChoices(input: ContextInput, env: ToolEnv): Produc
   if (cmake.length > 1) return cmake.map((config) => ({ name: config.name, scope: produced.scope, config }));
   const bases = testBasesFor(rel, [...input.configs]);
   if (bases.length < 2) return [produced];
-  let element: RunTarget | null = null;
+  let target: RunTarget | null = null;
   if (produced.scope === "element") {
     const targets = fileTargets(input, (input.content ?? "").slice(0, 400_000));
-    element = innermostTarget(input.content ?? "", targets, input.line ?? 0, /\.(py|rb)$/.test(input.path));
-    if (!element || element.kind === "main" || element.kind === "generate") return [produced];
+    target = innermostTarget(input.content ?? "", targets, input.line ?? 0, /\.(py|rb)$/.test(input.path));
+    if (!target || target.kind === "main" || target.kind === "generate") return [produced];
   } else if (!produced.config.isTest) {
     return [produced];
+  } else if (rel.endsWith(".java")) {
+    target = jvmFileTarget(input);
   }
   const out: Produced[] = [];
   for (const base of bases) {
-    const found = element
-      ? targetConfig(element, rel, [...input.configs], input.content, base)
+    const found = target
+      ? targetConfig(target, rel, [...input.configs], input.content, base)
       : testConfigFor(rel, [...input.configs], base);
-    const config = found && goTestNamed(found, input, element?.name);
+    const config = found && goTestNamed(found, input, target?.name);
     if (!config || out.some((o) => o.config?.id === config.id)) continue;
     out.push({ name: config.name, scope: produced.scope, config, detail: base.name });
   }

@@ -636,6 +636,116 @@ describe("project producers", () => {
     cfg({ id: "pytest", kind: "pytest", command: ".venv/bin/pytest", args: [], isTest: true }),
   ];
 
+  describe.each(["maven", "gradle"])("%s Java file runs", (kind) => {
+    const base = cfg({ id: `${kind}:test`, kind, args: ["test"], isTest: true });
+    const input = (path: string, content?: string): ContextInput => ({
+      path: `${ROOT}/${path}`,
+      root: ROOT,
+      configs: [base],
+      content,
+    });
+    const testArgs = (target: string, method?: string) =>
+      kind === "maven"
+        ? ["test", `-Dtest=${target}${method ? `#${method}` : ""}`, "-Dsurefire.failIfNoSpecifiedTests=false"]
+        : ["test", "--tests", `${target}${method ? `.${method}` : ""}`];
+
+    it.each([
+      ["main", "ArrayTest", "${classpath}"],
+      ["main", "ArrayTests", "${classpath}"],
+      ["main", "ArraySpec", "${classpath}"],
+      ["main", "ArrayIT", "${classpath}"],
+      ["test", "ArrayTest", "${testClasspath}"],
+    ])("runs %s source %s as an Application", (source, cls, classpath) => {
+      const content = `package demo;\n\npublic class ${cls} {\n  public static void main(String[] args) {}\n}`;
+      const file = input(`src/${source}/java/demo/${cls}.java`, content);
+      const app = { kind: "application", isTest: false, args: ["-cp", classpath, `demo.${cls}`] };
+      expect(produceFile(file, ALL)?.config).toMatchObject(app);
+      expect(produceContext({ ...file, line: 0 }, ALL)?.config).toMatchObject(app);
+      expect(fileTargets(file, content).map(({ line, kind }) => [line, kind])).toEqual([[3, "main"]]);
+      expect(produceContext({ ...file, line: 3 }, ALL)?.config).toMatchObject(app);
+    });
+
+    it("does not offer a production test helper by name, even when its text is unavailable", () => {
+      const path = "src/main/java/demo/HelperTest.java";
+      const content =
+        "package demo;\nclass HelperTest { /* @Test void t() {} public static void main(String[] a) {} */ }";
+      for (const file of [input(path, content), input(path)]) {
+        expect(produceFile(file, ALL)).toBeNull();
+        expect(produceContext({ ...file, line: 0 }, ALL)).toBeNull();
+      }
+      expect(fileTargets(input(path), content)).toEqual([]);
+    });
+
+    it("uses the declared JUnit class and method for file, class and method runs", () => {
+      const content = "package demo;\nimport org.junit.jupiter.api.Test;\nclass Checks {\n  @Test void works() {}\n}";
+      const file = input("src/test/java/demo/Checks.java", content);
+      expect(fileTargets(file, content).map(({ line, kind }) => [line, kind])).toEqual([
+        [2, "suite"],
+        [3, "test"],
+      ]);
+      expect(produceFile(file, ALL)?.config?.args).toEqual(testArgs("demo.Checks"));
+      expect(produceContext({ ...file, line: 2 }, ALL)?.config?.args).toEqual(testArgs("demo.Checks"));
+      expect(produceContext({ ...file, line: 3 }, ALL)?.config?.args).toEqual(testArgs("demo.Checks", "works"));
+    });
+
+    it("keeps the TestNG suite and main separately runnable in the same file", () => {
+      const content = [
+        "package demo;",
+        "import org.testng.annotations.Test;",
+        "@Test",
+        "public class DualTest {",
+        "  public static void main(String[] args) {}",
+        "  public void works() {}",
+        "}",
+      ].join("\n");
+      const file = input("src/test/java/demo/DualTest.java", content);
+      const app = { kind: "application", args: ["-cp", "${testClasspath}", "demo.DualTest"] };
+      expect(produceFile(file, ALL)?.config).toMatchObject(app);
+      expect(fileTargets(file, content).map(({ line, kind }) => [line, kind])).toEqual([
+        [3, "suite"],
+        [4, "main"],
+        [5, "test"],
+      ]);
+      expect(produceContext({ ...file, line: 3 }, ALL)?.config?.args).toEqual(testArgs("demo.DualTest"));
+      expect(produceContext({ ...file, line: 4 }, ALL)?.config).toMatchObject(app);
+      expect(produceContext({ ...file, line: 5 }, ALL)?.config?.args).toEqual(testArgs("demo.DualTest", "works"));
+    });
+
+    it("keeps the legacy test-name fallback only in effective test roots", () => {
+      const roots = vi.spyOn(projectRoots, "currentRoots").mockReturnValue([
+        { path: "checks", kind: "test", detectedFrom: null },
+        { path: "src/test/java", kind: "source", detectedFrom: null },
+      ]);
+      try {
+        const content = "class LegacyTest extends junit.framework.TestCase {}";
+        const args = kind === "maven" ? ["test", "-Dtest=LegacyTest"] : ["test", "--tests", "*LegacyTest"];
+        expect(produceFile(input("checks/LegacyTest.java", content), ALL)?.config?.args).toEqual(args);
+        expect(produceFile(input("src/test/java/LegacyTest.java", content), ALL)).toBeNull();
+      } finally {
+        roots.mockRestore();
+      }
+    });
+
+    it.each(["kt", "scala", "groovy"])("preserves the test-name convention for .%s files", (ext) => {
+      const file = input(`src/test/${ext}/LegacyTest.${ext}`);
+      const args = kind === "maven" ? ["test", "-Dtest=LegacyTest"] : ["test", "--tests", "*LegacyTest"];
+      expect(produceFile(file, ALL)?.config?.args).toEqual(args);
+    });
+  });
+
+  it("keeps the Java test class filter when the file offers several runners", () => {
+    const input = {
+      root: ROOT,
+      path: `${ROOT}/src/test/java/demo/Checks.java`,
+      content: "package demo;\nclass Checks { @Test void works() {} }",
+      configs: ["maven", "gradle"].map((kind) => cfg({ id: `${kind}:test`, kind, args: ["test"], isTest: true })),
+    };
+    expect(produceContextChoices(input, ALL).map((p) => p.config?.args)).toEqual([
+      ["test", "--tests", "demo.Checks"],
+      ["test", "-Dtest=demo.Checks", "-Dsurefire.failIfNoSpecifiedTests=false"],
+    ]);
+  });
+
   it("Godot scenes run with godot --path in the project holding them (Current Scene)", () => {
     const godot = [
       cfg({ id: "godot:project", kind: "godot", command: "godot", args: ["--path", "."], debugAdapter: "godot" }),
