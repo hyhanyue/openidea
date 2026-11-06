@@ -328,6 +328,13 @@ impl AgentManager {
             .map(|p| {
                 let mut info = provider::describe(p);
                 info.config = self.shared.known_config(&p.id);
+                match p.driver {
+                    provider::Driver::Codex => {
+                        config::scope_cached_reasoning(&mut info.config, "reasoning_effort", "Reasoning")
+                    }
+                    provider::Driver::Claude => config::scope_cached_reasoning(&mut info.config, "effort", "Effort"),
+                    provider::Driver::Acp => {}
+                }
                 info.commands = self.shared.known_commands(&p.id);
                 info
             })

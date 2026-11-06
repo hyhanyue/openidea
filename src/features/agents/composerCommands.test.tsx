@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { AgentCommand, AgentProvider } from "@/bindings";
+import type { AgentCommand, AgentConfigOption, AgentProvider } from "@/bindings";
+import codexTranscript from "../../../crates/ide-agent/tests/fixtures/codex/simple.jsonl?raw";
 
 const agentCommands = vi.fn();
 const agentCreate = vi.fn();
@@ -149,6 +150,108 @@ describe("New Task composer commands", () => {
     expect(box).toHaveValue("/compact keep this context");
     await waitFor(() => expect(screen.queryByRole("listbox", { name: "Commands" })).toBeNull());
     expect(agentCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe("New Task model settings", () => {
+  const effortId = "reasoning_effort";
+  const codexModels = codexTranscript
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .find((entry) => entry.dir === "in" && entry.frame.result?.data?.[0]?.supportedReasoningEfforts).frame.result
+    .data as {
+    id: string;
+    displayName: string;
+    defaultReasoningEffort: string;
+    supportedReasoningEfforts: { reasoningEffort: string; description: string }[];
+  }[];
+  const byModel = Object.fromEntries(
+    codexModels.map((model) => [
+      model.id,
+      {
+        defaultValue: model.defaultReasoningEffort,
+        values: model.supportedReasoningEfforts.map(({ reasoningEffort, description }) => ({
+          value: reasoningEffort,
+          name:
+            reasoningEffort === "xhigh" ? "Extra high" : reasoningEffort[0]!.toUpperCase() + reasoningEffort.slice(1),
+          description: description || null,
+        })),
+      },
+    ]),
+  );
+
+  function openSettings() {
+    const modelButton = screen.getByRole("button", { name: "Model" });
+    fireEvent.click(modelButton);
+    return screen.getByRole("dialog", { name: "Model & effort settings" });
+  }
+
+  beforeEach(() => {
+    agentCommands.mockResolvedValue({ status: "ok", data: [] });
+    const model = {
+      id: "model",
+      name: "Model",
+      description: null,
+      category: "model",
+      current: "gpt-5.5",
+      via: "option" as const,
+      values: [
+        ...codexModels.map((m) => ({ value: m.id, name: m.displayName, description: null })),
+        { value: "plain", name: "Plain", description: null },
+      ],
+      modelReasoning: {
+        id: effortId,
+        name: "Reasoning",
+        byModel: { ...byModel, plain: { defaultValue: null, values: [] } },
+      },
+    };
+    const effort: AgentConfigOption = {
+      id: effortId,
+      name: "Reasoning",
+      description: null,
+      category: "thought_level",
+      current: "xhigh",
+      via: "option",
+      values: byModel["gpt-5.5"]!.values,
+    };
+    useAgents.setState({
+      providers: [{ ...claude, id: "codex", name: "Codex", config: [model, effort] }],
+      draft: { provider: "codex", config: { [effortId]: "xhigh" }, isolation: "local", base: null },
+    });
+  });
+
+  it("uses the selected model's levels, defaults an unsupported draft effort and submits a supported choice", async () => {
+    render(<HomeEditor />);
+    const dialog = openSettings();
+    expect(within(dialog).getByRole("slider", { name: "Reasoning" })).toHaveAttribute("max", "3");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Model" }));
+    fireEvent.click(screen.getByRole("option", { name: /GPT-5.6-LUNA/ }));
+    expect(useAgents.getState().draft.config.model).toBe("gpt-5.6-luna");
+    const slider = within(dialog).getByRole("slider", { name: "Reasoning" });
+    expect(slider).toHaveAttribute("max", "2");
+    expect(slider).toHaveAttribute("aria-valuetext", "Medium");
+    fireEvent.change(slider, { target: { value: "2" } });
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Do the task" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(agentCreate).toHaveBeenCalled());
+    expect(agentCreate.mock.calls[0]![0].config).toEqual([
+      { id: "model", value: "gpt-5.6-luna" },
+      { id: effortId, value: "high" },
+    ]);
+  });
+
+  it("hides effort for a model without levels and shows it again when switching back", () => {
+    render(<HomeEditor />);
+    fireEvent.click(within(openSettings()).getByRole("button", { name: "Model" }));
+    fireEvent.click(screen.getByRole("option", { name: "Plain" }));
+    expect(screen.queryByRole("slider", { name: "Reasoning" })).not.toBeInTheDocument();
+    expect(useAgents.getState().draft.config[effortId]).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    fireEvent.click(screen.getByRole("option", { name: /GPT-5.6-LUNA/ }));
+    expect(within(openSettings()).getByRole("slider", { name: "Reasoning" })).toHaveAttribute("max", "2");
   });
 });
 

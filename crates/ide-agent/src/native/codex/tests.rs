@@ -58,6 +58,29 @@ fn settings_follow_the_thread_and_the_models() {
 }
 
 #[test]
+fn model_list_capabilities_survive_a_session_without_reasoning_and_the_cache() {
+    let list = include_str!("../../../tests/fixtures/codex/simple.jsonl")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find_map(|entry| entry.pointer("/frame/result").filter(|r| r["data"].is_array()).cloned())
+        .unwrap();
+    let mut models = models_of(&list);
+    models.extend(self::models().into_iter().filter(|m| m.id == "plain"));
+    let settings = Settings::of(&json!({ "model": "plain-slug" }), &models);
+    let config = crate::config::options_of(&json!({ "configOptions": config_options(&models, &settings) }));
+    assert!(config.iter().all(|o| o.id != EFFORT));
+    let restored: Vec<crate::AgentConfigOption> =
+        serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
+    let reasoning = restored[0].model_reasoning.as_ref().unwrap();
+    assert_eq!(reasoning.id, EFFORT);
+    let levels = |model: &str| reasoning.by_model[model].values.iter().map(|v| v.value.as_str()).collect::<Vec<_>>();
+    assert_eq!(levels("gpt-5.5"), ["low", "medium", "high", "xhigh"]);
+    assert_eq!(levels("gpt-5.6-luna"), ["low", "medium", "high"]);
+    assert_eq!(reasoning.by_model["gpt-5.6-luna"].default_value.as_deref(), Some("medium"));
+    assert!(levels("plain").is_empty());
+}
+
+#[test]
 fn prompts_become_user_input() {
     let input = user_input(&json!([
         {"type": "text", "text": "fix it"},

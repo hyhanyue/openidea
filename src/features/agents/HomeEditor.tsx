@@ -11,7 +11,7 @@ import { defaultTaskProject } from "./project";
 import { maybeEditorService, type EditorInput } from "@/workbench/contributions";
 import { Composer } from "./Composer";
 import { SubmitButton } from "./SubmitButton";
-import { canSend, emptyDraft } from "./composerModel";
+import { canSend, draftSettings, emptyDraft } from "./composerModel";
 import { ConfigPickers } from "./ConfigPickers";
 import { providerIcon } from "./model";
 import { ADD_AGENT, providerOptions as agentOptions } from "./providerOptions";
@@ -67,6 +67,7 @@ export function HomeEditor({ docked = false }: { docked?: boolean; input?: Edito
   }, [root, project?.workspace]);
 
   const provider = providers.find((p) => p.id === draft.provider) ?? providers[0];
+  const settings = draftSettings(provider?.config ?? [], draft.config);
   const probe = useProbe(provider?.installed ? provider.id : null, provider?.command);
   const agentCommands = useAgentCommands(provider?.id, null, provider?.commands ?? NO_COMMANDS);
   const providerOptions: SelectOption[] = agentOptions(providers, tx, providerIcon);
@@ -85,7 +86,10 @@ export function HomeEditor({ docked = false }: { docked?: boolean; input?: Edito
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setStarting(false));
   };
-  const setOption = (id: string, value: string) => updateDraft({ config: { ...draft.config, [id]: value } });
+  const setOption = (id: string, value: string) => {
+    const values = { ...settings.values, [id]: value };
+    updateDraft({ config: draftSettings(provider?.config ?? [], values).values });
+  };
 
   return (
     <div className={clsx(styles.home, docked && styles.docked)}>
@@ -107,7 +111,7 @@ export function HomeEditor({ docked = false }: { docked?: boolean; input?: Edito
           projectRoot={root}
           commands={agentCommands}
           history={history}
-          config={provider?.config ?? []}
+          config={settings.config}
           onConfig={setOption}
           onSubmit={start}
           disabled={!canStart}
@@ -122,7 +126,7 @@ export function HomeEditor({ docked = false }: { docked?: boolean; input?: Edito
                   id === ADD_AGENT ? void executeAction("agents.addAgent") : updateDraft({ provider: id, config: {} })
                 }
               />
-              <ConfigPickers config={provider?.config ?? []} values={draft.config} onChange={setOption} />
+              <ConfigPickers config={settings.config} values={settings.values} onChange={setOption} />
             </>
           }
           actions={

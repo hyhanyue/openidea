@@ -130,16 +130,23 @@ impl Settings {
                     if let Some(d) = &m.description { o["description"] = json!(d); }
                     o
                 }).collect::<Vec<_>>(),
+                "_meta": { "openidea": { "modelReasoning": {
+                    "id": EFFORT, "name": "Effort", "byModel": self.models.iter().map(|m| (
+                        m.value.clone(),
+                        json!({
+                            "defaultValue": (!m.efforts.is_empty()).then_some("default"),
+                            "values": effort_values(&m.efforts),
+                        }),
+                    )).collect::<serde_json::Map<_, _>>(),
+                } } },
             }));
         }
         let efforts = self.current_model().map(|m| m.efforts.as_slice()).unwrap_or_default();
         if !efforts.is_empty() {
-            let mut values = vec![json!({ "value": "default", "name": "Default" })];
-            values.extend(efforts.iter().map(|e| json!({ "value": e, "name": capitalize(e) })));
             let current = if efforts.contains(&self.effort) { self.effort.as_str() } else { "default" };
             out.push(json!({
                 "id": EFFORT, "name": "Effort", "category": "thought_level", "type": "select",
-                "currentValue": current, "options": values,
+                "currentValue": current, "options": effort_values(efforts),
             }));
         }
         Value::Array(out)
@@ -154,6 +161,15 @@ impl Settings {
             .and_then(|o| o["options"].as_array())
             .is_some_and(|vs| vs.iter().any(|v| v["value"] == value))
     }
+}
+
+fn effort_values(efforts: &[String]) -> Vec<Value> {
+    if efforts.is_empty() {
+        return Vec::new();
+    }
+    let mut values = vec![json!({ "value": "default", "name": "Default" })];
+    values.extend(efforts.iter().map(|e| json!({ "value": e, "name": capitalize(e) })));
+    values
 }
 
 /// Slash commands as ACP `availableCommands`, without those that need Claude Code's terminal.
@@ -227,7 +243,12 @@ mod tests {
         s.set_model("opus");
         assert_eq!(s.effort, "default");
         s.set_model("claude-haiku-4-5");
-        assert_eq!(s.options().as_array().unwrap().len(), 2, "no effort option without levels");
+        let config = crate::config::options_of(&json!({ "configOptions": s.options() }));
+        assert_eq!(config.len(), 2, "no effort option without levels");
+        let reasoning = config[1].model_reasoning.as_ref().unwrap();
+        assert_eq!(reasoning.by_model["opus"].values.last().unwrap().value, "max");
+        assert_eq!(reasoning.by_model["opus"].default_value.as_deref(), Some("default"));
+        assert!(reasoning.by_model["claude-haiku-4-5"].values.is_empty());
         let cmds = commands(init().get("commands"), &["doctor".into()]);
         assert_eq!(cmds, vec![json!({"name": "review", "description": "Review", "input": {"hint": "[pr]"}})]);
     }

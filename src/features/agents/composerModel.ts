@@ -152,9 +152,52 @@ export function atEdgeLine(text: string, caret: number, dir: -1 | 1): boolean {
   return dir < 0 ? !text.slice(0, caret).includes("\n") : !text.slice(caret).includes("\n");
 }
 
+const THOUGHT_LEVEL = "thought_level";
+
+/** Resolves the New Task settings against the provider's advertised model capabilities. */
+export function draftSettings(
+  config: readonly AgentConfigOption[],
+  values: Record<string, string>,
+): { config: readonly AgentConfigOption[]; values: Record<string, string> } {
+  const model = config.find((o) => o.category === "model");
+  const reasoning = model?.modelReasoning;
+  if (!model || !reasoning) return { config, values };
+
+  const modelValue = values[model.id] ?? model.current;
+  const effort =
+    modelValue !== null && Object.hasOwn(reasoning.byModel, modelValue) ? reasoning.byModel[modelValue] : undefined;
+  const active = config.find((o) => o.id === reasoning.id);
+  const nextConfig = config.filter((o) => o !== active);
+  const nextValues = { ...values };
+  delete nextValues[reasoning.id];
+  if (modelValue === null || !effort?.values.length) return { config: nextConfig, values: nextValues };
+
+  const preferred = values[reasoning.id] ?? (modelValue === model.current ? active?.current : null);
+  const { values: levels, defaultValue } = effort;
+  const current =
+    levels.find((v) => v.value === preferred)?.value ??
+    levels.find((v) => v.value === defaultValue)?.value ??
+    levels[0]!.value;
+  nextConfig.push({
+    id: reasoning.id,
+    name: reasoning.name,
+    description: active?.description ?? null,
+    category: THOUGHT_LEVEL,
+    current,
+    values: levels,
+    via: "option",
+  });
+  if (model.id in values || reasoning.id in values) {
+    // The new session must select the model before applying a level it may not have initially.
+    nextValues[model.id] = modelValue;
+    nextValues[reasoning.id] = current;
+  }
+  return { config: nextConfig, values: nextValues };
+}
+
 /** The settings shown in the composer: model, mode, permissions, approvals, effort. */
 export function mainOptions(config: readonly AgentConfigOption[]): AgentConfigOption[] {
-  const order = ["model", "mode", "permissions", "approval", "thought_level"];
+  const order = ["model", "mode", "permissions", "approval", THOUGHT_LEVEL];
   return order.flatMap((c) => config.filter((o) => o.category === c).slice(0, 1));
 }
 

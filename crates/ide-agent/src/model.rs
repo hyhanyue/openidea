@@ -136,6 +136,26 @@ pub struct AgentConfigOption {
     pub current: Option<String>,
     pub values: Vec<AgentConfigValue>,
     pub via: AgentConfigVia,
+    /// On a model option, the reasoning levels advertised for each model.
+    #[serde(default)]
+    #[specta(optional)]
+    pub model_reasoning: Option<AgentModelReasoning>,
+}
+
+/// Reasoning settings that can be previewed before a native agent starts a session.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelReasoning {
+    pub id: String,
+    pub name: String,
+    pub by_model: BTreeMap<String, AgentModelEffort>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelEffort {
+    pub default_value: Option<String>,
+    pub values: Vec<AgentConfigValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]

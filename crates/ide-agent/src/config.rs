@@ -2,9 +2,11 @@
 //! the agent reports them over ACP.
 
 use crate::model::{
-    AgentCommand, AgentConfigOption, AgentConfigValue, AgentConfigVia, AgentCost, AgentLimit, AgentUsage,
+    AgentCommand, AgentConfigOption, AgentConfigValue, AgentConfigVia, AgentCost, AgentLimit, AgentModelEffort,
+    AgentModelReasoning, AgentUsage,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 /// Cursor exposes execution modes over ACP, but leaves approval policy to its client.
 pub(crate) const CURSOR_APPROVAL: &str = "openidea.cursor.approval";
@@ -20,6 +22,7 @@ pub(crate) fn add_client_options(provider: &str, config: &mut Vec<AgentConfigOpt
         category: Some("approval".into()),
         current: Some("ask".into()),
         via: AgentConfigVia::Option,
+        model_reasoning: None,
         values: vec![
             AgentConfigValue {
                 value: "ask".into(),
@@ -98,6 +101,9 @@ pub(crate) fn parse_options(options: &Value) -> Vec<AgentConfigOption> {
                 current: str_of(o, "currentValue"),
                 values,
                 via: AgentConfigVia::Option,
+                model_reasoning: o
+                    .pointer("/_meta/openidea/modelReasoning")
+                    .and_then(|meta| serde_json::from_value(meta.clone()).ok()),
                 id,
             })
         })
@@ -121,6 +127,25 @@ pub(crate) fn set_mode(config: &mut [AgentConfigOption], mode: &str) {
     if let Some(o) = config.iter_mut().find(|o| o.category.as_deref() == Some("mode")) {
         o.current = Some(mode.to_owned());
     }
+}
+
+/// Older native-agent caches only describe the model that was active when they were saved.
+pub(crate) fn scope_cached_reasoning(config: &mut [AgentConfigOption], id: &str, name: &str) {
+    let Some(index) = config.iter().position(|o| o.category.as_deref() == Some("model")) else { return };
+    let model = &config[index];
+    if model.model_reasoning.is_some() {
+        return;
+    }
+    let mut by_model = BTreeMap::new();
+    if let Some(current) = &model.current
+        && let Some(effort) = config.iter().find(|o| o.id == id)
+    {
+        by_model.insert(
+            current.clone(),
+            AgentModelEffort { default_value: effort.current.clone(), values: effort.values.clone() },
+        );
+    }
+    config[index].model_reasoning = Some(AgentModelReasoning { id: id.into(), name: name.into(), by_model });
 }
 
 /// The request (method, params without the session id) that sets `option` to `value`.
@@ -206,6 +231,7 @@ fn legacy(
         current: str_of(v, current),
         values,
         via,
+        model_reasoning: None,
     }
 }
 
@@ -248,6 +274,19 @@ mod tests {
         assert_eq!(c[1].values.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["low", "Medium"]);
         assert_eq!(set_request(&c[0], "default").0, "session/set_config_option");
         assert_eq!(set_request(&c[2], "m1"), ("session/set_model", json!({"modelId": "m1"})));
+    }
+
+    #[test]
+    fn legacy_reasoning_cache_only_describes_the_cached_model() {
+        let mut c = options_of(&json!({ "configOptions": [
+            {"id": "model", "currentValue": "a", "options": [{"value": "a"}, {"value": "b"}]},
+            {"id": "reasoning_effort", "category": "thought_level", "currentValue": "high", "options": [{"value": "high"}]}
+        ] }));
+        assert!(c[0].model_reasoning.is_none());
+        scope_cached_reasoning(&mut c, "reasoning_effort", "Reasoning");
+        let reasoning = c[0].model_reasoning.as_ref().unwrap();
+        assert_eq!(reasoning.by_model.len(), 1);
+        assert_eq!(reasoning.by_model["a"].values, c[1].values);
     }
 
     #[test]

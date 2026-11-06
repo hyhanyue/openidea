@@ -164,10 +164,8 @@ impl Settings {
     /// The effort, made one the model supports (its default when it isn't).
     pub fn fit_effort(&mut self, models: &[ModelInfo]) {
         let Some(m) = models.iter().find(|m| m.id == self.model) else { return };
-        if m.efforts.is_empty() {
-            self.effort = None;
-        } else if !self.effort.as_ref().is_some_and(|e| m.efforts.iter().any(|(x, _)| x == e)) {
-            self.effort = m.default_effort.clone().or_else(|| m.efforts.first().map(|(e, _)| e.clone()));
+        if !self.effort.as_ref().is_some_and(|e| m.efforts.iter().any(|(x, _)| x == e)) {
+            self.effort = default_effort(m).map(str::to_owned);
         }
     }
 
@@ -206,29 +204,26 @@ pub(super) const MODE: &str = "mode";
 
 /// ACP `configOptions`: model, reasoning effort (for models that have it) and mode.
 pub(super) fn config_options(models: &[ModelInfo], s: &Settings) -> Value {
-    let mut model_values: Vec<Value> = models
-        .iter()
-        .filter(|m| !m.hidden || m.id == s.model)
-        .map(|m| select_value(&m.id, &m.name, m.description.as_deref()))
-        .collect();
+    let mut model_values = Vec::new();
+    let mut by_model = serde_json::Map::new();
+    for m in models.iter().filter(|m| !m.hidden || m.id == s.model) {
+        model_values.push(select_value(&m.id, &m.name, m.description.as_deref()));
+        by_model.insert(m.id.clone(), json!({ "defaultValue": default_effort(m), "values": effort_values(m) }));
+    }
     if !s.model.is_empty() && !models.iter().any(|m| m.id == s.model) {
         model_values.push(select_value(&s.model, &s.model, None));
     }
     let mut out = vec![json!({
         "id": MODEL, "name": "Model", "category": "model", "type": "select",
         "currentValue": s.model, "options": model_values,
+        "_meta": { "openidea": { "modelReasoning": { "id": EFFORT, "name": "Reasoning", "byModel": by_model } } },
     })];
     if let (Some(m), Some(effort)) = (models.iter().find(|m| m.id == s.model), &s.effort)
         && !m.efforts.is_empty()
     {
-        let values: Vec<Value> = m
-            .efforts
-            .iter()
-            .map(|(e, d)| select_value(e, &effort_name(e), Some(d).filter(|d| !d.is_empty()).map(String::as_str)))
-            .collect();
         out.push(json!({
             "id": EFFORT, "name": "Reasoning", "category": "thought_level", "type": "select",
-            "currentValue": effort, "options": values,
+            "currentValue": effort, "options": effort_values(m),
         }));
     }
     out.push(json!({
@@ -236,6 +231,20 @@ pub(super) fn config_options(models: &[ModelInfo], s: &Settings) -> Value {
         "options": Mode::ALL.iter().map(|m| select_value(m.id(), m.name(), Some(m.description()))).collect::<Vec<_>>(),
     }));
     Value::Array(out)
+}
+
+fn default_effort(m: &ModelInfo) -> Option<&str> {
+    m.default_effort
+        .as_deref()
+        .filter(|default| m.efforts.iter().any(|(e, _)| e.as_str() == *default))
+        .or_else(|| m.efforts.first().map(|(e, _)| e.as_str()))
+}
+
+fn effort_values(m: &ModelInfo) -> Vec<Value> {
+    m.efforts
+        .iter()
+        .map(|(e, d)| select_value(e, &effort_name(e), Some(d.as_str()).filter(|d| !d.is_empty())))
+        .collect()
 }
 
 fn select_value(value: &str, name: &str, description: Option<&str>) -> Value {

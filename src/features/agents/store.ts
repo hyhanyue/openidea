@@ -17,7 +17,15 @@ import { useProject } from "@/platform/project";
 import { defaultTaskProject } from "./project";
 import { call, commands, isTauri } from "@/platform/ipc";
 import { editorService, notifications, toolWindowService } from "@/workbench/contributions";
-import { bypassDefaults, canSend, emptyDraft, toPrompt, type ComposerDraft, type FileRef } from "./composerModel";
+import {
+  bypassDefaults,
+  canSend,
+  draftSettings,
+  emptyDraft,
+  toPrompt,
+  type ComposerDraft,
+  type FileRef,
+} from "./composerModel";
 import { withQuote } from "./conversation";
 import {
   HOME_KEY,
@@ -485,7 +493,8 @@ export async function startTask(
   const { draft, providers } = useAgents.getState();
   const composer = composerDraft(HOME);
   if (!canSend(composer)) return;
-  const config = { ...bypassDefaults(providers.find((p) => p.id === draft.provider)?.config ?? []), ...draft.config };
+  const settings = draftSettings(providers.find((p) => p.id === draft.provider)?.config ?? [], draft.config);
+  const config = { ...bypassDefaults(settings.config), ...settings.values };
   const task = await call(
     commands.agentCreate({
       projectRoot,

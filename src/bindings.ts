@@ -1396,6 +1396,8 @@ export type AgentConfigOption = {
 	current: string | null,
 	values: AgentConfigValue[],
 	via: AgentConfigVia,
+	/**  On a model option, the reasoning levels advertised for each model. */
+	modelReasoning?: AgentModelReasoning | null,
 };
 
 /**  One value of a select-type session setting. */
@@ -1485,6 +1487,18 @@ export type AgentLimit = {
 	usedPercent: number | null,
 	/**  When the window resets (ms since the epoch), if the agent said. */
 	resetsMs: number | null,
+};
+
+export type AgentModelEffort = {
+	defaultValue: string | null,
+	values: AgentConfigValue[],
+};
+
+/**  Reasoning settings that can be previewed before a native agent starts a session. */
+export type AgentModelReasoning = {
+	id: string,
+	name: string,
+	byModel: { [key in string]: AgentModelEffort },
 };
 
 export type AgentPermissionOption = {
