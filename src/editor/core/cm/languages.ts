@@ -13,6 +13,7 @@ import {
   StreamLanguage,
   indentService,
   language as languageFacet,
+  syntaxTree,
   type StreamParser,
 } from "@codemirror/language";
 import { styleTags, tags as t } from "@lezer/highlight";
@@ -283,6 +284,23 @@ const EXTRA_TAGS: Record<string, Parameters<typeof styleTags>[0]> = {
   YAML: { "Key/Literal Key/QuotedLiteral": t.keyword },
 };
 
+// At the opening brace of a JSX comment, CodeMirror's right-biased token lookup
+// sees JavaScript. Keep the JSX delimiters there so the block toggle can remove them.
+const jsxCommentTokens = Prec.high(
+  EditorState.languageData.of((state, pos, side) => {
+    if (side !== 1 || state.sliceDoc(pos, pos + 3) !== "{/*") return [];
+    const brace = syntaxTree(state).resolveInner(pos, 1);
+    const comment = brace.nextSibling;
+    return brace.name === "{" &&
+      brace.parent?.name === "JSXEscape" &&
+      brace.parent.parent?.name === "JSXElement" &&
+      comment?.name === "BlockComment" &&
+      state.sliceDoc(comment.to - 2, comment.to + 1) === "*/}"
+      ? [{ commentTokens: { block: { open: "{/*", close: "*/}" } } }]
+      : [];
+  }),
+);
+
 function patchSupport(desc: LanguageDescription, support: LanguageSupport): LanguageSupport {
   const extra = EXTRA_TAGS[desc.name];
   const language =
@@ -291,6 +309,7 @@ function patchSupport(desc: LanguageDescription, support: LanguageSupport): Lang
       : support.language;
   const patched = new LanguageSupport(language, [
     support.support,
+    desc.name === "JSX" || desc.name === "TSX" ? jsxCommentTokens : [],
     EditorView.editorAttributes.of({ "data-language": desc.name }),
   ]);
   // `loadedSupport` reads `desc.support` synchronously; keep it on the patched instance.

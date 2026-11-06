@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { insertNewlineAndIndent } from "@codemirror/commands";
+import { insertNewlineAndIndent, toggleBlockComment } from "@codemirror/commands";
+import { html } from "@codemirror/lang-html";
+import { javascript as javascriptMode } from "@codemirror/lang-javascript";
 import { indentService, indentUnit, ensureSyntaxTree } from "@codemirror/language";
 import {
   addCaretsToLineEnds,
@@ -13,7 +15,7 @@ import {
   toggleCase,
   unselectOccurrence,
 } from "./editing";
-import { batchLanguage, commentTokens, findLanguageDescription } from "./languages";
+import { batchLanguage, commentTokens, findLanguageDescription, loadSupport } from "./languages";
 import { toggleCaret } from "./multiCaret";
 import { enterInLineComment, lineCommentStyle } from "./comments";
 import { languages } from "@codemirror/language-data";
@@ -239,6 +241,75 @@ describe("comment with line comment", () => {
     const v = make("x\n[ab\ncd\n]", comments);
     commentLine(v);
     expect(show(v)).toBe("x\n[//ab\n//cd\n]");
+  });
+});
+
+describe("comment toggles with real language modes", () => {
+  const toggleLine = (view: EditorView) => {
+    expect(ensureSyntaxTree(view.state, view.state.doc.length, 1000)).not.toBeNull();
+    expect(commentLine(view)).toBe(true);
+  };
+
+  describe.each(["JSX", "TSX"])("%s children", (mode) => {
+    it.each([
+      {
+        name: "indented child",
+        original: "const result = <div>\n  [<span />]\n</div>;",
+        commented: "const result = <div>\n  {/* [<span />] */}\n</div>;",
+      },
+      {
+        name: "closing tag with trailing space",
+        original: "const result = <div>\n  <span />\n[</div> ]\n;",
+        commented: "const result = <div>\n  <span />\n{/* [</div> ] */}\n;",
+      },
+      {
+        name: "unindented fragment",
+        original: "const result = <>\n[<span />]\n</>;",
+        commented: "const result = <>\n{/* [<span />] */}\n</>;",
+      },
+      {
+        name: "multiline selection",
+        original: "const result = <div>\n  [<span />\n  <em />]\n</div>;",
+        commented: "const result = <div>\n  {/* [<span />\n  <em />] */}\n</div>;",
+      },
+      {
+        name: "multiple selections",
+        original: "const result = <div>\n  [<span />]\n  <em />\n  [<strong />]\n</div>;",
+        commented: "const result = <div>\n  {/* [<span />] */}\n  <em />\n  {/* [<strong />] */}\n</div>;",
+      },
+    ])("restores a $name after toggling twice", async ({ original, commented }) => {
+      const support = await loadSupport(findLanguageDescription(mode, "demo." + mode.toLowerCase())!);
+      const v = make(original, support!);
+      toggleLine(v);
+      expect(show(v)).toBe(commented);
+      toggleLine(v);
+      expect(show(v)).toBe(original);
+    });
+  });
+
+  it.each([
+    { name: "JavaScript", typescript: false },
+    { name: "TypeScript", typescript: true },
+  ])("keeps the $name line and explicit block comment toggles", ({ typescript }) => {
+    const original = "[const result = 1;]";
+    const v = make(original, javascriptMode({ typescript }));
+    toggleLine(v);
+    expect(v.state.doc.toString()).toBe("//const result = 1;");
+    toggleLine(v);
+    expect(show(v)).toBe(original);
+    expect(toggleBlockComment(v)).toBe(true);
+    expect(show(v)).toBe("/* [const result = 1;] */");
+    expect(toggleBlockComment(v)).toBe(true);
+    expect(show(v)).toBe(original);
+  });
+
+  it("keeps the block comment fallback in HTML", () => {
+    const original = "<main>\n  [<span></span>]\n</main>";
+    const v = make(original, html());
+    toggleLine(v);
+    expect(show(v)).toBe("<main>\n  <!-- [<span></span>] -->\n</main>");
+    toggleLine(v);
+    expect(show(v)).toBe(original);
   });
 });
 
