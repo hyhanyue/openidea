@@ -3,7 +3,8 @@
  * tests of a previous run, using each framework's own filter syntax.
  */
 import { phpunitArgs, phpunitFilter } from "./phpunit";
-import type { RunConfig } from "@/platform/ipc";
+import type { MavenTestPlugin, RunConfig } from "@/platform/ipc";
+import { commandName } from "../commandName";
 import { formatArgs } from "../configs";
 import { djangoTestsOf } from "../djangoTypes";
 import { goTestParts, withoutGoSelection } from "../goArguments";
@@ -106,25 +107,68 @@ function goArgs(base: string[], paths: string[][]): string[] | null {
   return ["test", ...withoutGoSelection(parts.flags), ...run, ...targets, ...parts.program];
 }
 
-function jvmArgs(config: RunConfig, paths: string[][]): string[] | null {
-  const maven = config.kind === "maven" || /\b(?:mvnw?|mvnd)\b/.test(config.command);
-  if (maven) paths = paths.map((path) => (mavenResultModule(path) !== undefined ? path.slice(1) : path));
+function jvmTests(paths: string[][]) {
   const tests = paths
     .filter((p) => p.length >= 2)
     .map((p) => ({ cls: p[0]!, method: p[p.length - 1]!.replace(/\(\)$/, "") }));
   const classes = unique(paths.filter((p) => p.length === 1).map((p) => p[0]!));
-  if (!tests.length && !classes.length) return null;
-  if (maven) {
-    const byClass = new Map<string, string[]>();
-    for (const t of tests) byClass.set(t.cls, [...(byClass.get(t.cls) ?? []), t.method]);
-    const specs = [
-      ...[...byClass].map(([cls, ms]) => `${cls}#${unique(ms).join("+")}`),
-      ...classes.filter((c) => !byClass.has(c)),
-    ];
-    return [...config.args.filter((a) => !a.startsWith("-Dtest=")), `-Dtest=${specs.join(",")}`];
-  }
+  return { tests, classes };
+}
+
+function jvmArgs(config: RunConfig, paths: string[][]): string[] | null {
+  const { tests, classes } = jvmTests(paths);
   const filters = [...unique(tests.map((t) => `${t.cls}.${t.method}`)), ...classes];
-  return [...dropFlag(config.args, ["--tests"]), ...filters.flatMap((f) => ["--tests", f])];
+  return filters.length ? [...dropFlag(config.args, ["--tests"]), ...filters.flatMap((f) => ["--tests", f])] : null;
+}
+
+function mavenTestSpec(paths: string[][]): string {
+  const { tests, classes } = jvmTests(paths);
+  const byClass = new Map<string, string[]>();
+  for (const t of tests) byClass.set(t.cls, [...(byClass.get(t.cls) ?? []), t.method]);
+  return [
+    ...[...byClass].map(([cls, methods]) => `${cls}#${unique(methods).join("+")}`),
+    ...classes.filter((cls) => !byClass.has(cls)),
+  ].join(",");
+}
+
+function mavenConfig(config: RunConfig, paths: string[][], results: TestResults | undefined, failedOnly: boolean) {
+  const scope = results?.mavenTestScope;
+  const reactor = scope === "reactor" || paths.some((path) => mavenResultModule(path) !== undefined);
+  const singleModule = !reactor && typeof scope === "object" ? scope.module : undefined;
+  const cases = paths.map((path) => ({ path, node: results?.at(path) }));
+  if (!reactor && (singleModule === undefined || cases.every(({ node }) => !node?.mavenPlugins))) {
+    if (config.mavenTestSelection) return null;
+    const spec = mavenTestSpec(paths);
+    return spec
+      ? { ...config, args: [...config.args.filter((a) => !a.startsWith("-Dtest=")), `-Dtest=${spec}`] }
+      : null;
+  }
+  if (config.target) return null;
+
+  const modules = new Map<string, Map<MavenTestPlugin, string[][]>>();
+  for (const { path, node } of cases) {
+    const reactorModule = mavenResultModule(path);
+    const module = reactorModule ?? singleModule;
+    const test = reactorModule === undefined ? path : path.slice(1);
+    // Results without module or plugin evidence cannot be selected exactly.
+    const sources = failedOnly ? node?.failedMavenPlugins : node?.mavenPlugins;
+    if (module === undefined || !test.length || !sources?.size) return null;
+    const plugins = modules.get(module) ?? new Map<MavenTestPlugin, string[][]>();
+    for (const plugin of sources) {
+      if (!plugin) return null;
+      const tests = plugins.get(plugin) ?? [];
+      tests.push(test);
+      plugins.set(plugin, tests);
+    }
+    modules.set(module, plugins);
+  }
+  const mavenTestSelection = Object.fromEntries(
+    [...modules].map(([module, plugins]) => [
+      module,
+      Object.fromEntries([...plugins].map(([plugin, tests]) => [plugin, mavenTestSpec(tests)])),
+    ]),
+  );
+  return { ...config, mavenTestSelection };
 }
 
 /** Leaf test paths under the given nodes (a node without reported children stands for itself). */
@@ -143,13 +187,19 @@ export function leafTestPaths(nodes: readonly TestNode[]): string[][] {
 }
 
 /** Config running only `paths` (failed test paths from the results tree), or null when unsupported. */
-export function rerunFailedConfig(config: RunConfig, paths: string[][]): RunConfig | null {
+export function rerunFailedConfig(config: RunConfig, paths: string[][], results?: TestResults): RunConfig | null {
   const baseName = config.name.replace(/^Failed: /, "");
-  return testsConfig(config, paths, `Failed: ${baseName}`);
+  return testsConfig(config, paths, `Failed: ${baseName}`, results, true);
 }
 
 /** Config running only the tests at `paths` (test tree paths), named `name`; null when unsupported. */
-export function testsConfig(config: RunConfig, paths: string[][], name: string): RunConfig | null {
+export function testsConfig(
+  config: RunConfig,
+  paths: string[][],
+  name: string,
+  results?: TestResults,
+  failedOnly = false,
+): RunConfig | null {
   if (!paths.length) return null;
   let args: string[] | null;
   switch (frameworkFor(config)) {
@@ -175,6 +225,10 @@ export function testsConfig(config: RunConfig, paths: string[][], name: string):
       args = goArgs(config.args, paths);
       break;
     case "jvm":
+      if (config.kind === "maven" || /^(mvnw?|mvnd)$/i.test(commandName(config.command))) {
+        const selected = mavenConfig(config, paths, results, failedOnly);
+        return selected && { ...selected, name, detected: true, env: { ...config.env } };
+      }
       args = jvmArgs(config, paths);
       break;
     default:

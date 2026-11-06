@@ -662,10 +662,10 @@ export const commands = {
 	runImportConfigs: (source: RunImportSource, existing: RunConfig_Deserialize[]) => typedError<RunImport_Serialize, IdeError>(__TAURI_INVOKE("run_import_configs", { source, existing })),
 	/**  The environment runs inherit when "Include system environment variables" is on. */
 	runSystemEnv: () => __TAURI_INVOKE<{ [key in string]: string }>("run_system_env"),
-	runStart: (config: RunConfig_Deserialize, onOutput: Channel<OutputChunk>) => typedError<RunInfo, IdeError>(__TAURI_INVOKE("run_start", { config, onOutput })),
+	runStart: (config: RunConfig_Deserialize, onOutput: Channel<OutputChunk>) => typedError<RunInfo_Serialize, IdeError>(__TAURI_INVOKE("run_start", { config, onOutput })),
 	runStop: (id: RunId) => typedError<null, IdeError>(__TAURI_INVOKE("run_stop", { id })),
 	runStdin: (id: RunId, data: string) => typedError<null, IdeError>(__TAURI_INVOKE("run_stdin", { id, data })),
-	runList: () => __TAURI_INVOKE<RunInfo[]>("run_list"),
+	runList: () => __TAURI_INVOKE<RunInfo_Serialize[]>("run_list"),
 	runCloseStdin: (id: RunId) => typedError<null, IdeError>(__TAURI_INVOKE("run_close_stdin", { id })),
 	/**  Terminal size of a run started with "Emulate terminal in output console". */
 	runResize: (id: RunId, cols: number, rows: number) => typedError<null, IdeError>(__TAURI_INVOKE("run_resize", { id, cols, rows })),
@@ -5264,6 +5264,18 @@ export type MavenModel = {
 	syncError: string | null,
 };
 
+export type MavenModuleTests = MavenModuleTests_Serialize | MavenModuleTests_Deserialize;
+
+export type MavenModuleTests_Deserialize = {
+	surefire?: string | null,
+	failsafe?: string | null,
+};
+
+export type MavenModuleTests_Serialize = {
+	surefire?: string | null,
+	failsafe?: string | null,
+};
+
 export type MavenPlugin = {
 	groupId: string,
 	artifactId: string,
@@ -5333,6 +5345,10 @@ export type MavenSettings = {
 	 */
 	mvndHome?: string,
 };
+
+export type MavenTestPlugin = "surefire" | "failsafe";
+
+export type MavenTestScope = { module: string } | "reactor";
 
 export type MemoryCategory = 
 /**  The backend and its WebView processes. */
@@ -6537,6 +6553,8 @@ export type RunExtras_Deserialize = {
 	module?: string | null,
 	/**  Values of the configuration type's own form fields (the command line derives from them). */
 	params?: { [key in string]: string },
+	/**  Test-tree reruns select Surefire and Failsafe tests by reactor module directory. */
+	mavenTestSelection?: { [key in string]: MavenModuleTests_Deserialize },
 	/**  Folder in the Run/Debug Configurations tree. */
 	folder?: string | null,
 	/**  Stored in the workspace (`.openidea/run.local.toml`, not shared) instead of `run.toml`. */
@@ -6579,6 +6597,8 @@ export type RunExtras_Serialize = {
 	module?: string | null,
 	/**  Values of the configuration type's own form fields (the command line derives from them). */
 	params?: { [key in string]: string },
+	/**  Test-tree reruns select Surefire and Failsafe tests by reactor module directory. */
+	mavenTestSelection?: { [key in string]: MavenModuleTests_Serialize },
 	/**  Folder in the Run/Debug Configurations tree. */
 	folder?: string | null,
 	/**  Stored in the workspace (`.openidea/run.local.toml`, not shared) instead of `run.toml`. */
@@ -6644,7 +6664,9 @@ export type RunImport_Serialize = {
 	skipped: SkippedRunConfig[],
 };
 
-export type RunInfo = {
+export type RunInfo = RunInfo_Serialize | RunInfo_Deserialize;
+
+export type RunInfo_Deserialize = {
 	id: RunId,
 	configId: string,
 	name: string,
@@ -6652,6 +6674,20 @@ export type RunInfo = {
 	running: boolean,
 	/**  Runs on a pseudo-terminal: output is raw terminal data, input goes in keystroke by keystroke. */
 	pty: boolean,
+	/**  Direct Maven report scope, available even when no test XML was written. */
+	mavenTestScope?: MavenTestScope | null,
+};
+
+export type RunInfo_Serialize = {
+	id: RunId,
+	configId: string,
+	name: string,
+	pid: number | null,
+	running: boolean,
+	/**  Runs on a pseudo-terminal: output is raw terminal data, input goes in keystroke by keystroke. */
+	pty: boolean,
+	/**  Direct Maven report scope, available even when no test XML was written. */
+	mavenTestScope?: MavenTestScope | null,
 };
 
 /**  Run/Debug configuration behaviour. */
@@ -7452,6 +7488,7 @@ export type TestCaseReport = TestCaseReport_Serialize | TestCaseReport_Deseriali
 export type TestCaseReport_Deserialize = {
 	/**  Maven module path for a reactor run, relative to the project where possible. */
 	module?: string | null,
+	mavenPlugin?: MavenTestPlugin | null,
 	/**  Fully qualified class (`com.acme.OrderTest`, nested: `com.acme.OrderTest$Nested`). */
 	className: string,
 	/**  Method name without `()`. */
@@ -7467,6 +7504,7 @@ export type TestCaseReport_Deserialize = {
 export type TestCaseReport_Serialize = {
 	/**  Maven module path for a reactor run, relative to the project where possible. */
 	module?: string | null,
+	mavenPlugin?: MavenTestPlugin | null,
 	/**  Fully qualified class (`com.acme.OrderTest`, nested: `com.acme.OrderTest$Nested`). */
 	className: string,
 	/**  Method name without `()`. */

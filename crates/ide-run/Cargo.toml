@@ -20,10 +20,10 @@ parking_lot.workspace = true
 tracing.workspace = true
 zip.workspace = true
 quick-xml = "0.42"
+tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
 ide-build = { path = "../ide-build" }
-tempfile.workspace = true

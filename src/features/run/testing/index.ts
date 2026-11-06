@@ -59,7 +59,7 @@ export function frameworkFor(config: Pick<RunConfig, "kind" | "command" | "args"
   if (/\bmanage\.py test\b/.test(cmd)) return "unittest";
   if (/(^|[/\\\s])phpunit(\.phar|\.bat)?(\s|$)/.test(cmd)) return "phpunit";
   if (/\bgo\s+test\b/.test(cmd)) return "go";
-  if (/\b(gradlew?|mvnw?)\b/.test(cmd)) return "jvm";
+  if (/\b(gradlew?|mvnw?|mvnd)\b/.test(cmd)) return "jvm";
   return "auto";
 }
 

@@ -1,0 +1,10 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>openidea.smoke</groupId>
+    <artifactId>reactor</artifactId>
+    <version>1</version>
+  </parent>
+  <groupId>openidea.smoke.alpha</groupId>
+  <artifactId>shared</artifactId>
+</project>

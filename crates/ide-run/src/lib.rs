@@ -10,6 +10,7 @@ pub mod gradle_jvm;
 pub mod import;
 pub mod java_cmdline;
 pub mod junit;
+pub mod maven_rerun;
 mod process;
 pub mod python_path;
 pub mod ruby_preload;
@@ -86,6 +87,10 @@ pub struct RunExtras {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[specta(optional)]
     pub params: BTreeMap<String, String>,
+    /// Test-tree reruns select Surefire and Failsafe tests by reactor module directory.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[specta(optional)]
+    pub maven_test_selection: BTreeMap<String, maven_rerun::MavenModuleTests>,
     /// Folder in the Run/Debug Configurations tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(optional)]
@@ -151,6 +156,7 @@ impl Default for RunExtras {
         Self {
             module: None,
             params: BTreeMap::new(),
+            maven_test_selection: BTreeMap::new(),
             folder: None,
             local: false,
             include_system_env: true,
@@ -195,6 +201,10 @@ pub struct RunInfo {
     pub running: bool,
     /// Runs on a pseudo-terminal: output is raw terminal data, input goes in keystroke by keystroke.
     pub pty: bool,
+    /// Direct Maven report scope, available even when no test XML was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub maven_test_scope: Option<junit::MavenTestScope>,
 }
 
 pub use external::{EXTERNAL_PREFIX, ExternalDetection, set_external_detection};

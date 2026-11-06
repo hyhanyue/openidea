@@ -1,0 +1,5 @@
+<component-set><components><component>
+  <role>org.apache.maven.AbstractMavenLifecycleParticipant</role>
+  <role-hint>openidea-test-scope</role-hint>
+  <implementation>ai.openidea.maven.TestScope</implementation>
+</component></components></component-set>

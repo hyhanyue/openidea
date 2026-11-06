@@ -256,7 +256,8 @@ struct RawProfile {
 #[derive(Clone, Debug, Default)]
 struct TestReportConfig {
     build_dir: Option<String>,
-    report_dirs: Vec<String>,
+    surefire_dirs: Vec<String>,
+    failsafe_dirs: Vec<String>,
     promotion: Vec<String>,
 }
 
@@ -348,16 +349,19 @@ fn read_test_report_config(project: &Element) -> TestReportConfig {
         .into_iter()
         .chain(project.list("build/pluginManagement/plugins", "plugin"));
     for plugin in plugins {
-        if !matches!(plugin.text_of("artifactId").as_deref(), Some("maven-surefire-plugin" | "maven-failsafe-plugin"))
-            || plugin.text_of("groupId").is_some_and(|g| g != "org.apache.maven.plugins")
-        {
+        if plugin.text_of("groupId").is_some_and(|g| g != "org.apache.maven.plugins") {
             continue;
         }
+        let report_dirs = match plugin.text_of("artifactId").as_deref() {
+            Some("maven-surefire-plugin") => &mut result.surefire_dirs,
+            Some("maven-failsafe-plugin") => &mut result.failsafe_dirs,
+            _ => continue,
+        };
         let executions = plugin.list("executions", "execution");
         for config in
             plugin.child("configuration").into_iter().chain(executions.iter().filter_map(|e| e.child("configuration")))
         {
-            result.report_dirs.extend(config.text_of("reportsDirectory"));
+            report_dirs.extend(config.text_of("reportsDirectory"));
             result.promotion.extend(config.text_of("promoteUserPropertiesToSystemProperties"));
         }
     }
@@ -656,7 +660,12 @@ impl Resolver {
         ctx.test_report_configs.extend(
             std::iter::once((&pom.test_reports, &[][..]))
                 .chain(pom.profiles.iter().map(|p| (&p.test_reports, p.properties.as_slice())))
-                .filter(|(c, _)| c.build_dir.is_some() || !c.report_dirs.is_empty() || !c.promotion.is_empty())
+                .filter(|(c, _)| {
+                    c.build_dir.is_some()
+                        || !c.surefire_dirs.is_empty()
+                        || !c.failsafe_dirs.is_empty()
+                        || !c.promotion.is_empty()
+                })
                 .map(|(config, props)| TestReportCandidate {
                     config: config.clone(),
                     profile_properties: props.to_vec(),
@@ -1322,7 +1331,8 @@ fn module_poms<'a>(
 
 pub struct MavenTestModule {
     pub dir: PathBuf,
-    pub report_dirs: Vec<PathBuf>,
+    pub surefire_dirs: Vec<PathBuf>,
+    pub failsafe_dirs: Vec<PathBuf>,
     pub needs_jvm_marker: bool,
 }
 
@@ -1361,22 +1371,33 @@ impl MavenTestModule {
         build_dirs.sort();
         build_dirs.dedup();
 
-        let mut report_dirs = Vec::new();
+        let mut surefire_dirs = Vec::new();
+        let mut failsafe_dirs = Vec::new();
         let mut needs_jvm_marker = false;
         for (config, mut props) in configs {
             needs_jvm_marker |= config.promotion.iter().any(|p| interpolate(p, &props).eq_ignore_ascii_case("false"));
             for build_dir in &build_dirs {
                 props.insert("project.build.directory".into(), build_dir.to_string_lossy().into_owned());
-                report_dirs.extend(config.report_dirs.iter().filter_map(|path| resolve(path, &props)));
+                surefire_dirs.extend(config.surefire_dirs.iter().filter_map(|path| resolve(path, &props)));
+                failsafe_dirs.extend(config.failsafe_dirs.iter().filter_map(|path| resolve(path, &props)));
             }
         }
         for build_dir in build_dirs.into_iter().filter(|p| p != &target) {
-            report_dirs.extend(["surefire-reports", "failsafe-reports"].map(|name| build_dir.join(name)));
+            surefire_dirs.push(build_dir.join("surefire-reports"));
+            failsafe_dirs.push(build_dir.join("failsafe-reports"));
         }
-        report_dirs.sort();
-        report_dirs.dedup();
-        MavenTestModule { dir: dir.to_path_buf(), report_dirs, needs_jvm_marker }
+        surefire_dirs.sort();
+        surefire_dirs.dedup();
+        failsafe_dirs.sort();
+        failsafe_dirs.dedup();
+        MavenTestModule { dir: dir.to_path_buf(), surefire_dirs, failsafe_dirs, needs_jvm_marker }
     }
+}
+
+#[derive(Default)]
+pub struct MavenTestReactor {
+    pub modules: Vec<MavenTestModule>,
+    pub has_modules: bool,
 }
 
 /// Candidate report locations in the reactor reachable from the POM passed to Maven.
@@ -1386,9 +1407,9 @@ pub fn test_reactor_modules(
     local_repo: Option<PathBuf>,
     profiles: &[String],
     properties: &HashMap<String, String>,
-) -> Vec<MavenTestModule> {
+) -> MavenTestReactor {
     let mut resolver = Resolver::new(local_repo.or_else(default_local_repo), profiles);
-    let mut candidates: Vec<MavenTestModule> = Vec::new();
+    let mut reactor = MavenTestReactor::default();
     let mut seen = HashSet::new();
     let mut pending = vec![pom.to_path_buf()];
     while let Some(path) = pending.pop() {
@@ -1405,12 +1426,15 @@ pub fn test_reactor_modules(
         let mut props = resolver.properties_for(&pom, &ctx, dir);
         props.extend(properties.clone());
         let candidate = MavenTestModule::from_configs(dir, &ctx.test_report_configs, &props, properties);
-        if let Some(existing) = candidates.iter_mut().find(|m| m.dir == dir) {
-            existing.report_dirs.extend(candidate.report_dirs);
+        if let Some(existing) = reactor.modules.iter_mut().find(|m| m.dir == dir) {
+            existing.surefire_dirs.extend(candidate.surefire_dirs);
+            existing.failsafe_dirs.extend(candidate.failsafe_dirs);
             existing.needs_jvm_marker |= candidate.needs_jvm_marker;
         } else {
-            candidates.push(candidate);
+            reactor.modules.push(candidate);
         }
+        // A module outside the report search scope can still participate in Maven's run.
+        reactor.has_modules |= !pom.modules.is_empty() || pom.profiles.iter().any(|p| !p.modules.is_empty());
         let mut modules = module_poms(dir, pom.modules.iter(), &props);
         for profile in &pom.profiles {
             let mut props = props.clone();
@@ -1420,7 +1444,7 @@ pub fn test_reactor_modules(
         }
         pending.extend(modules.into_iter().rev());
     }
-    candidates
+    reactor
 }
 
 /// Shared linkage decision for every Maven consumer, including modules outside a reactor directory.

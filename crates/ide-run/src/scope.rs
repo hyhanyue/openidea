@@ -34,6 +34,10 @@ pub fn rebase(config: &mut RunConfig, from: &Path, relative_to: Option<&Path>) {
     if config.kind == "go" && config.extras.params.contains_key("goKind") {
         config.extras.params.entry("module".into()).or_default();
     }
+    config.extras.maven_test_selection = std::mem::take(&mut config.extras.maven_test_selection)
+        .into_iter()
+        .map(|(module, tests)| (path(&module), tests))
+        .collect();
     for file in &mut config.extras.env_files {
         *file = path(file);
     }

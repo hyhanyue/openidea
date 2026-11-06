@@ -817,6 +817,7 @@ export async function startRun(
     const info = await startWithRemedies(started, () => call(commands.runStart(started, channel)));
     console.info("Run process started", { name: config.name, ms: performance.now() - processStarted });
     if (runtimes.get(sessionId)?.generation !== generation) return getSession(sessionId) ?? null;
+    if (rt.tests) rt.tests.mavenTestScope = info.mavenTestScope ?? undefined;
     if (info.pty && rt.terminalSize) void commands.runResize(info.id, rt.terminalSize.cols, rt.terminalSize.rows);
     // The process may already have exited (fast commands) before we got its id.
     const exited = pendingExits.get(info.id);
@@ -960,6 +961,7 @@ async function jvmReports(session: RunSession): Promise<TestCaseReport[]> {
 
 /** Maven console paths have no module identity, even when only one module wrote XML. */
 export function applyJvmReports(tests: TestResults, reports: readonly TestCaseReport[]) {
+  if (reports.some((report) => report.module)) tests.mavenTestScope = "reactor";
   const reportedClasses = new Map<
     string,
     { passed: number; failed: number; skipped: number; failures: Map<string, string[]> }
@@ -1012,6 +1014,19 @@ export function applyJvmReports(tests: TestResults, reports: readonly TestCaseRe
     tests,
     reports.filter((r) => !r.module).map((r) => r.className),
   );
+  for (const report of reports) {
+    if (!report.module && !report.mavenPlugin && !tests.mavenTestScope) continue;
+    const node = tests.at(jvmReportPath(report));
+    if (!node) continue;
+    const plugin = report.mavenPlugin ?? null;
+    (node.mavenPlugins ??= new Set()).add(plugin);
+    if (report.status === "failed") (node.failedMavenPlugins ??= new Set()).add(plugin);
+  }
+}
+
+function jvmReportPath(report: TestCaseReport): string[] {
+  const path = [report.className, report.name];
+  return report.module ? [`${report.module}/`, ...path] : path;
 }
 
 /** JUnit XML report cases → test tree events (`[class, method]`, failure output and source line). */
@@ -1019,7 +1034,7 @@ export function testReportEvents(reports: readonly TestCaseReport[]): TestEvent[
   const events: TestEvent[] = [];
   for (const r of reports) {
     if (!r.className || !r.name) continue;
-    const path = r.module ? [`${r.module}/`, r.className, r.name] : [r.className, r.name];
+    const path = jvmReportPath(r);
     events.push({ type: "result", path, status: r.status, durationMs: r.durationMs ?? undefined });
     if (r.status !== "failed") continue;
     const text = [r.message, r.output].filter(Boolean).join("\n");
@@ -1169,9 +1184,10 @@ export function failedTests(sessionId: string): string[][] {
 /** "Rerun Failed Tests": reruns only the failed tests in the same tab. Returns false when unsupported. */
 export function rerunFailed(sessionId: string): boolean {
   const session = getSession(sessionId);
-  if (!session || session.status === "running" || session.status === "starting") return false;
+  const tests = runtimes.get(sessionId)?.tests;
+  if (!session || !tests || session.status === "running" || session.status === "starting") return false;
   const base = baseConfigOf(session);
-  const derived = rerunFailedConfig(base, failedTests(sessionId));
+  const derived = rerunFailedConfig(base, failedTestPaths(tests), tests);
   if (!derived) return false;
   void startRun(derived, sessionId, base);
   return true;
@@ -1193,7 +1209,7 @@ export async function runSelectedTests(
   const paths = leafTestPaths(nodes);
   const base = baseConfigOf(session);
   const name = nodes.length === 1 ? nodes[0]!.name : `${paths.length} tests`;
-  const derived = testsConfig(base, paths, name);
+  const derived = testsConfig(base, paths, name, tests);
   if (!derived) return false;
   const config = adoptTemporary({
     ...derived,

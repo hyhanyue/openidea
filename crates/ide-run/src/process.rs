@@ -70,6 +70,7 @@ impl Entry {
             pid: *self.pid.lock(),
             running: !self.exited.load(Ordering::Acquire),
             pty: self.pty.is_some(),
+            maven_test_scope: self.test_reports.as_ref().and_then(|(plan, _)| plan.maven_test_scope()),
         }
     }
 }
@@ -381,7 +382,14 @@ impl ProcessManager {
         // A terminal re-encodes output itself; pipes carry the process's bytes as they are.
         let notice =
             if extras.emulate_terminal { None } else { match_console_encoding(&mut inv, &mut env, config, options) };
-        let temp = shorten_java(&mut inv, config, &cwd)?;
+        let maven_files = if config.extras.maven_test_selection.is_empty() {
+            None
+        } else {
+            let mut effective = if env.clear { BTreeMap::new() } else { inherited_env() };
+            effective.extend(env.vars.clone());
+            Some(crate::maven_rerun::prepare(root, &cwd, config, &mut inv, &effective)?)
+        };
+        let temp = (shorten_java(&mut inv, config, &cwd)?, maven_files);
         if extras.emulate_terminal && followup.is_some() {
             return Err(IdeError::invalid("Go build and run requires the output console"));
         }
@@ -505,7 +513,7 @@ impl ProcessManager {
         options: &StartOptions,
         sink: SharedSink,
         on_output: OutputFn,
-        temp: TempFile,
+        temp: (TempFile, Option<tempfile::TempDir>),
     ) -> IdeResult<RunInfo> {
         let pair = native_pty_system()
             .openpty(pty_size(DEFAULT_PTY.0, DEFAULT_PTY.1))

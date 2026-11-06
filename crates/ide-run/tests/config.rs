@@ -46,6 +46,23 @@ fn missing_file_is_empty() {
 }
 
 #[test]
+fn saved_maven_test_selection_keeps_module_paths_and_plugin_filters() {
+    use ide_run::maven_rerun::MavenModuleTests;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = sample().remove(0);
+    config.kind = "maven".into();
+    config.command = "./mvnw".into();
+    config.args = vec!["verify".into()];
+    config.extras.maven_test_selection = BTreeMap::from([
+        (".".into(), MavenModuleTests { surefire: Some("demo.RootTest".into()), failsafe: None }),
+        ("sub/with space".into(), MavenModuleTests { surefire: None, failsafe: Some("demo.WorkflowIT#runs".into()) }),
+    ]);
+    save_user_configs(dir.path(), std::slice::from_ref(&config)).unwrap();
+    assert_eq!(load_user_configs(dir.path()).unwrap(), vec![config]);
+}
+
+#[test]
 fn round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let configs = sample();

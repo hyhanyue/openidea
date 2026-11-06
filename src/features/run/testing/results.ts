@@ -1,4 +1,5 @@
 /** Folds parser events into a results tree with aggregated statuses and counts. */
+import type { MavenTestPlugin, MavenTestScope } from "@/platform/ipc";
 import type { MavenCounts, TestEvent, TestLocation, TestStatus } from "./types";
 
 export interface TestNode {
@@ -11,6 +12,8 @@ export interface TestNode {
   durationMs?: number;
   mavenCounts?: MavenCounts;
   location?: TestLocation;
+  mavenPlugins?: Set<MavenTestPlugin | null>;
+  failedMavenPlugins?: Set<MavenTestPlugin | null>;
   /** Failure output captured for this node. */
   output: string[];
 }
@@ -53,6 +56,7 @@ export class TestResults {
   /** Bumped on every change (for memoised views). */
   version = 0;
   finished = false;
+  mavenTestScope?: MavenTestScope;
 
   node(path: string[]): TestNode {
     const id = path.join(SEP);
@@ -67,6 +71,10 @@ export class TestResults {
 
   get(id: string): TestNode | undefined {
     return this.byId.get(id);
+  }
+
+  at(path: readonly string[]): TestNode | undefined {
+    return this.byId.get(path.join(SEP));
   }
 
   /** The test at `path` has finished with a result. */

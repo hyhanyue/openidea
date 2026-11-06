@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -17,6 +17,13 @@ pub enum TestCaseStatus {
     Skipped,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum MavenTestPlugin {
+    Surefire,
+    Failsafe,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TestCaseReport {
@@ -24,6 +31,9 @@ pub struct TestCaseReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(optional)]
     pub module: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub maven_plugin: Option<MavenTestPlugin>,
     /// Fully qualified class (`com.acme.OrderTest`, nested: `com.acme.OrderTest$Nested`).
     pub class_name: String,
     /// Method name without `()`.
@@ -161,6 +171,7 @@ pub fn parse_report(xml: &str) -> Vec<TestCaseReport> {
                     attr(&a, "time").and_then(|t| t.replace(',', "").parse::<f64>().ok()).map(|s| s * 1000.0);
                 let case = TestCaseReport {
                     module: None,
+                    maven_plugin: None,
                     class_name,
                     name: if base.is_empty() { test.to_owned() } else { base },
                     status: TestCaseStatus::Passed,
@@ -197,24 +208,44 @@ pub fn parse_report(xml: &str) -> Vec<TestCaseReport> {
 /// A JVM test run's report scope, captured before spawning the process.
 #[derive(Clone, Debug)]
 pub enum ReportPlan {
-    Maven { modules: Vec<MavenReportModule>, root: PathBuf, marker: Option<String> },
+    Maven { modules: Vec<MavenReportModule>, root: PathBuf, marker: Option<String>, reactor: bool },
     Gradle { cwd: PathBuf },
 }
 
 #[derive(Clone, Debug)]
 pub struct MavenReportModule {
     pub dir: PathBuf,
-    pub report_dirs: Vec<PathBuf>,
+    pub report_dirs: Vec<(PathBuf, MavenTestPlugin)>,
 }
 
 pub const MAVEN_RUN_PROPERTY: &str = "openidea.testRun";
 
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum MavenTestScope {
+    Module(String),
+    Reactor,
+}
+
 impl ReportPlan {
+    pub(crate) fn maven_test_scope(&self) -> Option<MavenTestScope> {
+        match self {
+            Self::Maven { marker: Some(_), reactor: true, .. } => Some(MavenTestScope::Reactor),
+            Self::Maven { modules, root, marker: Some(_), .. } => {
+                modules.first().map(|module| MavenTestScope::Module(module_path(&module.dir, root)))
+            }
+            _ => None,
+        }
+    }
+
     pub fn reports(&self, started: SystemTime) -> Vec<TestCaseReport> {
         // Tagged reports can tolerate coarse mtimes without including an earlier Maven run.
         let coarse = started.checked_sub(Duration::from_secs(2)).unwrap_or(started);
         match self {
-            Self::Maven { modules, root, marker } => maven_reports(modules, root, marker.as_deref(), started, coarse),
+            Self::Maven { modules, root, marker, reactor } => {
+                let since = if marker.is_some() { coarse } else { started };
+                maven_reports(modules, root, marker.as_deref(), *reactor, since)
+            }
             Self::Gradle { cwd } => {
                 let dirs: Vec<_> = std::fs::read_dir(cwd.join("build/test-results"))
                     .into_iter()
@@ -233,32 +264,46 @@ impl ReportPlan {
     }
 }
 
+fn module_path(dir: &Path, root: &Path) -> String {
+    let rel = dir.strip_prefix(root).unwrap_or(dir);
+    if rel.as_os_str().is_empty() { ".".into() } else { ide_core::ipc_path::to_ipc(rel) }
+}
+
+#[derive(Default)]
+struct ReportOwner {
+    default_dir: bool,
+    plugins: BTreeSet<MavenTestPlugin>,
+}
+
 fn maven_reports(
     modules: &[MavenReportModule],
     root: &Path,
     marker: Option<&str>,
-    started: SystemTime,
-    coarse: SystemTime,
+    reactor: bool,
+    since: SystemTime,
 ) -> Vec<TestCaseReport> {
     // One physical report directory can be configured in more than one module.
-    let mut dirs = BTreeMap::<PathBuf, BTreeMap<usize, bool>>::new();
+    let mut dirs = BTreeMap::<PathBuf, BTreeMap<usize, ReportOwner>>::new();
     for (index, module) in modules.iter().enumerate() {
         let target = module.dir.join("target");
-        for configured in &module.report_dirs {
+        for (configured, plugin) in &module.report_dirs {
             if let Ok(dir) = dunce::canonicalize(configured) {
-                dirs.entry(dir).or_default().entry(index).or_insert(false);
+                dirs.entry(dir).or_default().entry(index).or_default().plugins.insert(*plugin);
             }
         }
-        for name in ["surefire-reports", "failsafe-reports"] {
+        for (name, plugin) in
+            [("surefire-reports", MavenTestPlugin::Surefire), ("failsafe-reports", MavenTestPlugin::Failsafe)]
+        {
             if let Ok(dir) = dunce::canonicalize(target.join(name))
                 && dir.starts_with(&target)
             {
-                dirs.entry(dir).or_default().insert(index, true);
+                let owner = dirs.entry(dir).or_default().entry(index).or_default();
+                owner.default_dir = true;
+                owner.plugins.insert(plugin);
             }
         }
     }
 
-    let since = if marker.is_some() { coarse } else { started };
     let mut reports = vec![Vec::new(); modules.len()];
     for (dir, owners) in dirs {
         for file in report_files(std::slice::from_ref(&dir), since) {
@@ -277,21 +322,39 @@ fn maven_reports(
             } else {
                 // Legacy reports may omit basedir. Only an exclusive default
                 // directory can supply module identity in that case.
-                owners.first_key_value().filter(|(_, default)| owners.len() == 1 && **default).map(|(&index, _)| index)
+                owners
+                    .first_key_value()
+                    .filter(|(_, owner)| owners.len() == 1 && owner.default_dir)
+                    .map(|(&index, _)| index)
             };
             let Some(index) = owner else { continue };
-            let module = (modules.len() > 1).then(|| {
-                let dir = &modules[index].dir;
-                let rel = dir.strip_prefix(root).unwrap_or(dir);
-                if rel.as_os_str().is_empty() { ".".into() } else { ide_core::ipc_path::to_ipc(rel) }
-            });
+            let module = reactor.then(|| module_path(&modules[index].dir, root));
+            let plugins = &owners[&index].plugins;
+            let plugin = match report_plugin(&xml) {
+                Some(plugin) if marker.is_some() || plugins.contains(&plugin) => Some(plugin),
+                Some(_) => None,
+                None => plugins.first().copied().filter(|_| plugins.len() == 1),
+            };
             reports[index].extend(parse_report(&xml).into_iter().map(|mut case| {
                 case.module.clone_from(&module);
+                case.maven_plugin = plugin;
                 case
             }));
         }
     }
     reports.into_iter().flatten().collect()
+}
+
+fn report_plugin(xml: &str) -> Option<MavenTestPlugin> {
+    let (_, suite) = xml.split_once("<testsuite ")?;
+    let (tag, _) = suite.split_once('>')?;
+    let attrs = attrs(tag);
+    let schema = attr(&attrs, "xsi:noNamespaceSchemaLocation")?;
+    match schema.rsplit('/').nth(2)? {
+        "maven-surefire-plugin" => Some(MavenTestPlugin::Surefire),
+        "maven-failsafe-plugin" => Some(MavenTestPlugin::Failsafe),
+        _ => None,
+    }
 }
 
 fn report_properties(xml: &str) -> BTreeMap<String, String> {
@@ -392,6 +455,53 @@ mod tests {
     }
 
     #[test]
+    fn identifies_plugins_after_resolving_the_report_owner() {
+        use MavenTestPlugin::{Failsafe, Surefire};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(tmp.path()).unwrap();
+        let alpha = root.join("alpha");
+        let beta = root.join("beta");
+        let shared = root.join("reports");
+        for dir in [&alpha, &beta, &shared] {
+            std::fs::create_dir(dir).unwrap();
+        }
+        for (name, dir) in [("Alpha", &alpha), ("Beta", &beta)] {
+            let xml = format!(
+                r#"<testsuite><properties><property name="{MAVEN_RUN_PROPERTY}" value="current"/><property name="basedir" value="{}"/></properties><testcase classname="{name}" name="same"/></testsuite>"#,
+                dir.display()
+            );
+            std::fs::write(shared.join(format!("TEST-{name}.xml")), xml).unwrap();
+        }
+        let mut plan = ReportPlan::Maven {
+            modules: vec![
+                MavenReportModule { dir: alpha, report_dirs: vec![(shared.clone(), Surefire)] },
+                MavenReportModule { dir: beta, report_dirs: vec![(shared.clone(), Failsafe)] },
+            ],
+            root,
+            marker: Some("current".into()),
+            reactor: true,
+        };
+        let reports = plan.reports(SystemTime::UNIX_EPOCH);
+        let sources: Vec<_> = reports.iter().map(|report| (report.module.as_deref(), report.maven_plugin)).collect();
+        assert_eq!(sources, [(Some("alpha"), Some(Surefire)), (Some("beta"), Some(Failsafe))]);
+
+        let ReportPlan::Maven { modules, .. } = &mut plan else { unreachable!() };
+        modules[1].report_dirs.push((shared.clone(), Surefire));
+        let reports = plan.reports(SystemTime::UNIX_EPOCH);
+        assert_eq!(reports[1].module.as_deref(), Some("beta"));
+        assert_eq!(reports[1].maven_plugin, None);
+
+        let file = shared.join("TEST-Beta.xml");
+        let xml = std::fs::read_to_string(&file).unwrap().replacen(
+            "<testsuite>",
+            r#"<testsuite xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-failsafe-plugin/xsd/failsafe-test-report.xsd">"#,
+            1,
+        );
+        std::fs::write(file, xml).unwrap();
+        assert_eq!(plan.reports(SystemTime::UNIX_EPOCH)[1].maven_plugin, Some(Failsafe));
+    }
+
+    #[test]
     fn reads_only_fresh_reports() {
         let tmp = tempfile::tempdir().unwrap();
         let module = tmp.path();
@@ -407,9 +517,12 @@ mod tests {
             modules: vec![MavenReportModule { dir: module.clone(), report_dirs: Vec::new() }],
             root: module.clone(),
             marker: None,
+            reactor: false,
         };
         let gradle = ReportPlan::Gradle { cwd: module };
-        assert_eq!(maven.reports(SystemTime::UNIX_EPOCH).len(), 4);
+        let reports = maven.reports(SystemTime::UNIX_EPOCH);
+        assert_eq!(reports.len(), 4);
+        assert!(reports.iter().all(|r| r.maven_plugin == Some(MavenTestPlugin::Surefire)));
         assert_eq!(gradle.reports(SystemTime::UNIX_EPOCH).len(), 1);
         let future = SystemTime::now() + Duration::from_secs(3600);
         assert!(maven.reports(future).is_empty());

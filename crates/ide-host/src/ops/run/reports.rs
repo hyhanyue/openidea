@@ -1,5 +1,5 @@
 use ide_run::RunConfig;
-use ide_run::junit::{MAVEN_RUN_PROPERTY, MavenReportModule, ReportPlan};
+use ide_run::junit::{MAVEN_RUN_PROPERTY, MavenReportModule, MavenTestPlugin, ReportPlan};
 use ide_run::wrap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -38,6 +38,7 @@ pub(super) fn prepare(root: &Path, config: &mut RunConfig, mut scopes: Vec<PathB
             modules: vec![MavenReportModule { dir: dunce::canonicalize(cwd).ok()?, report_dirs: Vec::new() }],
             root: root.to_path_buf(),
             marker: None,
+            reactor: false,
         });
     }
 
@@ -45,38 +46,8 @@ pub(super) fn prepare(root: &Path, config: &mut RunConfig, mut scopes: Vec<PathB
     let env_args = env.get("MAVEN_ARGS").map_or_else(Vec::new, |s| ide_run::import::split_args(s));
     let cli: Vec<&str> = env_args.iter().chain(&config.args).map(String::as_str).collect();
     let cli_file = file_argument(&cli);
-    let base = env.get("MAVEN_BASEDIR").filter(|dir| !dir.is_empty()).map_or_else(
-        || {
-            // Maven's launcher uses a separate -f/--file argument to locate .mvn.
-            let pom = config
-                .args
-                .windows(2)
-                .take_while(|args| args[0] != "--")
-                .find(|args| matches!(args[0].as_str(), "-f" | "--file"))
-                .map(|args| pom_path(&cwd, &args[1]));
-            let start = pom.as_deref().and_then(Path::parent).unwrap_or(&cwd);
-            start.ancestors().find(|d| d.join(".mvn").is_dir()).unwrap_or(start).to_path_buf()
-        },
-        |dir| cwd.join(dir),
-    );
-    let config_text = std::fs::read_to_string(base.join(".mvn/maven.config")).unwrap_or_default();
-    // Maven 3.9+ takes one argument per line. Also accept the older whitespace-separated format
-    // when an option and its value are on the same line.
-    let file_args: Vec<String> = config_text
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.starts_with('#'))
-        .flat_map(|line| {
-            if line
-                .split_once(char::is_whitespace)
-                .is_some_and(|(flag, _)| flag.starts_with('-') && !flag.contains('='))
-            {
-                ide_run::import::split_args(line)
-            } else {
-                vec![line.to_owned()]
-            }
-        })
-        .collect();
+    let base = ide_run::maven_rerun::project_base(&cwd, &config.args, env.get("MAVEN_BASEDIR").map(String::as_str));
+    let file_args = ide_run::maven_rerun::config_args(&base);
     let file_args: Vec<&str> = file_args.iter().map(String::as_str).collect();
     let pom = pom_path(&cwd, cli_file.or_else(|| file_argument(&file_args)).unwrap_or("pom.xml"));
     let pom = dunce::canonicalize(pom).ok()?;
@@ -107,9 +78,20 @@ pub(super) fn prepare(root: &Path, config: &mut RunConfig, mut scopes: Vec<PathB
             .and_then(|p| ide_build::maven::local_repository_of(&cwd.join(p)))
     });
     let candidates = ide_build::maven::test_reactor_modules(&pom, &scopes, local_repo, &profiles, &properties);
-    let needs_jvm_marker = candidates.iter().any(|m| m.needs_jvm_marker);
-    let mut modules: Vec<_> =
-        candidates.into_iter().map(|m| MavenReportModule { dir: m.dir, report_dirs: m.report_dirs }).collect();
+    let needs_jvm_marker = candidates.modules.iter().any(|m| m.needs_jvm_marker);
+    let mut modules: Vec<_> = candidates
+        .modules
+        .into_iter()
+        .map(|m| MavenReportModule {
+            dir: m.dir,
+            report_dirs: m
+                .surefire_dirs
+                .into_iter()
+                .map(|path| (path, MavenTestPlugin::Surefire))
+                .chain(m.failsafe_dirs.into_iter().map(|path| (path, MavenTestPlugin::Failsafe)))
+                .collect(),
+        })
+        .collect();
     if modules.is_empty() {
         modules.push(MavenReportModule { dir: dir.to_path_buf(), report_dirs: Vec::new() });
     }
@@ -127,7 +109,7 @@ pub(super) fn prepare(root: &Path, config: &mut RunConfig, mut scopes: Vec<PathB
         config.env.insert(key.into(), options);
     }
     config.args.insert(0, option);
-    Some(ReportPlan::Maven { modules, root: root.to_path_buf(), marker: Some(marker) })
+    Some(ReportPlan::Maven { modules, root: root.to_path_buf(), marker: Some(marker), reactor: candidates.has_modules })
 }
 
 fn pom_path(cwd: &Path, file: &str) -> PathBuf {

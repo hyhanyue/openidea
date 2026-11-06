@@ -14,6 +14,7 @@ import { jdwpLaunch } from "./javaDebug";
 import { firstTopLevelType, jvmMainCandidates, scanJvmTargets } from "./jvmTargets";
 import { adoptTemporary, applyJvmReports, MAX_TEMPORARY, saveTemporary, testReportEvents, useRun } from "./store";
 import { jvmParser, parseAll, TestResults } from "./testing";
+import { rerunFailedConfig, testsConfig } from "./testing/rerun";
 import { detectRunTargets, targetConfig } from "./targets";
 
 const cfg = (over: Partial<RunConfig> & { id: string; kind: string }): RunConfig => ({
@@ -493,6 +494,34 @@ java.lang.AssertionError: from an unreported module
       output: expect.arrayContaining(["java.lang.AssertionError: from an unreported module"]),
     });
     expect(tests.counts()).toMatchObject({ passed: 2, failed: expected });
+  });
+
+  it("reruns only the plugin that reported the failure for a method run by both plugins", () => {
+    const tests = new TestResults();
+    const shared = {
+      module: "beta",
+      className: "demo.SharedTest",
+      name: "same",
+      durationMs: null,
+      message: null,
+      output: null,
+    };
+    const paths = [["beta/", "demo.SharedTest", "same"]];
+    const run = cfg({ id: "maven:verify", kind: "maven", args: ["verify"] });
+    applyJvmReports(tests, [
+      { ...shared, mavenPlugin: "surefire", status: "passed" },
+      { ...shared, mavenPlugin: "failsafe", status: "failed" },
+    ]);
+    expect(tests.at(paths[0]!)?.own).toBe("failed");
+    expect(rerunFailedConfig(run, paths, tests)?.mavenTestSelection).toEqual({
+      beta: { failsafe: "demo.SharedTest#same" },
+    });
+    expect(testsConfig(run, paths, "both plugins", tests)?.mavenTestSelection).toEqual({
+      beta: { surefire: "demo.SharedTest#same", failsafe: "demo.SharedTest#same" },
+    });
+    applyJvmReports(tests, [{ ...shared, status: "failed" }]);
+    expect(rerunFailedConfig(run, paths, tests)).toBeNull();
+    expect(testsConfig(run, paths, "unknown plugin", tests)).toBeNull();
   });
 
   it("locate Kotlin tests with spaces in their names, behind a class loader prefix", () => {

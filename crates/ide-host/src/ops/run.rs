@@ -205,6 +205,9 @@ pub async fn start(host: &Host, window: &str, config: RunConfig, on_output: Emit
         return Err(IdeError::invalid("Tomcat Local requires the local machine"));
     }
     if let Some(id) = config.extras.target.as_deref().filter(|t| !t.is_empty()) {
+        if !config.extras.maven_test_selection.is_empty() {
+            return Err(IdeError::invalid("Maven reactor test selection is unavailable on run targets"));
+        }
         let settings = project.settings.effective();
         let target = ide_remote::service::run_target(&settings, id)?;
         if target.kind != RunTargetKind::Ssh {

@@ -197,8 +197,15 @@ impl RemoteRuns {
     ) -> RunInfo {
         let id = RunId::next();
         let pty = config.extras.emulate_terminal;
-        let info =
-            RunInfo { id, config_id: config.id.clone(), name: config.name.clone(), pid: None, running: true, pty };
+        let info = RunInfo {
+            id,
+            config_id: config.id.clone(),
+            name: config.name.clone(),
+            pid: None,
+            running: true,
+            pty,
+            maven_test_scope: None,
+        };
         let run = Arc::new(RemoteRun {
             info: Mutex::new(info.clone()),
             process: Mutex::new(None),

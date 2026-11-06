@@ -145,7 +145,7 @@ describe("rerunFailedConfig", () => {
     ]);
   });
 
-  it("gradle and maven filters", () => {
+  it("keeps Gradle and unscoped Maven filters", () => {
     expect(rerunFailedConfig(cfg("gradle", "./gradlew", ["test"]), [["com.a.FooTest", "bar()"]])!.args).toEqual([
       "test",
       "--tests",
@@ -154,10 +154,49 @@ describe("rerunFailedConfig", () => {
     expect(
       rerunFailedConfig(cfg("maven", "mvn", ["test"]), [
         ["com.a.FooTest", "bar"],
-        ["child/", "com.a.FooTest", "baz"],
+        ["com.a.FooTest", "baz"],
         ["com.a.BarTest"],
       ])!.args,
     ).toEqual(["test", "-Dtest=com.a.FooTest#bar+baz,com.a.BarTest"]);
+  });
+
+  it("keeps reactor modules separate and preserves the original Maven invocation", () => {
+    const base = {
+      ...cfg("maven", "./mvnw", ["-f", "reactor/pom.xml", "-pl", "b", "-am", "-Pextra", "-T", "2", "verify"]),
+      cwd: "workspace",
+      env: { JAVA_HOME: "/jdk", MAVEN_OPTS: "-Xmx1g" },
+    };
+    const paths = [
+      ["a/", "demo.SameTest", "aOnly"],
+      ["nested/b/", "demo.SameTest", "same"],
+      ["nested/b/", "demo.SameTest", "another()"],
+      ["./", "demo.RootTest"],
+    ];
+    const results = new TestResults();
+    for (const path of paths) results.node(path).failedMavenPlugins = new Set(["surefire"]);
+    const rerun = rerunFailedConfig(base, paths, results);
+    expect(rerun).toMatchObject({
+      command: base.command,
+      args: base.args,
+      cwd: base.cwd,
+      env: base.env,
+      mavenTestSelection: {
+        a: { surefire: "demo.SameTest#aOnly" },
+        "nested/b": { surefire: "demo.SameTest#same+another" },
+        ".": { surefire: "demo.RootTest" },
+      },
+    });
+    expect(rerunFailedConfig(base, [paths[0]!, ["demo.UnknownTest", "same"]], results)).toBeNull();
+  });
+
+  it("uses legacy Maven filters for a standalone console failure", () => {
+    const base = cfg("maven", "mvn", ["test", "-Dtest=OldTest"]);
+    const results = new TestResults();
+    results.mavenTestScope = { module: "standalone" };
+    expect(rerunFailedConfig(base, [["demo.SameTest", "same"]], results)?.args).toEqual([
+      "test",
+      "-Dtest=demo.SameTest#same",
+    ]);
   });
 
   it("returns null when nothing failed or the framework is unknown", () => {

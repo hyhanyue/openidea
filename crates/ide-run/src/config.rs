@@ -30,7 +30,7 @@
 //! Configurations not stored as project files live in the same format in the
 //! workspace-local, git-ignored `run.local.toml`.
 
-use crate::{BeforeLaunchTask, RunConfig, RunExtras};
+use crate::{BeforeLaunchTask, RunConfig, RunExtras, maven_rerun::MavenModuleTests};
 use ide_core::{IdeError, IdeResult, project_dir};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -89,6 +89,8 @@ struct FileConfig {
     allow_parallel: bool,
     #[serde(default)]
     params: BTreeMap<String, String>,
+    #[serde(default)]
+    maven_test_selection: BTreeMap<String, MavenModuleTests>,
     folder: Option<String>,
     #[serde(default = "yes", alias = "includeSystemEnv")]
     include_system_env: bool,
@@ -164,6 +166,7 @@ fn convert(configs: Vec<FileConfig>, local: bool) -> Vec<RunConfig> {
             extras: RunExtras {
                 module: c.module,
                 params: c.params,
+                maven_test_selection: c.maven_test_selection,
                 folder: non_empty(c.folder),
                 local,
                 include_system_env: c.include_system_env,
@@ -244,6 +247,20 @@ fn to_table(c: &RunConfig) -> Table {
             params.insert(k, v.into());
         }
         t.insert("params", value(params));
+    }
+    if !x.maven_test_selection.is_empty() {
+        let mut modules = InlineTable::new();
+        for (module, tests) in &x.maven_test_selection {
+            let mut selection = InlineTable::new();
+            if let Some(spec) = &tests.surefire {
+                selection.insert("surefire", spec.into());
+            }
+            if let Some(spec) = &tests.failsafe {
+                selection.insert("failsafe", spec.into());
+            }
+            modules.insert(module, selection.into());
+        }
+        t.insert("maven-test-selection", value(modules));
     }
     if !x.include_system_env {
         t.insert("include-system-env", value(false));
