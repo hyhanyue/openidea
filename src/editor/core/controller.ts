@@ -839,7 +839,11 @@ export class EditorController implements SlotHost {
             },
           ] as MenuItem[])),
     ];
-    showContextMenu(e, items);
+    showContextMenu(e, items, (previous) => {
+      // WebKit can scroll the editor's selection into view on raw DOM focus.
+      if (previous === view.contentDOM) view.focus();
+      else previous.focus({ preventScroll: true });
+    });
   }
 
   // --- status / context ------------------------------------------------------------

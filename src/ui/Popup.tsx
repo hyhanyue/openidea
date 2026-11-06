@@ -45,7 +45,8 @@ export interface PopupProps {
   trapFocus?: boolean;
   /** Focus on open: `true` = first `[data-autofocus]`/focusable/the popup itself; `false` = leave focus. */
   autoFocus?: boolean;
-  restoreFocus?: boolean;
+  /** Restore the previous element's focus, optionally through its own focus API. */
+  restoreFocus?: boolean | ((previous: HTMLElement) => void);
   closeOnOutsideClick?: boolean;
   /** Close (as "outside") when the app window loses focus, like IDEA popups (default true). */
   closeOnDeactivate?: boolean;
@@ -156,7 +157,8 @@ function PopupInner({
         previous?.isConnected &&
         (!active || active === document.body || el?.contains(active) || !active.isConnected)
       ) {
-        previous.focus({ preventScroll: true });
+        if (typeof restoreFocus === "function") restoreFocus(previous);
+        else previous.focus({ preventScroll: true });
       }
     };
     // Anchor identity changes must not re-run open/close bookkeeping.

@@ -17,7 +17,7 @@ import { getAction, isActionEnabled, executeActionFrom, actionToggled } from "@/
 import { useContextKeys } from "@/platform/context";
 import { shortcutLabel } from "@/platform/keymap";
 import { Icon, type IconName } from "./icons";
-import { Popup, type PopupAnchor } from "./Popup";
+import { Popup, type PopupAnchor, type PopupProps } from "./Popup";
 import type { Placement } from "@floating-ui/react-dom";
 import styles from "./Menu.module.css";
 import { tx } from "@/platform/i18n";
@@ -337,7 +337,7 @@ export function Menu({ open, onClose, anchor, items, placement = "bottom-start",
 // Context menus
 
 interface ContextMenuState {
-  menu: { x: number; y: number; items: MenuItem[]; id: number } | null;
+  menu: { x: number; y: number; items: MenuItem[]; id: number; restoreFocus?: PopupProps["restoreFocus"] } | null;
 }
 
 export const useContextMenuStore = create<ContextMenuState>(() => ({ menu: null }));
@@ -346,10 +346,11 @@ let menuSeq = 0;
 export function showContextMenu(
   at: { clientX: number; clientY: number } | { x: number; y: number },
   items: MenuItem[],
+  restoreFocus?: PopupProps["restoreFocus"],
 ) {
   const x = "clientX" in at ? at.clientX : at.x;
   const y = "clientY" in at ? at.clientY : at.y;
-  useContextMenuStore.setState({ menu: { x, y, items, id: ++menuSeq } });
+  useContextMenuStore.setState({ menu: { x, y, items, id: ++menuSeq, restoreFocus } });
 }
 
 export function hideContextMenu() {
@@ -370,6 +371,7 @@ export function ContextMenuHost() {
       role="presentation"
       autoFocus={false}
       onClose={hideContextMenu}
+      restoreFocus={menu.restoreFocus}
       className={styles.popup}
     >
       <MenuList items={menu.items} onDone={hideContextMenu} aria-label="Context menu" />
