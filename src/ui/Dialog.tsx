@@ -10,6 +10,7 @@ import { selectableText } from "./selectableText";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import styles from "./Dialog.module.css";
 import { isImeKey } from "@/platform/ime";
+import { registerKeyClaim, strokeOf } from "@/platform/keymap";
 
 /**
  * `default`: filled accent button, triggered by Enter. `cancel`: Esc / close
@@ -115,6 +116,10 @@ export interface DialogProps {
    * unless `minWidth` says otherwise.
    */
   resizable?: "both";
+  /** Fills the workbench while retaining the dialog's restored size and position. */
+  maximized?: boolean;
+  /** An additional keymap stroke that closes this dialog while it is on top. */
+  closeShortcut?: string;
   minWidth?: number;
   minHeight?: number;
   /** Height cap while content-sized; a manual resize lifts it. */
@@ -210,6 +215,8 @@ function DialogInner({
   footer,
   width = 480,
   resizable,
+  maximized,
+  closeShortcut,
   minWidth,
   minHeight,
   maxHeight,
@@ -275,9 +282,10 @@ function DialogInner({
       el?.querySelector<HTMLElement>(`[data-dialog-footer] :is(${FOCUSABLE})`) ??
       el;
     target?.focus({ preventScroll: true });
+    const releaseClaim = closeShortcut && registerKeyClaim((_e, stroke) => layer.isTop() && stroke === closeShortcut);
     const onKey = (e: KeyboardEvent) => {
       if (!layer.isTop() || !ref.current) return;
-      if (e.key === "Escape") {
+      if (e.key === "Escape" || (closeShortcut && !e.defaultPrevented && strokeOf(e) === closeShortcut)) {
         e.preventDefault();
         e.stopImmediatePropagation();
         onCloseRef.current();
@@ -297,14 +305,16 @@ function DialogInner({
     };
     document.addEventListener("keydown", onKey);
     return () => {
+      if (releaseClaim) releaseClaim();
       document.removeEventListener("keydown", onKey);
       layer.release();
       if (previous?.isConnected) previous.focus({ preventScroll: true });
     };
-  }, []);
+  }, [closeShortcut]);
 
   const drag = (e: PointerEvent<HTMLDivElement>) => {
     if (
+      maximized ||
       e.button !== 0 ||
       !(e.target as Element).closest("[data-dialog-drag]") ||
       (e.target as Element).closest(`button, input, label, a, select, textarea, .${selectableText}`)
@@ -336,7 +346,7 @@ function DialogInner({
 
   const label = aria["aria-label"] ?? (typeof title === "string" ? title : undefined);
   const hasFooter = !!(buttons?.length || footerStart || onHelp || footer);
-  const canResize = resizable === "both";
+  const canResize = resizable === "both" && !maximized;
 
   const resize = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -392,12 +402,16 @@ function DialogInner({
         data-inactive={active ? undefined : ""}
         className={clsx(styles.dialog, popup ? styles.popup : styles.window, className)}
         onPointerDown={drag}
-        style={{
-          width: size ? size.w : width,
-          height: size?.h,
-          maxHeight: !size && maxHeight ? `min(${maxHeight}px, 100%)` : undefined,
-          translate: offset.x || offset.y ? `${offset.x}px ${offset.y}px` : undefined,
-        }}
+        style={
+          maximized
+            ? { width: "100%", height: "100%" }
+            : {
+                width: size ? size.w : width,
+                height: size?.h,
+                maxHeight: !size && maxHeight ? `min(${maxHeight}px, 100%)` : undefined,
+                translate: offset.x || offset.y ? `${offset.x}px ${offset.y}px` : undefined,
+              }
+        }
       >
         {icon ? null : popup ? (
           title != null && (

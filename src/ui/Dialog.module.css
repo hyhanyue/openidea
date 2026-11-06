@@ -39,6 +39,7 @@
 
 /* Corner grip for `resizable` dialogs (over the footer's right padding). */
 .resizeGrip {
+  z-index: 1;
   position: absolute;
   right: 0;
   bottom: 0;
@@ -151,6 +152,8 @@
 }
 
 .body {
+  /* Keep content overlays below the dialog chrome, including the resize grip. */
+  isolation: isolate;
   flex: 1;
   min-height: 0;
   overflow: auto;

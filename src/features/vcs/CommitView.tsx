@@ -3,7 +3,7 @@
  * parts also make the Git window's Local Changes / Stash tabs and the Commit dialog.
  */
 import { useWorkflowSettings } from "@/platform/workflowSettings";
-import { formatBinding, isMacHost } from "@/platform/keymap";
+import { formatBinding, isMacHost, registerKeyClaim } from "@/platform/keymap";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { tx } from "@/platform/i18n";
 import clsx from "clsx";
@@ -71,6 +71,7 @@ import { rebaseAfterFixup } from "./rebase";
 import { stashTabOf, stashTabs, type ContentTab } from "./gitTabs";
 import { diffInput, openDiff, withChain, workingDiffData } from "./diffInput";
 import { DiffEditor } from "./DiffEditor";
+import { showCommitDiff } from "./CommitDiffDialog";
 import { KIND_COLOR, KIND_LABEL, fileCount, formatTime, stashLabel, stripSlash } from "./model";
 import { call, commands } from "@/platform/ipc";
 import type { FileStatus } from "@/bindings";
@@ -183,11 +184,13 @@ const bottomLeft = (el: HTMLElement) => {
 };
 
 /** Opens a file's diff; F7 continues through the other files of its group, in tree order. */
-function openNode(n: ChangeNode, roots: readonly ChangeNode[]) {
+function openNode(n: ChangeNode, roots: readonly ChangeNode[], modal: boolean) {
   if (n.type !== "file" || !n.path) return;
   const nodes = groupFileNodes(roots, n);
   const items = nodes.map((f) => workingDiffData(f.path!, undefined, stagingSide(f.group, f.files[0]!)));
-  void openDiff(withChain(items, Math.max(0, nodes.indexOf(n))), { preview: true });
+  const diff = withChain(items, Math.max(0, nodes.indexOf(n)));
+  if (modal) showCommitDiff(diff);
+  else void openDiff(diff, { preview: true });
 }
 
 /** Context menu of a change list's header: the list's own actions, then the bulk ones on its files. */
@@ -239,7 +242,11 @@ export function deletableFiles(nodes: ChangeNode[]): string[] {
   return files.length && files.every(onDisk) ? files.map((f) => f.path) : [];
 }
 
-export function nodeMenu(nodes: ChangeNode[], repos: readonly string[]): MenuItem[] {
+export function nodeMenu(
+  nodes: ChangeNode[],
+  repos: readonly string[],
+  showDiff?: (node: ChangeNode) => void,
+): MenuItem[] {
   const files = filesOf(nodes);
   const deletable = deletableFiles(nodes);
   const paths = files.map((f) => f.path);
@@ -268,11 +275,19 @@ export function nodeMenu(nodes: ChangeNode[], repos: readonly string[]): MenuIte
       run: () => commitFiles(paths),
     },
     { kind: "separator" },
-    { kind: "action", action: "vcs.showDiff", arg: first?.path },
+    showDiff
+      ? {
+          label: "Show Diff",
+          icon: "diff",
+          shortcut: "F4",
+          disabled: !first,
+          run: () => first && showDiff(first),
+        }
+      : { kind: "action", action: "vcs.showDiff", arg: first?.path },
     {
       label: "Jump to Source",
       icon: "external-link",
-      shortcut: "F4",
+      shortcut: showDiff ? undefined : "F4",
       disabled: !first?.path || first.kind === "deleted",
       run: () => first?.path && void editorService().openFile(first.path, { focus: true }),
     },
@@ -476,6 +491,7 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(["group:unversioned"]));
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const treeRef = useRef<TreeHandle>(null);
+  const treeWrapRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLButtonElement>(null);
 
   const repos = useVcs((s) => s.roots);
@@ -534,6 +550,11 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
   }, []);
 
   const selectedNodes = () => [...selected].map((k) => byKey.get(k)).filter((n): n is ChangeNode => !!n);
+  const showNodeDiff = (node: ChangeNode) => openNode(node, roots, mode === "dialog");
+  useEffect(() => {
+    if (mode !== "dialog") return;
+    return registerKeyClaim((e, stroke) => stroke === "F4" && treeWrapRef.current?.contains(e.target as Node) === true);
+  }, [mode]);
 
   return (
     <div className={styles.changes}>
@@ -588,6 +609,8 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
       </div>
       {mode !== "dialog" && <OperationBanner />}
       <div
+        ref={treeWrapRef}
+        data-commit-dialog-changes={mode === "dialog" ? "" : undefined}
         className={styles.treeWrap}
         onKeyDownCapture={(e) => {
           if (checkboxes && e.key === " " && !e.metaKey && !e.ctrlKey && selected.size) {
@@ -607,11 +630,14 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
               e.stopPropagation();
               void deleteFiles(deletable);
             }
-          } else if (e.key === "F4") {
+          } else if (e.key === "F4" && (mode !== "dialog" || !(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey))) {
             const n = selectedNodes().find((x) => x.type === "file");
             if (n?.path) {
               e.preventDefault();
-              void editorService().openFile(n.path, { focus: true });
+              if (mode === "dialog") {
+                e.stopPropagation();
+                showNodeDiff(n);
+              } else void editorService().openFile(n.path, { focus: true });
             }
           }
         }}
@@ -645,7 +671,7 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
               selectedList: nodes.find((n) => n.changelist)?.changelist ?? null,
             });
           }}
-          onActivate={(n) => openNode(n, roots)}
+          onActivate={showNodeDiff}
           onContextMenu={(node, sel, e: MouseEvent) => {
             if (!node) return;
             if (node.type === "group" && node.changelist) {
@@ -653,7 +679,10 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
               return;
             }
             const nodes = [...sel].map((k) => byKey.get(k)).filter((n): n is ChangeNode => !!n);
-            showContextMenu(e, nodeMenu(nodes.length ? nodes : [node], repos));
+            showContextMenu(
+              e,
+              nodeMenu(nodes.length ? nodes : [node], repos, mode === "dialog" ? showNodeDiff : undefined),
+            );
           }}
           aria-label="Changes"
           empty={

@@ -211,7 +211,18 @@ function isStrokeOf(e: KeyboardEvent, actionId: string): boolean {
   return !!stroke && bindingsFor(actionId).some((b) => normalizeBinding(b) === stroke);
 }
 
-export function DiffEditor({ input, toolbarActions }: { input: EditorInput; toolbarActions?: ReactNode }) {
+// The revealed difference focuses its pane; a tab focus request can steal that focus.
+const openDiffPreview = (data: DiffData) => openDiff(data, { preview: true, focus: false });
+
+export function DiffEditor({
+  input,
+  toolbarActions,
+  onNavigate = openDiffPreview,
+}: {
+  input: EditorInput;
+  toolbarActions?: ReactNode;
+  onNavigate?: (data: DiffData) => void | Promise<void>;
+}) {
   const data = input.data as DiffData;
   const { path, left, right } = data;
   const [attached, setAttached] = useState<Attached | null>(null);
@@ -595,12 +606,12 @@ export function DiffEditor({ input, toolbarActions }: { input: EditorInput; tool
       navigation.current = request;
       try {
         const neighbour = await changedChainNeighbour(data, dir, opts.ignore);
-        if (navigation.current === request && neighbour) await openDiff(neighbour, { preview: true });
+        if (navigation.current === request && neighbour) await onNavigate(neighbour);
       } finally {
         if (navigation.current === request) navigation.current = null;
       }
     },
-    [data, opts.ignore],
+    [data, opts.ignore, onNavigate],
   );
   useEffect(() => {
     if (!navHint) return;
@@ -928,7 +939,7 @@ export function DiffEditor({ input, toolbarActions }: { input: EditorInput; tool
     viewer: viewerOf,
   });
   useEffect(() => {
-    nav.current = {
+    Object.assign(nav.current, {
       next: () => step(1),
       prev: () => step(-1),
       jumpToSource,
@@ -936,7 +947,7 @@ export function DiffEditor({ input, toolbarActions }: { input: EditorInput; tool
       file,
       showSettings,
       viewer: viewerOf,
-    };
+    });
   });
 
   useEffect(

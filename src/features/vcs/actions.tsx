@@ -28,6 +28,7 @@ import { setAmend, useCommit } from "./commitStore";
 import { gotoConflict, resolveAtCaret, showConflictsDialog } from "./conflictsUi";
 import { focusedDiffNavigator } from "./diffNavigator";
 import { openDiff, withChain, workingDiffData } from "./diffInput";
+import { showCommitDiff } from "./CommitDiffDialog";
 import { buildChangeTree, changeGroupPaths } from "./changes";
 import { useChangelists } from "./changelists";
 import { openDialog } from "./dialogs";
@@ -339,12 +340,13 @@ export function registerVcsActions(): () => void {
         if (ctx.shelfFocus && arg === undefined) return showShelfDiff();
         const line =
           arg && typeof arg === "object" && "line" in arg ? Number((arg as { line: unknown }).line) : undefined;
-        const paths = selectedPaths(arg);
+        const modal = !!document.activeElement?.closest("[data-commit-dialog-changes]");
+        const paths = modal ? (argPaths(arg) ?? useCommit.getState().selection) : selectedPaths(arg);
         if (!paths.length) {
           notifications().notify({ group: "vcs", level: "info", title: "Select a changed file to show its diff" });
           return;
         }
-        if (await showDirectoryWorkingDiff(paths)) return;
+        if (!modal && (await showDirectoryWorkingDiff(paths))) return;
         const state = useVcs.getState();
         const tree = buildChangeTree(
           state.status,
@@ -357,10 +359,9 @@ export function registerVcsActions(): () => void {
         for (const path of paths.slice(0, 5)) {
           const siblings = changeGroupPaths(tree, path);
           const items = siblings.map((path) => workingDiffData(path));
-          await openDiff(
-            { ...withChain(items, Math.max(0, siblings.indexOf(path))), line },
-            { preview: paths.length === 1 },
-          );
+          const data = { ...withChain(items, Math.max(0, siblings.indexOf(path))), line };
+          if (modal) return showCommitDiff(data);
+          await openDiff(data, { preview: paths.length === 1 });
         }
       },
     },
