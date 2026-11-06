@@ -41,23 +41,29 @@ async fn resolve_launch(
     let project = host.project(window)?;
     let module = project.root.join(module);
     let settings = project.settings.effective();
-    let (model, external, delegated) = {
+    let mut snapshots = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(IdeError::cancelled()),
+        guard = project.java_launch_snapshots.clone().lock_owned() => guard,
+    };
+    let (model, external, delegated, snapshots) = {
         let project = project.clone();
         let settings = settings.clone();
         let module = module.clone();
         tokio::task::spawn_blocking(move || {
-            project.java_launch_snapshots.lock().initialize();
+            snapshots.initialize();
             let model = load(&project.root, &project.build_cache_dir(), &settings);
             let non_java = build && compile::launch_has_non_java_sources(&project.root, &model, &module, test);
             let delegated = build
                 && model.maven.as_ref().is_some_and(|m| m.projects.iter().any(|p| project.root.join(&p.dir) == module))
                 && (non_java || cache::has_record(&project.root, &project.build_cache_dir(), &module));
             let external = non_java || delegated;
-            (model, external, delegated)
+            (model, external, delegated, snapshots)
         })
         .await
         .map_err(|e| IdeError::internal(e.to_string()))?
     };
+    let mut snapshots = build.then_some(snapshots);
     let external_build = if delegated { Some(project.lsp.java_external_build(&module, cancel).await?) } else { None };
     let mut info = project.lsp.java_launch(&module, test, build && !delegated, delegated, cancel).await?;
     let lsp_ms = started.elapsed().as_millis();
@@ -66,7 +72,7 @@ async fn resolve_launch(
     tokio::task::spawn_blocking(move || {
         let _external_build = external_build;
         let built = if delegated {
-            let outputs = project.java_launch_snapshots.lock().build(
+            let outputs = snapshots.as_mut().expect("delegated launch builds").build(
                 &project.root,
                 &model,
                 &module,
@@ -84,6 +90,7 @@ async fn resolve_launch(
         } else {
             Vec::new()
         };
+        drop(snapshots);
         let mut class_paths: Vec<String> = built.iter().map(|p| p.to_string_lossy().into_owned()).collect();
         for p in std::mem::take(&mut info.class_paths) {
             if !class_paths.iter().any(|c| same_entry(c, &p, cfg!(windows))) {
@@ -203,6 +210,7 @@ pub async fn java_build_workspace(
     host.require_trust(window)?;
     let project = host.project(window)?;
     let module = project.root.join(module);
+    let _output_guard = project.java_launch_snapshots.lock().await;
     project.lsp.java_build(&module, &CancellationToken::new()).await
 }
 

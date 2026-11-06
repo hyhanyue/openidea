@@ -1539,6 +1539,44 @@ async fn unmanaged_java_run_imports_sources_without_an_open_editor() {
     assert!(state.notified("textDocument/didOpen").is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_java_build_drains_the_protected_workspace() {
+    let mut caps = incremental_caps();
+    caps["executeCommandProvider"] = json!({"commands": ["openidea.java.build"]});
+    let h = harness_for("java", "java", &[("jdtls", caps)], &[]);
+    let server = h.launcher.state("jdtls");
+    let compile = Arc::new(Gate::default());
+    let rollback = Arc::new(Gate::default());
+    *server.responder.lock() = Some(Arc::new({
+        let compile = compile.clone();
+        let rollback = rollback.clone();
+        move |_, method, params| {
+            if method != "workspace/executeCommand" || params["command"] != "openidea.java.build" {
+                return None;
+            }
+            if params["arguments"] == json!(["wait"]) {
+                rollback.hold();
+            } else {
+                compile.hold();
+            }
+            Some(json!(1))
+        }
+    }));
+    let cancel = ide_core::CancellationToken::new();
+    let build = tokio::spawn({
+        let (mgr, root, cancel) = (h.mgr.clone(), h.root.clone(), cancel.clone());
+        async move { mgr.java_build(&root, &cancel).await }
+    });
+    eventually(|| compile.entered()).await;
+    cancel.cancel();
+    compile.open();
+    eventually(|| rollback.entered()).await;
+    assert!(!build.is_finished());
+    rollback.open();
+    assert_eq!(build.await.unwrap().unwrap_err().kind, ide_core::error::ErrorKind::Cancelled);
+    assert!(server.requested("java/buildWorkspace").is_empty());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn java_launch_serializes_the_classpath_with_the_build_lock() {
     let h = harness_for("java", "java", &[("jdtls", incremental_caps())], &[]);

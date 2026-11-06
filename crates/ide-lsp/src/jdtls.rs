@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const SERVER: &str = "jdtls";
+const PROTECTED_BUILD: &str = "openidea.java.build";
 
 pub(crate) mod configuration;
 mod formatter;
@@ -496,6 +497,19 @@ impl LspManager {
         let started = Instant::now();
         let (server, run) = self.jdtls(path, cancel).await?;
         let ready_ms = started.elapsed().as_millis();
+        Self::jdtls_request_on(&server, &run, method, params, timeout, cancel, ready_ms).await
+    }
+
+    async fn jdtls_request_on(
+        server: &Server,
+        run: &Running,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        cancel: &CancellationToken,
+        ready_ms: u128,
+    ) -> IdeResult<Value> {
+        let started = Instant::now();
         let phase = params.get("command").and_then(Value::as_str).unwrap_or(method).to_owned();
         let fut = run.peer.request::<Value, Value>(method, params, Some(cancel.clone()));
         let result = match tokio::time::timeout(timeout, fut).await {
@@ -511,7 +525,7 @@ impl LspManager {
         tracing::info!(
             phase,
             ready_ms,
-            request_ms = started.elapsed().as_millis() - ready_ms,
+            request_ms = started.elapsed().as_millis(),
             success = result.is_ok(),
             "Java launch request"
         );
@@ -617,17 +631,39 @@ impl LspManager {
     /// Incremental build of the jdtls workspace (`java/buildWorkspace`), so
     /// class files are up to date before a launch.
     pub async fn java_build(&self, path: &Path, cancel: &CancellationToken) -> IdeResult<JavaBuildStatus> {
-        let (server, _) = self.jdtls(path, cancel).await?;
-        let _lock = cancellable_wait(cancel, server.java_build_lock.lock()).await?;
-        let mut v = self.jdtls_request(path, "java/buildWorkspace", json!(false), BUILD_TIMEOUT, cancel).await?;
-        // The first build can finish the Maven import before ServiceReady is handled.
+        let started = Instant::now();
         let (server, run) = self.jdtls(path, cancel).await?;
+        let _lock = cancellable_wait(cancel, server.java_build_lock.lock()).await?;
+        let ready_ms = started.elapsed().as_millis();
+        let protected = run.caps.read().commands().iter().any(|command| command == PROTECTED_BUILD);
+        let (method, params) = if protected {
+            ("workspace/executeCommand", json!({ "command": PROTECTED_BUILD, "arguments": [] }))
+        } else {
+            ("java/buildWorkspace", json!(false))
+        };
+        let build = || async {
+            let result =
+                Self::jdtls_request_on(&server, &run, method, params.clone(), BUILD_TIMEOUT, cancel, ready_ms).await;
+            if protected && result.is_err() {
+                // JSON-RPC cancellation ends the local wait before Eclipse finishes
+                // rolling back. Drain its workspace rule before releasing the build lock.
+                let fence = json!({ "command": PROTECTED_BUILD, "arguments": ["wait"] });
+                let _ = tokio::time::timeout(
+                    BUILD_TIMEOUT,
+                    run.peer.request::<_, Value>("workspace/executeCommand", fence, None),
+                )
+                .await;
+            }
+            result
+        };
+        let mut v = build().await?;
+        // The first build can finish the Maven import before ServiceReady is handled.
         let changed = cancellable_wait(cancel, self.java_configure_compiler(&server, &run)).await??;
         // ServiceReady can update the options concurrently with that first build.
         let recheck = v.as_i64() == Some(2)
             && compiler_defaults(&server.effective_config()).as_object().is_some_and(|o| !o.is_empty());
         if changed || recheck {
-            v = self.jdtls_request(path, "java/buildWorkspace", json!(false), BUILD_TIMEOUT, cancel).await?;
+            v = build().await?;
         }
         Ok(JavaBuildStatus::from_code(v.as_i64().unwrap_or(0)))
     }

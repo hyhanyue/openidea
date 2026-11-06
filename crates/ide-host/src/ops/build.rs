@@ -719,7 +719,9 @@ pub async fn build_run(
                 items: Vec::new(),
             });
         }
-        let plan = if let Some(workspace) = ide_workspace::workspace::Workspace::load(&root)? {
+        let workspace = ide_workspace::workspace::Workspace::load(&root)?;
+        let combined_workspace = workspace.is_some();
+        let plan = if let Some(workspace) = workspace {
             let mut combined: Option<compile::BuildPlan> = None;
             for member in workspace.projects.iter().filter(|p| file.as_ref().is_none_or(|f| f.starts_with(p))) {
                 let settings = ide_workspace::SettingsStore::load(&config_dir, Some(member)).effective();
@@ -751,9 +753,10 @@ pub async fn build_run(
                 &settings,
             )
         };
-        // An explicit Maven build must not change outputs during a launch rollback.
-        let _maven_output_guard =
-            (plan.system == compile::BuildSystem::Maven).then(|| project.java_launch_snapshots.lock());
+        // A build tool invoked by the IDE must not write outputs during a launch rollback.
+        let _java_output_guard = (combined_workspace
+            || matches!(plan.system, compile::BuildSystem::Maven | compile::BuildSystem::Gradle))
+        .then(|| project.java_launch_snapshots.blocking_lock());
         if token.is_cancelled() {
             return Err(IdeError::cancelled());
         }
