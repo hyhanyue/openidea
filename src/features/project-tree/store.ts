@@ -34,8 +34,9 @@ import {
   type TreeOptions,
 } from "./model";
 import { projectFs } from "./fs";
+import { javaLibraryEntries } from "./javaLibraryPath";
 import { projectViewRoots, useProjectViewRoots, type ProjectViewRootContribution } from "@/workbench/contributions";
-import { ancestorsWithin, isSameOrInside, nameOf, type PackageKind } from "./paths";
+import { ancestorsWithin, isSameOrInside, joinPath, nameOf, parentOf, type PackageKind } from "./paths";
 
 export interface ViewOptions extends TreeOptions {
   /** Select the active editor's file in the tree. */
@@ -110,7 +111,7 @@ interface ProjectTreeState {
   editing: Editing | null;
   clipboard: Clipboard | null;
   /** A path to select (and scroll to) once its row is visible. */
-  revealRequest: { path: string; focus: boolean; seq: number } | null;
+  revealRequest: { path: string; focus: boolean; seq: number; key?: string } | null;
   /** Folder key highlighted as drop target. */
   dropTarget: string | null;
   mode: ViewMode;
@@ -569,15 +570,64 @@ export function dropOutlines(paths: readonly string[]) {
 
 let revealSeq = 0;
 
+/** Resolves editor URIs to rows before revealing them. */
+export async function revealEditorPath(
+  path: string,
+  { focus = false, switchPane = false, signal }: { focus?: boolean; switchPane?: boolean; signal?: AbortSignal } = {},
+): Promise<boolean> {
+  if (!path.startsWith("jdt://")) {
+    if (switchPane && !modeShows(path)) setViewMode("project");
+    return revealPath(path, focus);
+  }
+
+  const { root: project, mode } = get();
+  const libraries = useProjectViewRoots.getState().roots.get("externalLibraries");
+  if (!project || !libraries || (!switchPane && mode !== "project" && mode !== "unity")) return false;
+  const seq = ++revealSeq;
+  const gen = generation;
+  const stillCurrent = () =>
+    !signal?.aborted &&
+    seq === revealSeq &&
+    gen === generation &&
+    useProjectViewRoots.getState().roots.get(libraries.id) === libraries;
+  const roots = extraFolders([libraries]).flatMap((r) => (r.path?.endsWith("!") ? [r.path] : []));
+  for (const { root, entries } of javaLibraryEntries(path, roots)) {
+    let loadedParent: string | null = null;
+    for (const entry of entries) {
+      const target = joinPath(root, entry);
+      const parent = parentOf(target);
+      if (parent !== loadedParent) {
+        await loadDir(parent);
+        if (!stillCurrent()) return false;
+        loadedParent = parent;
+      }
+      if (
+        !get()
+          .listings.get(parent)
+          ?.some((file) => file.path === target && !isDirEntry(file))
+      )
+        continue;
+      if (switchPane && (!currentModel().keyOfPath.has(root) || !modeShows(target))) setViewMode("project");
+      return revealPath(target, focus, root);
+    }
+  }
+  return false;
+}
+
 /** Expands the ancestors of `path` and selects it once visible. */
-export function revealPath(path: string, focus = false) {
+export function revealPath(path: string, focus = false, archiveRoot?: string) {
+  const seq = ++revealSeq;
   const { expanded } = get();
   const project = get().root;
-  const root = project ? (memberRootOf(path) ?? (isSameOrInside(path, project) ? project : extraRootOf(path))) : null;
+  const root = project
+    ? (archiveRoot ?? memberRootOf(path) ?? (isSameOrInside(path, project) ? project : extraRootOf(path)))
+    : null;
   if (!root) return false;
   // Library folders sit below group nodes (External Libraries › SDK), keyed in their own namespace.
   const model = currentModel();
-  const rootKey = root === project ? root : (model.keyOfPath.get(root) ?? root);
+  const modelKey = model.keyOfPath.get(root);
+  if (archiveRoot && !modelKey) return false;
+  const rootKey = root === project ? root : (modelKey ?? root);
   const folders = ancestorsWithin(root, path);
   const ancestors = [...groupAncestors(model, rootKey), ...folders.map((a) => keyLike(rootKey, a))];
   const next = new Set(expanded);
@@ -588,7 +638,8 @@ export function revealPath(path: string, focus = false) {
       changed = true;
     }
   if (changed) setExpanded(next);
-  set({ revealRequest: { path, focus, seq: ++revealSeq } });
+  const key = archiveRoot ? keyLike(rootKey, path) : undefined;
+  set({ revealRequest: { path, focus, seq, key } });
   for (const a of folders) void loadDir(a);
   return true;
 }

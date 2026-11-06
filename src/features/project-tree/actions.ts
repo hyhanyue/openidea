@@ -38,9 +38,8 @@ import {
   collapseAll,
   currentModel,
   expandAll,
-  modeShows,
   reloadAll,
-  revealPath,
+  revealEditorPath,
   setViewMode,
   setViewOption,
   useProjectTree,
@@ -99,12 +98,12 @@ function showProjectView(focus: boolean) {
 }
 
 /** Selects `path` (default: the active editor's file) in the project view. */
-export function selectInProjectView(path?: string | null, focus = true) {
+async function selectInProjectView(path?: string | null, focus = true) {
   const target = path ?? maybeEditorService()?.activePath() ?? null;
-  if (!target) return false;
-  if (!modeShows(target)) setViewMode("project");
+  if (!target) return;
+  const reveal = revealEditorPath(target, { focus, switchPane: true });
   showProjectView(focus);
-  return revealPath(target, focus);
+  await reveal;
 }
 
 /**
@@ -200,9 +199,9 @@ export function registerProjectActions(): () => void {
       category: "Navigate",
       when: OPEN,
       keywords: ["locate", "reveal", "show in"],
-      run: ({ arg }) => {
+      run: async ({ arg }) => {
         const path = typeof arg === "string" ? arg : (arg as { path?: string } | undefined)?.path;
-        if (path) return void selectInProjectView(path);
+        if (path) return selectInProjectView(path);
         const target = maybeEditorService()?.activePath() ?? leadNode()?.path;
         if (target) showSelectIn(target);
       },
@@ -214,7 +213,7 @@ export function registerProjectActions(): () => void {
       icon: "locate",
       when: OPEN,
       keywords: ["locate", "reveal", "scroll from source", "select opened file"],
-      run: ({ arg }) => void selectInProjectView(typeof arg === "string" ? arg : null),
+      run: ({ arg }) => selectInProjectView(typeof arg === "string" ? arg : null),
     },
     {
       id: "project.reveal",
@@ -222,7 +221,7 @@ export function registerProjectActions(): () => void {
       category: "Project View",
       hidden: true,
       when: OPEN,
-      run: ({ arg }) => void selectInProjectView(typeof arg === "string" ? arg : null, false),
+      run: ({ arg }) => selectInProjectView(typeof arg === "string" ? arg : null, false),
     },
     {
       id: "project.newFile",

@@ -85,7 +85,7 @@ import {
   clearRevealRequest,
   loadDir,
   loadOutline,
-  revealPath,
+  revealEditorPath,
   selectModel,
   setDropTarget,
   setExpanded,
@@ -463,11 +463,11 @@ export function ProjectView() {
   // Select a revealed path once its row exists.
   useEffect(() => {
     if (!revealRequest) return;
-    const { path, focus, seq } = revealRequest;
-    const exact = model.keyOfPath.get(path);
+    const { path, focus, seq, key: targetKey } = revealRequest;
+    const exact = targetKey ? model.byKey.get(targetKey)?.key : model.keyOfPath.get(path);
     const loadingAncestors = info.pending.some((p) => p === path || isInside(path, p));
     if (!exact && loadingAncestors) return;
-    const key = exact ?? nodeKeyFor(model, path);
+    const key = exact ?? (targetKey ? null : nodeKeyFor(model, path));
     clearRevealRequest(seq);
     if (!key || !info.visible.has(key)) return;
     revealing.current = true;
@@ -479,7 +479,10 @@ export function ProjectView() {
   // Autoscroll from source: follow the active editor.
   const activePath = useEditorRegistry((s) => s.active?.ctx.path ?? null);
   useEffect(() => {
-    if (options.autoscrollFromSource && activePath) revealPath(activePath, false);
+    if (!options.autoscrollFromSource || !activePath) return;
+    const controller = new AbortController();
+    void revealEditorPath(activePath, { signal: controller.signal });
+    return () => controller.abort();
   }, [activePath, options.autoscrollFromSource]);
 
   const isExpandable = useCallback(

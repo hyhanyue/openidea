@@ -6,6 +6,7 @@
  */
 import { isClassFile } from "./classFiles";
 import { call, commands, type VirtualDocument } from "./ipc";
+import { ipcPath } from "./paths";
 
 /** Server document URIs, including decompiled disk classes; drive letters remain paths. */
 export function isVirtualUri(s: string | null | undefined): boolean {
@@ -13,15 +14,19 @@ export function isVirtualUri(s: string | null | undefined): boolean {
   return !!m && (m[1]!.toLowerCase() !== "file" || isClassFile(s!));
 }
 
+function decodeUriPart(part: string): string | null {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return null;
+  }
+}
+
 /** Last path segment of a URI (without query / fragment), e.g. `SpringApplication.class`. */
 export function virtualName(uri: string): string {
   const rest = uri.replace(/^[^:]+:(\/\/)?/, "").split(/[?#]/)[0]!;
   const seg = rest.split("/").filter(Boolean).pop() ?? uri;
-  try {
-    return decodeURIComponent(seg);
-  } catch {
-    return seg;
-  }
+  return decodeUriPart(seg) ?? seg;
 }
 
 /** The URI's path without its last segment, e.g. `jdt://contents/x.jar/org.example`. */
@@ -40,31 +45,68 @@ export function virtualContainer(uri: string): string {
   // `jar:///…/spring-boot-3.5.16.jar!/org/springframework/boot/X.class` → `spring-boot-3.5.16.jar › org.springframework.boot`
   const jar = scheme === "jar" ? /^jar:(?:file:)?(?:\/\/)?(.*?)!\/(.*)$/.exec(uri.split(/[?#]/)[0]!) : null;
   if (jar) {
-    const decode = (s: string) => {
-      try {
-        return decodeURIComponent(s);
-      } catch {
-        return s;
-      }
-    };
-    const archive = decode(jar[1]!.split("/").pop() ?? jar[1]!);
-    const pkg = jar[2]!.split("/").slice(0, -1).map(decode).join(".");
-    return pkg ? `${archive} › ${pkg}` : archive;
+    const archive = jar[1]!.split("/").pop() ?? jar[1]!;
+    const pkg = jar[2]!
+      .split("/")
+      .slice(0, -1)
+      .map((part) => decodeUriPart(part) ?? part)
+      .join(".");
+    const name = decodeUriPart(archive) ?? archive;
+    return pkg ? `${name} › ${pkg}` : name;
   }
   const rest = uri.replace(/^[^:]+:(\/\/)?/, "").split(/[?#]/)[0]!;
   const segs = rest
     .split("/")
     .filter(Boolean)
-    .map((s) => {
-      try {
-        return decodeURIComponent(s);
-      } catch {
-        return s;
-      }
-    });
+    .map((part) => decodeUriPart(part) ?? part);
   segs.pop();
   if (scheme === "jdt" && segs[0] === "contents") segs.shift();
   return segs.join(" › ");
+}
+
+/** Archive identity and class/source entries from a JDT LS class-file URI. */
+export function jdtClassLocation(
+  uri: string,
+): { archive: string; module: string | null; classEntry: string; sourceEntry: string } | null {
+  const base = uri.split("#", 1)[0]!;
+  const query = base.indexOf("?");
+  if (query < 0) return null;
+  const parts = /^jdt:\/\/contents\/([^/]+)\/(?:([^/]*)\/)?([^/]+)$/.exec(base.slice(0, query));
+  if (!parts) return null;
+  const container = decodeUriPart(parts[1]!);
+  const pkg = decodeUriPart(parts[2] ?? "");
+  const name = decodeUriPart(parts[3]!);
+  if (pkg === null || !name) return null;
+
+  // The query is an Eclipse Java element handle. Its root path follows the project
+  // name. A backslash escapes handle delimiters, including path separators.
+  const handle = decodeUriPart(base.slice(query + 1));
+  if (!handle) return null;
+  const root = /^=[^/]+\/((?:\\.|[^\\<(`=])+)(?:`([^=<(/]+))?(?=[=<(])/.exec(handle);
+  if (!root) return null;
+  const archive = ipcPath(root[1]!.replace(/\\(.)/g, "$1")).replace(/^\/(?=[A-Za-z]:\/)/, "");
+  if (!/^(?:\/|[A-Za-z]:\/)/.test(archive) || !/\.(?:jar|jmod)$/i.test(archive) || /\0/.test(archive)) return null;
+  const module =
+    root[2] ?? (archive.endsWith("/jrt-fs.jar") ? container : /\/jmods\/([^/]+)\.jmod$/.exec(archive)?.[1]);
+
+  // The URI path can name the original source file (Outer.java), while the handle
+  // still names the binary file (Outer$Inner.class).
+  const className =
+    /^(?:\\.|[^\\<])*<(?:\\.|[^\\('])*[(']([^/\\[&]+\.class)(?=$|[[&])/.exec(handle.slice(root[0].length))?.[1] ??
+    (/\.(?:java|class)$/.test(name) ? name.replace(/\.java$/, ".class") : null);
+  const segments = pkg ? pkg.split(".") : [];
+  if (
+    !className ||
+    [...segments, name, className].some((part) => !part || part === "." || part === ".." || /[\\/\0]/.test(part))
+  )
+    return null;
+  const prefix = segments.length ? `${segments.join("/")}/` : "";
+  return {
+    archive,
+    module: module && /^[\w$]+(?:\.[\w$]+)*$/.test(module) ? module : null,
+    classEntry: prefix + className,
+    sourceEntry: prefix + name.replace(/\.class$/, ".java"),
+  };
 }
 
 const cache = new Map<string, Promise<VirtualDocument>>();
