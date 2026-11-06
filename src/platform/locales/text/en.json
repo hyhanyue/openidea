@@ -1,4 +1,6 @@
 {
+  "Cannot reveal in {fileManager}": "Cannot reveal in {fileManager}",
+  "This SSH project has no local filesystem mapping.": "This SSH project has no local filesystem mapping.",
   "Cannot copy reference": "Cannot copy reference",
   "Connect through:": "Connect through:",
   "Connect through": "Connect through",

@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { closePopup, useLspPopup } from "@/editor/lsp/popupStore";
+import { showFilePathPopup } from "./filePath";
 import { MEMBER_PREFIX, type ProjectNode } from "./model";
 import {
   canPaste,
@@ -7,12 +10,13 @@ import {
   importExternal,
   paste,
   refreshOsClipboard,
+  revealInFinder,
   revealablePath,
   selectionAfterDelete,
   transfer,
   topLevelPaths,
 } from "./operations";
-import { IpcError } from "@/platform/ipc";
+import { IpcError, type RemoteSession } from "@/platform/ipc";
 import { closeFileRefactorDialog, pendingFileRefactorDialog } from "./FileRefactorDialogs";
 import { useRemote } from "@/platform/remote";
 import { usePlatform } from "@/platform/platformInfo";
@@ -23,6 +27,8 @@ import { setOsClipboardForTests } from "./clipboard";
 
 let fs: MemoryFs;
 const notify = vi.fn();
+
+vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn() }));
 
 describe("file names follow the execution host", () => {
   const platform = usePlatform.getState();
@@ -454,14 +460,29 @@ describe("project clipboard ownership", () => {
   });
 });
 
-describe("revealablePath", () => {
+describe("reveal in the local file manager", () => {
   const platform = usePlatform.getState();
+  const ssh: RemoteSession = {
+    target: { kind: "ssh", config: "host" },
+    root: "/srv/remote-only",
+    host: "host",
+    os: "linux",
+    commands: [],
+  };
+
+  beforeEach(() => {
+    vi.mocked(revealItemInDir).mockClear();
+    provideNotificationService({ notify });
+    notify.mockClear();
+  });
+
   afterEach(() => {
     usePlatform.setState(platform);
     useRemote.setState({ session: null });
+    closePopup();
   });
 
-  it("translates distro paths to the \\\\wsl.localhost share for a WSL session on Windows", () => {
+  it("translates a WSL selection to the \\\\wsl.localhost share on Windows", async () => {
     usePlatform.setState({ os: "windows" });
     useRemote.setState({
       session: {
@@ -476,20 +497,63 @@ describe("revealablePath", () => {
       "\\\\wsl.localhost\\Ubuntu-24.04\\home\\me\\app\\src\\main.rs",
     );
     expect(revealablePath("/")).toBe("\\\\wsl.localhost\\Ubuntu-24.04\\");
+    await revealInFinder([node("/home/me/app/src/main.rs"), node("/", true)]);
+    expect(revealItemInDir).toHaveBeenCalledExactlyOnceWith([
+      "\\\\wsl.localhost\\Ubuntu-24.04\\home\\me\\app\\src\\main.rs",
+      "\\\\wsl.localhost\\Ubuntu-24.04\\",
+    ]);
+    expect(notify).not.toHaveBeenCalled();
   });
 
-  it("leaves paths alone for local projects, SSH sessions and non-Windows desktops", () => {
-    usePlatform.setState({ os: "windows" });
-    useRemote.setState({
-      session: { target: { kind: "ssh", config: "host" }, root: "/p", host: "host", os: "linux", commands: [] },
+  it.each([
+    { os: "macos", fileManager: "Finder" },
+    { os: "windows", fileManager: "Explorer" },
+    { os: "linux", fileManager: "Files" },
+  ])("reports an unmapped SSH selection on $os", async ({ os, fileManager }) => {
+    usePlatform.setState({ os });
+    useRemote.setState({ session: ssh });
+    await revealInFinder([node("/srv/remote-only/package.json"), node("/tmp", true)]);
+    expect(revealItemInDir).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledExactlyOnceWith({
+      level: "warning",
+      title: "Cannot reveal in " + fileManager,
+      body: "This SSH project has no local filesystem mapping.",
     });
-    expect(revealablePath("/home/me/app")).toBe("/home/me/app");
-    useRemote.setState({ session: null });
-    expect(revealablePath("C:\\work\\app")).toBe("C:\\work\\app");
+  });
+
+  it("passes a local selection to the opener unchanged", async () => {
+    await revealInFinder([node("/srv/remote-only/package.json")]);
+    expect(revealItemInDir).toHaveBeenCalledExactlyOnceWith("/srv/remote-only/package.json");
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("leaves WSL paths alone on non-Windows desktops", () => {
     usePlatform.setState({ os: "macos" });
     useRemote.setState({
       session: { target: { kind: "wsl", distro: "Ubuntu" }, root: "/p", host: "Ubuntu", os: "linux", commands: [] },
     });
     expect(revealablePath("/home/me/app")).toBe("/home/me/app");
+  });
+
+  it("blocks an SSH ancestor selected from the File Path popup", async () => {
+    usePlatform.setState({ os: "macos" });
+    useRemote.setState({ session: ssh });
+    showFilePathPopup("/srv/remote-only/package.json");
+    const popup = useLspPopup.getState().popup;
+    expect(popup?.kind).toBe("list");
+    if (popup?.kind !== "list") return;
+    expect(popup.items.map((item) => item.id)).toEqual([
+      "/srv/remote-only/package.json",
+      "/srv/remote-only",
+      "/srv",
+      "/",
+    ]);
+    await popup.items[3]!.run();
+    expect(revealItemInDir).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledExactlyOnceWith({
+      level: "warning",
+      title: "Cannot reveal in Finder",
+      body: "This SSH project has no local filesystem mapping.",
+    });
   });
 });

@@ -4950,6 +4950,7 @@
   "Go to Previous Splitter": "转到上一个拆分器",
   "File Path": "文件路径",
   "Cannot reveal in {fileManager}": "无法在{fileManager}中显示",
+  "This SSH project has no local filesystem mapping.": "此 SSH 项目没有本地文件系统映射。",
   "Surround with Live Template": "用实时模板包围",
   "Surround with Live Template…": "用实时模板包围…",
   "Quick Evaluate Expression": "快速计算表达式",

@@ -822,28 +822,40 @@ export async function copyPaths(kind: PathKind, nodes: ProjectNode[] = selectedN
 }
 
 /**
- * The path the local OS's file manager can open: in a WSL session the node
- * paths are inside the distro (`/home/…`), which `revealItemInDir` reads as
- * local paths — translate them to `\\wsl.localhost\<distro>\…` UNC shares.
+ * SSH paths have no local mapping. On Windows, WSL paths can be opened through
+ * the distro's `\\wsl.localhost\<distro>\…` UNC share.
  */
-export function revealablePath(path: string): string {
+export function revealablePath(path: string): string | null {
   const session = useRemote.getState().session;
+  if (session?.target.kind === "ssh") return null;
   if (session?.target.kind !== "wsl" || usePlatform.getState().os !== "windows") return path;
   if (!path.startsWith("/")) return path;
   return `\\\\wsl.localhost\\${session.target.distro}${path.replaceAll("/", "\\")}`;
 }
 
-export async function revealInFinder(nodes: ProjectNode[] = selectedNodes()) {
-  const paths = nodes.map((n) => revealablePath(n.path));
-  if (!paths.length) return;
+export function revealInFinder(nodes: ProjectNode[] = selectedNodes()) {
+  return revealPathsInFinder(nodes.map((node) => node.path));
+}
+
+export async function revealPathsInFinder(paths: readonly string[]) {
+  if (paths.length === 0) return;
+  const desktop = usePlatform.getState().os;
+  const fileManager = desktop === "windows" ? "Explorer" : desktop === "linux" ? "Files" : "Finder";
+  const title = tx`Cannot reveal in ${fileManager}`;
+  const localPaths = paths.map(revealablePath).filter((path) => path !== null);
+  if (localPaths.length !== paths.length) {
+    notifications().notify({
+      level: "warning",
+      title,
+      body: tx("This SSH project has no local filesystem mapping."),
+    });
+    return;
+  }
   try {
     const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-    await revealItemInDir(paths.length === 1 ? paths[0]! : paths);
+    await revealItemInDir(localPaths.length === 1 ? localPaths[0]! : localPaths);
   } catch (e) {
-    // Same names as contextMenu.revealLabel (kept local: contextMenu imports
-    // this module, so importing it back would be a cycle).
-    const desktop = usePlatform.getState().os;
-    fail(`Cannot reveal in ${desktop === "windows" ? "Explorer" : desktop === "linux" ? "Files" : "Finder"}`, e);
+    fail(title, e);
   }
 }
 
