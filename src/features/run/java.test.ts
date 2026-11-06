@@ -13,7 +13,7 @@ import { buildRows } from "./ConfigChooser";
 import { jdwpLaunch } from "./javaDebug";
 import { firstTopLevelType, jvmMainCandidates, scanJvmTargets } from "./jvmTargets";
 import { adoptTemporary, applyJvmReports, MAX_TEMPORARY, saveTemporary, testReportEvents, useRun } from "./store";
-import { TestResults } from "./testing";
+import { jvmParser, parseAll, TestResults } from "./testing";
 import { detectRunTargets, targetConfig } from "./targets";
 
 const cfg = (over: Partial<RunConfig> & { id: string; kind: string }): RunConfig => ({
@@ -425,11 +425,25 @@ describe("JUnit XML reports", () => {
 
   it("keeps matching classes and methods from separate Maven modules distinct", () => {
     const tests = new TestResults();
-    tests.apply([{ type: "result", path: ["a.SharedTest", "same"], status: "failed" }]);
+    tests.apply(
+      parseAll(
+        jvmParser(),
+        `[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.1 s -- in a.SharedTest
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.1 s <<< FAILURE! -- in a.SharedTest
+[ERROR] a.SharedTest.same -- Time elapsed: 0.1 s <<< FAILURE!
+java.lang.AssertionError: from beta
+	at a.SharedTest.same(SharedTest.java:18)`,
+      ),
+    );
     const shared = { className: "a.SharedTest", name: "same", durationMs: null, message: null, output: null };
     applyJvmReports(tests, [
       { ...shared, module: "alpha", status: "passed" },
-      { ...shared, module: "beta", status: "failed", output: "at a.SharedTest.same(SharedTest.java:18)" },
+      {
+        ...shared,
+        module: "beta",
+        status: "failed",
+        output: "java.lang.AssertionError: from beta\n\tat a.SharedTest.same(SharedTest.java:18)",
+      },
     ]);
     expect(tests.roots.map((n) => n.name)).toEqual(["alpha/", "beta/"]);
     expect(tests.counts()).toMatchObject({ passed: 1, failed: 1, total: 2 });
@@ -437,6 +451,48 @@ describe("JUnit XML reports", () => {
       path: ["beta/", "a.SharedTest", "same"],
       location: { path: "a/SharedTest.java", line: 18 },
     });
+  });
+
+  it.each([
+    { name: "all matching XML passed", failures: 1, reportedFailure: null, expected: 1 },
+    { name: "the XML failure has different output", failures: 1, reportedFailure: "from XML", expected: 2 },
+    {
+      name: "only one of two failures has XML",
+      failures: 2,
+      reportedFailure: "from an unreported module",
+      expected: 2,
+    },
+  ])("keeps an unscoped Maven failure when $name", ({ failures, reportedFailure, expected }) => {
+    const tests = new TestResults();
+    const passed = "[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.1 s -- in demo.SameTest";
+    const failed = `[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.1 s <<< FAILURE! -- in demo.SameTest
+[ERROR] demo.SameTest.same -- Time elapsed: 0.1 s <<< FAILURE!
+java.lang.AssertionError: from an unreported module
+	at demo.SameTest.same(SameTest.java:42)`;
+    tests.apply(parseAll(jvmParser(), [passed, ...Array<string>(failures).fill(failed)].join("\n")));
+    const shared = { className: "demo.SameTest", name: "same", durationMs: null, message: null, output: null };
+    applyJvmReports(tests, [
+      { ...shared, module: "a", status: "passed" },
+      { ...shared, module: "a", name: "aOnly", status: "passed" },
+      ...(reportedFailure
+        ? [
+            {
+              ...shared,
+              module: "b",
+              status: "failed" as const,
+              output: `java.lang.AssertionError: ${reportedFailure}`,
+            },
+          ]
+        : []),
+    ]);
+    expect(tests.get("a/\0demo.SameTest\0same")?.own).toBe("passed");
+    expect(tests.get("a/\0demo.SameTest\0aOnly")?.own).toBe("passed");
+    expect(tests.get("demo.SameTest\0same")).toMatchObject({
+      own: "failed",
+      location: { path: "demo/SameTest.java", line: 42 },
+      output: expect.arrayContaining(["java.lang.AssertionError: from an unreported module"]),
+    });
+    expect(tests.counts()).toMatchObject({ passed: 2, failed: expected });
   });
 
   it("locate Kotlin tests with spaces in their names, behind a class loader prefix", () => {

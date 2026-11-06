@@ -1,5 +1,5 @@
 use ide_run::RunConfig;
-use ide_run::junit::{MAVEN_RUN_PROPERTY, ReportPlan};
+use ide_run::junit::{MAVEN_RUN_PROPERTY, MavenReportModule, ReportPlan};
 use ide_run::wrap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,7 +35,7 @@ pub(super) fn prepare(root: &Path, config: &mut RunConfig, mut scopes: Vec<PathB
     if wrap::uses_shell(config, &cwd) || (config.detected && config.id.starts_with(ide_run::EXTERNAL_PREFIX)) {
         // The direct Maven arguments are unavailable for shell or plugin launchers.
         return Some(ReportPlan::Maven {
-            modules: vec![dunce::canonicalize(cwd).ok()?],
+            modules: vec![MavenReportModule { dir: dunce::canonicalize(cwd).ok()?, report_dirs: Vec::new() }],
             root: root.to_path_buf(),
             marker: None,
         });
@@ -88,7 +88,8 @@ pub(super) fn prepare(root: &Path, config: &mut RunConfig, mut scopes: Vec<PathB
         scopes.push(dir.to_path_buf());
     }
     let mut profiles = Vec::new();
-    let mut properties = HashMap::new();
+    let mut properties: HashMap<String, String> = env.iter().map(|(k, v)| (format!("env.{k}"), v.clone())).collect();
+    properties.insert("maven.multiModuleProjectDirectory".into(), base.to_string_lossy().into_owned());
     for args in [&file_args, &cli] {
         profiles.extend(
             option_values(args, &["-P", "--activate-profiles"], Some("-P"))
@@ -105,20 +106,28 @@ pub(super) fn prepare(root: &Path, config: &mut RunConfig, mut scopes: Vec<PathB
             .next()
             .and_then(|p| ide_build::maven::local_repository_of(&cwd.join(p)))
     });
-    let mut modules = ide_build::maven::test_reactor_dirs(&pom, &scopes, local_repo, &profiles, &properties);
+    let candidates = ide_build::maven::test_reactor_modules(&pom, &scopes, local_repo, &profiles, &properties);
+    let needs_jvm_marker = candidates.iter().any(|m| m.needs_jvm_marker);
+    let mut modules: Vec<_> =
+        candidates.into_iter().map(|m| MavenReportModule { dir: m.dir, report_dirs: m.report_dirs }).collect();
     if modules.is_empty() {
-        modules.push(dir.to_path_buf());
+        modules.push(MavenReportModule { dir: dir.to_path_buf(), report_dirs: Vec::new() });
     }
 
-    let marker = (modules.len() > 1).then(|| {
-        // Surefire and Failsafe include Maven user properties in their standard XML.
-        // This identifies reports from the real reactor (including -pl, -N, and failures).
-        let epoch = std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_nanos();
-        let marker = format!("{}-{epoch}-{}", std::process::id(), ide_core::RunId::next().0);
-        config.args.insert(0, format!("-D{MAVEN_RUN_PROPERTY}={marker}"));
-        marker
-    });
-    Some(ReportPlan::Maven { modules, root: root.to_path_buf(), marker })
+    // Only reports tagged by this Maven invocation can be attributed to it.
+    let epoch = std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_nanos();
+    let marker = format!("{}-{epoch}-{}", std::process::id(), ide_core::RunId::next().0);
+    let option = format!("-D{MAVEN_RUN_PROPERTY}={marker}");
+    if needs_jvm_marker {
+        // With promotion disabled the fork needs the property at JVM startup.
+        // Preserve the user's argLine and effective JAVA_TOOL_OPTIONS.
+        let key = "JAVA_TOOL_OPTIONS";
+        let existing = env.get(key).map_or("", String::as_str).trim_end();
+        let options = if existing.is_empty() { option.clone() } else { format!("{existing} {option}") };
+        config.env.insert(key.into(), options);
+    }
+    config.args.insert(0, option);
+    Some(ReportPlan::Maven { modules, root: root.to_path_buf(), marker: Some(marker) })
 }
 
 fn pom_path(cwd: &Path, file: &str) -> PathBuf {

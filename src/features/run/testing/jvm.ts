@@ -116,7 +116,13 @@ export function jvmParser(): TestOutputParser {
         const cls = surefire3 ? m[1]! : m[2]!;
         const method = surefire3 ? m[2]! : m[1]!;
         const path = [cls, method];
-        events.push({ type: "result", path, status: "failed", durationMs: parseDuration(m[3]) });
+        events.push({
+          type: "result",
+          path,
+          status: "failed",
+          durationMs: parseDuration(m[3]),
+          mavenCounts: { passed: 0, failed: 1, skipped: 0 },
+        });
         startFailure(path);
         return events;
       }
@@ -129,6 +135,7 @@ export function jvmParser(): TestOutputParser {
           path: [m[6]!],
           status: failed > 0 ? "failed" : skipped === run ? "skipped" : "passed",
           durationMs: parseDuration(m[5]),
+          mavenCounts: { passed: run - failed - skipped, failed, skipped },
         });
         failure = null;
         return events;

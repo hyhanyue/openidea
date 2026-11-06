@@ -172,8 +172,14 @@ async fn maven_test_reports_include_reactor_modules() {
     fs::write(
         reactor.join("build.xml"),
         concat!(
-            "<project><artifactId>parent</artifactId><packaging>pom</packaging>",
+            "<project><groupId>demo</groupId><artifactId>parent</artifactId><version>1</version><packaging>pom</packaging>",
             "<modules><module>alpha</module><module>parts</module></modules>",
+            "<properties><reportFolder>custom-reports</reportFolder></properties>",
+            "<build><pluginManagement><plugins><plugin><artifactId>maven-failsafe-plugin</artifactId>",
+            "<executions><execution><id>integration</id><configuration>",
+            "<reportsDirectory>${project.build.directory}/${reportFolder}</reportsDirectory>",
+            "<promoteUserPropertiesToSystemProperties>false</promoteUserPropertiesToSystemProperties>",
+            "</configuration></execution></executions></plugin></plugins></pluginManagement></build>",
             "<profiles><profile><id>extra</id><modules><module>${extra}</module></modules>",
             "<properties><extra>extra</extra></properties></profile></profiles></project>"
         ),
@@ -185,6 +191,16 @@ async fn maven_test_reports_include_reactor_modules() {
         fs::create_dir_all(dir.join("target/failsafe-reports")).unwrap();
         fs::write(dir.join("pom.xml"), format!("<project><artifactId>{module}</artifactId></project>")).unwrap();
     }
+    fs::create_dir_all(reactor.join("parts/beta/out/custom-reports")).unwrap();
+    fs::write(
+        reactor.join("parts/beta/pom.xml"),
+        concat!(
+            "<project><parent><groupId>demo</groupId><artifactId>parent</artifactId><version>1</version>",
+            "<relativePath>../../build.xml</relativePath></parent><artifactId>beta</artifactId>",
+            "<build><directory>out</directory></build></project>"
+        ),
+    )
+    .unwrap();
     fs::write(
         reactor.join("parts/pom.xml"),
         "<project><artifactId>parts</artifactId><packaging>pom</packaging><modules><module>beta</module></modules></project>",
@@ -197,11 +213,9 @@ async fn maven_test_reports_include_reactor_modules() {
         r#"#!/bin/sh
 set -eu
 token=previous-run
-for arg; do
-    case "$arg" in -Dopenidea.testRun=*) token=${arg#*=} ;; esac
-done
+case "$1" in -Dopenidea.testRun=*) token=${1#*=}; shift ;; esac
 write_report() {
-    printf '<testsuite><properties><property name="openidea.testRun" value="%s"/></properties><testcase classname="%s" name="same">%s</testcase></testsuite>' "$2" "$3" "$4" > "$1"
+    printf '<testsuite><properties><property name="openidea.testRun" value="%s"/>%s</properties><testcase classname="%s" name="same">%s</testcase></testsuite>' "$2" "${5:-}" "$3" "$4" > "$1"
 }
 case "$1" in
     gradle)
@@ -220,7 +234,13 @@ case "$1" in
             *-pl*) write_report reactor/alpha/target/surefire-reports/TEST-Alpha.xml "$token" SharedTest '' ;;
             *)
                 write_report reactor/alpha/target/surefire-reports/TEST-Alpha.xml "$token" SharedTest ''
-                write_report reactor/parts/beta/target/failsafe-reports/TEST-Beta.xml "$token" SharedTest '<failure message="beta"/>'
+                basedir="<property name=\"basedir\" value=\"$PWD/reactor/parts/beta\"/>"
+                report_dir=reactor/parts/beta/out/custom-reports
+                case "$JAVA_TOOL_OPTIONS" in *"-Dopenidea.testRun=$token") ;; *) exit 2 ;; esac
+                write_report "$report_dir/TEST-Beta.xml" "$token" SharedTest '<failure message="beta"/>' "$basedir"
+                write_report "$report_dir/TEST-Stale.xml" previous-run StaleTest '' "$basedir"
+                write_report "$report_dir/TEST-Untagged.xml" '' UntaggedTest '' "$basedir"
+                write_report "$report_dir/TEST-Unknown.xml" "$token" UnknownOwnerTest ''
                 write_report reactor/extra/target/surefire-reports/TEST-Extra.xml "$token" ExtraTest ''
                 ;;
         esac

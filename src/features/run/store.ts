@@ -958,25 +958,53 @@ async function jvmReports(session: RunSession): Promise<TestCaseReport[]> {
   }
 }
 
-/** Attach console output when its class belongs to one module. XML identifies the
- * module of a shared class, where the unscoped console results are ambiguous. */
+/** Maven console paths have no module identity, even when only one module wrote XML. */
 export function applyJvmReports(tests: TestResults, reports: readonly TestCaseReport[]) {
-  const reportedClasses = new Map<string, Map<string, string[]>>();
+  const reportedClasses = new Map<
+    string,
+    { passed: number; failed: number; skipped: number; failures: Map<string, string[]> }
+  >();
   for (const r of reports) {
     if (!r.module || !r.className || !r.name) continue;
-    const path = [`${r.module}/`, r.className];
-    const simple = r.className.slice(r.className.lastIndexOf(".") + 1);
-    for (const name of new Set([r.className, simple])) {
-      const matches = reportedClasses.get(name) ?? new Map<string, string[]>();
-      matches.set(path.join("\0"), path);
-      reportedClasses.set(name, matches);
+    const coverage = reportedClasses.get(r.className) ?? {
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      failures: new Map<string, string[]>(),
+    };
+    reportedClasses.set(r.className, coverage);
+    coverage[r.status]++;
+    if (r.status === "failed") {
+      const failures = coverage.failures.get(r.name) ?? [];
+      failures.push(r.output?.trim().split("\n", 1)[0]?.trim() || r.message?.trim() || "");
+      coverage.failures.set(r.name, failures);
     }
   }
   for (const root of [...tests.roots]) {
-    const matches = reportedClasses.get(root.name);
-    if (!matches) continue;
-    if (matches.size === 1) tests.move(root.path, matches.values().next().value!);
-    else tests.remove(root.path);
+    const coverage = reportedClasses.get(root.name);
+    if (!coverage) continue;
+    for (const child of [...root.children]) {
+      if (child.own !== "failed") continue;
+      const failures = coverage.failures.get(child.name) ?? [];
+      const output = child.output.map((line) => line.trim());
+      const matched = output.length
+        ? failures.filter((detail) => {
+            const index = detail ? output.indexOf(detail) : -1;
+            if (index < 0) return false;
+            output.splice(index, 1);
+            return true;
+          }).length
+        : failures.length;
+      if (matched >= (child.mavenCounts?.failed ?? 1)) tests.remove(child.path);
+    }
+    if (root.children.length > 0) continue;
+    const counts = root.mavenCounts;
+    const remaining = (["failed", "passed", "skipped"] as const).find(
+      (status) => (counts?.[status] ?? Number(root.own === status)) > coverage[status],
+    );
+    if (remaining === root.own) continue;
+    tests.remove(root.path);
+    if (remaining) tests.apply([{ type: "result", path: root.path, status: remaining }]);
   }
   // Tests already reported by the console keep their captured output.
   tests.apply(testReportEvents(reports).filter((e) => !("path" in e) || !tests.hasResult(e.path)));

@@ -5,6 +5,8 @@
 
 export type TestStatus = "running" | "passed" | "failed" | "skipped";
 
+export type MavenCounts = Record<Exclude<TestStatus, "running">, number>;
+
 export interface TestLocation {
   path: string;
   /** 1-based, as printed. */
@@ -18,7 +20,13 @@ export interface TestLocation {
 
 export type TestEvent =
   | { type: "start"; path: string[] }
-  | { type: "result"; path: string[]; status: Exclude<TestStatus, "running">; durationMs?: number }
+  | {
+      type: "result";
+      path: string[];
+      status: Exclude<TestStatus, "running">;
+      durationMs?: number;
+      mavenCounts?: MavenCounts;
+    }
   | { type: "location"; path: string[]; location: TestLocation }
   | { type: "output"; path: string[]; line: string }
   | { type: "summary"; passed?: number; failed?: number; skipped?: number; durationMs?: number };

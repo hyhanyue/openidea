@@ -250,6 +250,20 @@ struct RawProfile {
     properties: Vec<(String, String)>,
     deps: Vec<RawDep>,
     plugins: Vec<RawPlugin>,
+    test_reports: TestReportConfig,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TestReportConfig {
+    build_dir: Option<String>,
+    report_dirs: Vec<String>,
+    promotion: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct TestReportCandidate {
+    config: TestReportConfig,
+    profile_properties: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -266,6 +280,7 @@ struct RawPom {
     managed: Vec<RawDep>,
     plugins: Vec<RawPlugin>,
     managed_plugins: Vec<RawPlugin>,
+    test_reports: TestReportConfig,
     profiles: Vec<RawProfile>,
     /// `maven-compiler-plugin` `<release>` / `<source>` of `<build><plugins>`, else of
     /// `<pluginManagement>`.
@@ -323,6 +338,32 @@ fn read_build(e: &Element, plugins: &mut Vec<RawPlugin>, managed: &mut Vec<RawPl
     managed.extend(e.list("build/pluginManagement/plugins", "plugin").into_iter().filter_map(read_plugin));
 }
 
+fn read_test_report_config(project: &Element) -> TestReportConfig {
+    let mut result = TestReportConfig {
+        build_dir: project.at("build/directory").map(|e| e.text.trim().to_owned()),
+        ..TestReportConfig::default()
+    };
+    let plugins = project
+        .list("build/plugins", "plugin")
+        .into_iter()
+        .chain(project.list("build/pluginManagement/plugins", "plugin"));
+    for plugin in plugins {
+        if !matches!(plugin.text_of("artifactId").as_deref(), Some("maven-surefire-plugin" | "maven-failsafe-plugin"))
+            || plugin.text_of("groupId").is_some_and(|g| g != "org.apache.maven.plugins")
+        {
+            continue;
+        }
+        let executions = plugin.list("executions", "execution");
+        for config in
+            plugin.child("configuration").into_iter().chain(executions.iter().filter_map(|e| e.child("configuration")))
+        {
+            result.report_dirs.extend(config.text_of("reportsDirectory"));
+            result.promotion.extend(config.text_of("promoteUserPropertiesToSystemProperties"));
+        }
+    }
+    result
+}
+
 /// `maven-compiler-plugin` `<release>` / `<source>` among the plugins at `path`.
 fn compiler_level(project: &Element, path: &str) -> Option<String> {
     project
@@ -352,6 +393,7 @@ fn read_raw(project: &Element) -> RawPom {
         parent,
         properties: read_properties(project.child("properties")),
         modules: module_names(project),
+        test_reports: read_test_report_config(project),
         deps: project.list("dependencies", "dependency").into_iter().filter_map(read_dep).collect(),
         managed: project
             .list("dependencyManagement/dependencies", "dependency")
@@ -368,6 +410,7 @@ fn read_raw(project: &Element) -> RawPom {
             id: p.text_of("id").unwrap_or_else(|| "default".into()),
             active_by_default: p.at("activation/activeByDefault").is_some_and(|a| a.text.trim() == "true"),
             modules: module_names(p),
+            test_reports: read_test_report_config(p),
             properties: read_properties(p.child("properties")),
             deps: p.list("dependencies", "dependency").into_iter().filter_map(read_dep).collect(),
             ..RawProfile::default()
@@ -439,6 +482,7 @@ struct Inherited {
     managed: Vec<RawDep>,
     plugins: Vec<RawPlugin>,
     managed_plugins: Vec<RawPlugin>,
+    test_report_configs: Vec<TestReportCandidate>,
     /// The nearest `maven-compiler-plugin` `<release>` / `<source>`: a module usually
     /// inherits its compiler level from the parent's (managed) plugin configuration.
     compiler_release: Option<String>,
@@ -609,6 +653,15 @@ impl Resolver {
         merge_by(&mut ctx.deps, &pom.deps, RawDep::key);
         merge_plugins(&mut ctx.plugins, &pom.plugins);
         merge_plugins(&mut ctx.managed_plugins, &pom.managed_plugins);
+        ctx.test_report_configs.extend(
+            std::iter::once((&pom.test_reports, &[][..]))
+                .chain(pom.profiles.iter().map(|p| (&p.test_reports, p.properties.as_slice())))
+                .filter(|(c, _)| c.build_dir.is_some() || !c.report_dirs.is_empty() || !c.promotion.is_empty())
+                .map(|(config, props)| TestReportCandidate {
+                    config: config.clone(),
+                    profile_properties: props.to_vec(),
+                }),
+        );
         if pom.compiler_release.is_some() {
             ctx.compiler_release = pom.compiler_release.clone();
         }
@@ -1267,17 +1320,75 @@ fn module_poms<'a>(
     modules
 }
 
-/// Candidate modules reachable from the POM passed to Maven. Inactive profiles can
-/// contribute candidates too: only reports tagged by the launched Maven run are used.
-pub fn test_reactor_dirs(
+pub struct MavenTestModule {
+    pub dir: PathBuf,
+    pub report_dirs: Vec<PathBuf>,
+    pub needs_jvm_marker: bool,
+}
+
+impl MavenTestModule {
+    fn from_configs(
+        dir: &Path,
+        configs: &[TestReportCandidate],
+        props: &HashMap<String, String>,
+        cli: &HashMap<String, String>,
+    ) -> MavenTestModule {
+        // Collect candidate configurations. Maven decides which profiles and executions
+        // run, and the XML must identify both the run and the module that wrote it.
+        let resolve = |value: &str, props: &HashMap<String, String>| {
+            let value = interpolate(value, props);
+            (!value.is_empty() && !value.contains("${")).then(|| dir.join(value))
+        };
+        let configs: Vec<_> = configs
+            .iter()
+            .flat_map(|candidate| {
+                let profile = (!candidate.profile_properties.is_empty()).then(|| {
+                    let mut profile = props.clone();
+                    profile.extend(candidate.profile_properties.iter().cloned());
+                    profile.extend(cli.clone());
+                    profile
+                });
+                std::iter::once(props.clone()).chain(profile).map(move |props| (&candidate.config, props))
+            })
+            .collect();
+        let target = dir.join("target");
+        let mut build_dirs = vec![target.clone()];
+        for (config, props) in &configs {
+            if let Some(build_dir) = &config.build_dir {
+                build_dirs.extend(resolve(build_dir, props));
+            }
+        }
+        build_dirs.sort();
+        build_dirs.dedup();
+
+        let mut report_dirs = Vec::new();
+        let mut needs_jvm_marker = false;
+        for (config, mut props) in configs {
+            needs_jvm_marker |= config.promotion.iter().any(|p| interpolate(p, &props).eq_ignore_ascii_case("false"));
+            for build_dir in &build_dirs {
+                props.insert("project.build.directory".into(), build_dir.to_string_lossy().into_owned());
+                report_dirs.extend(config.report_dirs.iter().filter_map(|path| resolve(path, &props)));
+            }
+        }
+        for build_dir in build_dirs.into_iter().filter(|p| p != &target) {
+            report_dirs.extend(["surefire-reports", "failsafe-reports"].map(|name| build_dir.join(name)));
+        }
+        report_dirs.sort();
+        report_dirs.dedup();
+        MavenTestModule { dir: dir.to_path_buf(), report_dirs, needs_jvm_marker }
+    }
+}
+
+/// Candidate report locations in the reactor reachable from the POM passed to Maven.
+pub fn test_reactor_modules(
     pom: &Path,
     scopes: &[PathBuf],
     local_repo: Option<PathBuf>,
     profiles: &[String],
     properties: &HashMap<String, String>,
-) -> Vec<PathBuf> {
+) -> Vec<MavenTestModule> {
     let mut resolver = Resolver::new(local_repo.or_else(default_local_repo), profiles);
-    let mut dirs = Vec::new();
+    let mut candidates: Vec<MavenTestModule> = Vec::new();
     let mut seen = HashSet::new();
     let mut pending = vec![pom.to_path_buf()];
     while let Some(path) = pending.pop() {
@@ -1290,12 +1401,16 @@ pub fn test_reactor_dirs(
         }
         let Some(pom) = resolver.pom(&path) else { continue };
         let Some(dir) = path.parent() else { continue };
-        if !dirs.iter().any(|p| p == dir) {
-            dirs.push(dir.to_path_buf());
-        }
         let ctx = resolver.context(&path, 0);
         let mut props = resolver.properties_for(&pom, &ctx, dir);
         props.extend(properties.clone());
+        let candidate = MavenTestModule::from_configs(dir, &ctx.test_report_configs, &props, properties);
+        if let Some(existing) = candidates.iter_mut().find(|m| m.dir == dir) {
+            existing.report_dirs.extend(candidate.report_dirs);
+            existing.needs_jvm_marker |= candidate.needs_jvm_marker;
+        } else {
+            candidates.push(candidate);
+        }
         let mut modules = module_poms(dir, pom.modules.iter(), &props);
         for profile in &pom.profiles {
             let mut props = props.clone();
@@ -1305,7 +1420,7 @@ pub fn test_reactor_dirs(
         }
         pending.extend(modules.into_iter().rev());
     }
-    dirs
+    candidates
 }
 
 /// Shared linkage decision for every Maven consumer, including modules outside a reactor directory.

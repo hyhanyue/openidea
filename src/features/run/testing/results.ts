@@ -1,5 +1,5 @@
 /** Folds parser events into a results tree with aggregated statuses and counts. */
-import type { TestEvent, TestLocation, TestStatus } from "./types";
+import type { MavenCounts, TestEvent, TestLocation, TestStatus } from "./types";
 
 export interface TestNode {
   id: string;
@@ -9,6 +9,7 @@ export interface TestNode {
   /** Own status (leaf result, or a suite-level hint such as jest's `FAIL file`). */
   own: TestStatus | null;
   durationMs?: number;
+  mavenCounts?: MavenCounts;
   location?: TestLocation;
   /** Failure output captured for this node. */
   output: string[];
@@ -140,6 +141,12 @@ export class TestResults {
           // A failure is sticky (jest reports `FAIL file` before its passing tests).
           if (n.own !== "failed" || e.status === "failed") n.own = e.status;
           if (e.durationMs !== undefined) n.durationMs = e.durationMs;
+          if (e.mavenCounts) {
+            const counts = (n.mavenCounts ??= { passed: 0, failed: 0, skipped: 0 });
+            counts.passed += e.mavenCounts.passed;
+            counts.failed += e.mavenCounts.failed;
+            counts.skipped += e.mavenCounts.skipped;
+          }
           break;
         }
         case "location": {

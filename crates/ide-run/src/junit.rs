@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
@@ -195,8 +197,14 @@ pub fn parse_report(xml: &str) -> Vec<TestCaseReport> {
 /// A JVM test run's report scope, captured before spawning the process.
 #[derive(Clone, Debug)]
 pub enum ReportPlan {
-    Maven { modules: Vec<PathBuf>, root: PathBuf, marker: Option<String> },
+    Maven { modules: Vec<MavenReportModule>, root: PathBuf, marker: Option<String> },
     Gradle { cwd: PathBuf },
+}
+
+#[derive(Clone, Debug)]
+pub struct MavenReportModule {
+    pub dir: PathBuf,
+    pub report_dirs: Vec<PathBuf>,
 }
 
 pub const MAVEN_RUN_PROPERTY: &str = "openidea.testRun";
@@ -206,34 +214,7 @@ impl ReportPlan {
         // Tagged reports can tolerate coarse mtimes without including an earlier Maven run.
         let coarse = started.checked_sub(Duration::from_secs(2)).unwrap_or(started);
         match self {
-            Self::Maven { modules, root, marker } => {
-                let since = if marker.is_some() { coarse } else { started };
-                let mut reports = Vec::new();
-                for dir in modules {
-                    let module = marker.as_ref().map(|_| {
-                        let rel = dir.strip_prefix(root).unwrap_or(dir);
-                        if rel.as_os_str().is_empty() { ".".into() } else { ide_core::ipc_path::to_ipc(rel) }
-                    });
-                    let target = dir.join("target");
-                    let dirs = ["surefire-reports", "failsafe-reports"].map(|path| target.join(path));
-                    let mut seen = std::collections::HashSet::new();
-                    for file in report_files(&dirs, since) {
-                        let Ok(file) = dunce::canonicalize(file) else { continue };
-                        if !file.starts_with(&target) || !seen.insert(file.clone()) {
-                            continue;
-                        }
-                        let Ok(xml) = std::fs::read_to_string(file) else { continue };
-                        if marker.as_deref().is_some_and(|marker| !has_run_marker(&xml, marker)) {
-                            continue;
-                        }
-                        reports.extend(parse_report(&xml).into_iter().map(|mut case| {
-                            case.module.clone_from(&module);
-                            case
-                        }));
-                    }
-                }
-                reports
-            }
+            Self::Maven { modules, root, marker } => maven_reports(modules, root, marker.as_deref(), started, coarse),
             Self::Gradle { cwd } => {
                 let dirs: Vec<_> = std::fs::read_dir(cwd.join("build/test-results"))
                     .into_iter()
@@ -252,14 +233,81 @@ impl ReportPlan {
     }
 }
 
-fn has_run_marker(xml: &str, marker: &str) -> bool {
-    let Some((_, properties)) = xml.split_once("<properties>") else { return false };
-    let Some((properties, _)) = properties.split_once("</properties>") else { return false };
-    properties.split("<property ").skip(1).any(|property| {
-        let Some((tag, _)) = property.split_once('>') else { return false };
-        let attrs = attrs(tag);
-        attr(&attrs, "name") == Some(MAVEN_RUN_PROPERTY) && attr(&attrs, "value") == Some(marker)
-    })
+fn maven_reports(
+    modules: &[MavenReportModule],
+    root: &Path,
+    marker: Option<&str>,
+    started: SystemTime,
+    coarse: SystemTime,
+) -> Vec<TestCaseReport> {
+    // One physical report directory can be configured in more than one module.
+    let mut dirs = BTreeMap::<PathBuf, BTreeMap<usize, bool>>::new();
+    for (index, module) in modules.iter().enumerate() {
+        let target = module.dir.join("target");
+        for configured in &module.report_dirs {
+            if let Ok(dir) = dunce::canonicalize(configured) {
+                dirs.entry(dir).or_default().entry(index).or_insert(false);
+            }
+        }
+        for name in ["surefire-reports", "failsafe-reports"] {
+            if let Ok(dir) = dunce::canonicalize(target.join(name))
+                && dir.starts_with(&target)
+            {
+                dirs.entry(dir).or_default().insert(index, true);
+            }
+        }
+    }
+
+    let since = if marker.is_some() { coarse } else { started };
+    let mut reports = vec![Vec::new(); modules.len()];
+    for (dir, owners) in dirs {
+        for file in report_files(std::slice::from_ref(&dir), since) {
+            // A file symlink could otherwise point at a report from another directory.
+            if !std::fs::symlink_metadata(&file).is_ok_and(|m| m.is_file()) {
+                continue;
+            }
+            let Ok(xml) = std::fs::read_to_string(file) else { continue };
+            let properties = report_properties(&xml);
+            if marker.is_some_and(|marker| properties.get(MAVEN_RUN_PROPERTY).map(String::as_str) != Some(marker)) {
+                continue;
+            }
+            let owner = if let Some(basedir) = properties.get("basedir").filter(|_| marker.is_some()) {
+                let Ok(basedir) = dunce::canonicalize(basedir) else { continue };
+                owners.keys().copied().find(|&index| modules[index].dir == basedir)
+            } else {
+                // Legacy reports may omit basedir. Only an exclusive default
+                // directory can supply module identity in that case.
+                owners.first_key_value().filter(|(_, default)| owners.len() == 1 && **default).map(|(&index, _)| index)
+            };
+            let Some(index) = owner else { continue };
+            let module = (modules.len() > 1).then(|| {
+                let dir = &modules[index].dir;
+                let rel = dir.strip_prefix(root).unwrap_or(dir);
+                if rel.as_os_str().is_empty() { ".".into() } else { ide_core::ipc_path::to_ipc(rel) }
+            });
+            reports[index].extend(parse_report(&xml).into_iter().map(|mut case| {
+                case.module.clone_from(&module);
+                case
+            }));
+        }
+    }
+    reports.into_iter().flatten().collect()
+}
+
+fn report_properties(xml: &str) -> BTreeMap<String, String> {
+    let Some((_, properties)) = xml.split_once("<properties>") else { return BTreeMap::new() };
+    let Some((properties, _)) = properties.split_once("</properties>") else { return BTreeMap::new() };
+    properties
+        .split("<property ")
+        .skip(1)
+        .filter_map(|property| {
+            let (tag, _) = property.split_once('>')?;
+            let attrs = attrs(tag);
+            let name = attr(&attrs, "name")?;
+            matches!(name, MAVEN_RUN_PROPERTY | "basedir").then_some(())?;
+            Some((name.to_owned(), attr(&attrs, "value")?.to_owned()))
+        })
+        .collect()
 }
 
 /// Every `TEST-*.xml` in `dirs` written at or after `since`
@@ -355,7 +403,11 @@ mod tests {
         std::fs::write(module.join("build/test-results/test/TEST-c.D.xml"), r#"<testcase classname="c.D" name="g"/>"#)
             .unwrap();
         let module = dunce::canonicalize(module).unwrap();
-        let maven = ReportPlan::Maven { modules: vec![module.clone()], root: module.clone(), marker: None };
+        let maven = ReportPlan::Maven {
+            modules: vec![MavenReportModule { dir: module.clone(), report_dirs: Vec::new() }],
+            root: module.clone(),
+            marker: None,
+        };
         let gradle = ReportPlan::Gradle { cwd: module };
         assert_eq!(maven.reports(SystemTime::UNIX_EPOCH).len(), 4);
         assert_eq!(gradle.reports(SystemTime::UNIX_EPOCH).len(), 1);
