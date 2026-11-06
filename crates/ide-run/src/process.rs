@@ -13,7 +13,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const BATCH_INTERVAL: Duration = Duration::from_millis(8);
 const BATCH_BYTES: usize = 64 * 1024;
@@ -56,6 +56,7 @@ struct Entry {
     pty: Option<Mutex<Option<Box<dyn MasterPty + Send>>>>,
     stop: Option<StopCommand>,
     output: OutputFn,
+    test_reports: Option<(crate::junit::ReportPlan, SystemTime)>,
     exited: AtomicBool,
     stopping: AtomicBool,
 }
@@ -82,6 +83,7 @@ pub struct StartOptions {
     pub python_paths: Vec<PathBuf>,
     /// Where the Ruby test reporter is installed (see [`crate::ruby_reporter`]); Ruby test runs load it.
     pub ruby_reporter: Option<PathBuf>,
+    pub test_reports: Option<crate::junit::ReportPlan>,
 }
 
 #[derive(Default)]
@@ -135,11 +137,16 @@ fn quote(s: &str) -> String {
     }
 }
 
+pub(crate) fn uses_shell(config: &RunConfig, cwd: &Path) -> bool {
+    let command = config.command.trim();
+    let looks_like_shell = command.contains(char::is_whitespace) || command.contains(SHELL_CHARS);
+    config.args.is_empty() && looks_like_shell && !cwd.join(command).is_file()
+}
+
 pub(crate) fn invocation(config: &RunConfig, cwd: &Path) -> Invocation {
     let windows = cfg!(windows);
     let command = config.command.trim();
-    let looks_like_shell = command.contains(char::is_whitespace) || command.contains(SHELL_CHARS);
-    if config.args.is_empty() && looks_like_shell && !cwd.join(command).is_file() {
+    if uses_shell(config, cwd) {
         return shell_invocation(command, windows, std::env::var("COMSPEC").ok());
     }
     let program = resolve_program(command, cwd, config, windows);
@@ -415,6 +422,7 @@ impl ProcessManager {
             cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | ide_core::process::CREATE_NO_WINDOW);
         }
 
+        let started = SystemTime::now();
         let mut child = cmd.spawn().map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => IdeError::unavailable(format!("command not found: {}", config.command)),
             _ => IdeError::from(e),
@@ -435,6 +443,7 @@ impl ProcessManager {
             pty: None,
             stop,
             output: on_output.clone(),
+            test_reports: options.test_reports.clone().map(|plan| (plan, started)),
             exited: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
         });
@@ -522,6 +531,7 @@ impl ProcessManager {
         for (k, v) in &env.vars {
             cmd.env(k, v);
         }
+        let started = SystemTime::now();
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| {
             let text = e.to_string();
             if text.contains("No such file") || text.contains("not found") {
@@ -546,6 +556,7 @@ impl ProcessManager {
             pty: Some(Mutex::new(Some(pair.master))),
             stop,
             output: on_output.clone(),
+            test_reports: options.test_reports.clone().map(|plan| (plan, started)),
             exited: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
         });
@@ -599,6 +610,14 @@ impl ProcessManager {
 
     fn entry(&self, id: RunId) -> IdeResult<Arc<Entry>> {
         self.runs.lock().get(&id).cloned().ok_or_else(|| IdeError::not_found(format!("no such run: {id}")))
+    }
+
+    pub fn test_report_run(&self, root: &Path, id: RunId) -> Option<(crate::junit::ReportPlan, SystemTime)> {
+        let entry = self.entry(id).ok()?;
+        if entry.project_root != root || !entry.exited.load(Ordering::Acquire) {
+            return None;
+        }
+        entry.test_reports.clone()
     }
 
     pub fn write_stdin(&self, id: RunId, data: &str) -> IdeResult<()> {

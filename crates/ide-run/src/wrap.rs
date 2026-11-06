@@ -90,6 +90,16 @@ pub fn find_tool(name: &str, config: &RunConfig, dir: &Path, root: &Path) -> Opt
     node_bin(name, dir, root).or_else(|| crate::which::find_executable(name, &search_path(config)))
 }
 
+/// Whether the configuration executes a shell command line instead of a direct executable.
+pub fn uses_shell(config: &RunConfig, cwd: &Path) -> bool {
+    crate::process::uses_shell(config, cwd)
+}
+
+/// The effective run environment, including env files and any inherited variables.
+pub fn run_env(root: &Path, config: &RunConfig) -> ide_core::IdeResult<std::collections::BTreeMap<String, String>> {
+    crate::process::resolved_env(root, config)
+}
+
 /// Whether `argv` runs and exits successfully (version probes); output is discarded.
 pub fn probe(argv: &[String], dir: &Path, config: &RunConfig) -> bool {
     let Some((program, args)) = argv.split_first() else { return false };

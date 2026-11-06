@@ -698,11 +698,8 @@ export const commands = {
 	runApplicationPublish: (config: RunConfig_Deserialize, classPaths: string[], mainClass: string) => typedError<null, IdeError>(__TAURI_INVOKE("run_application_publish", { config, classPaths, mainClass })),
 	runTomcatSync: (config: RunConfig_Deserialize, module: string, classPaths: string[], resourcesOnly: boolean) => typedError<boolean, IdeError>(__TAURI_INVOKE("run_tomcat_sync", { config, module, classPaths, resourcesOnly })),
 	runTomcatUpdate: (config: RunConfig_Deserialize, mode: string) => typedError<null, IdeError>(__TAURI_INVOKE("run_tomcat_update", { config, mode })),
-	/**
-	 *  Results from the JUnit XML reports (Surefire, Failsafe, Gradle) of the module at
-	 *  `module` (relative to the project root) written since `since_ms` (Unix epoch, ms).
-	 */
-	runTestReports: (module: string | null, sinceMs: number | null) => typedError<TestCaseReport[], IdeError>(__TAURI_INVOKE("run_test_reports", { module, sinceMs })),
+	/**  JUnit XML written by a finished JVM test run. */
+	runTestReports: (id: RunId) => typedError<TestCaseReport_Serialize[], IdeError>(__TAURI_INVOKE("run_test_reports", { id })),
 	/**  Maven and Gradle projects of the window's project, from the build files plus the last sync. */
 	buildModel: () => typedError<BuildModel, IdeError>(__TAURI_INVOKE("build_model")),
 	gradleLinkProjects: (paths: string[]) => typedError<BuildModel, IdeError>(__TAURI_INVOKE("gradle_link_projects", { paths })),
@@ -7450,7 +7447,26 @@ export type TerminalSettings = {
 	columnWidth?: number | null,
 };
 
-export type TestCaseReport = {
+export type TestCaseReport = TestCaseReport_Serialize | TestCaseReport_Deserialize;
+
+export type TestCaseReport_Deserialize = {
+	/**  Maven module path for a reactor run, relative to the project where possible. */
+	module?: string | null,
+	/**  Fully qualified class (`com.acme.OrderTest`, nested: `com.acme.OrderTest$Nested`). */
+	className: string,
+	/**  Method name without `()`. */
+	name: string,
+	status: TestCaseStatus,
+	durationMs: number | null,
+	/**  Failure / error / skip message. */
+	message: string | null,
+	/**  Failure stack trace and captured output. */
+	output: string | null,
+};
+
+export type TestCaseReport_Serialize = {
+	/**  Maven module path for a reactor run, relative to the project where possible. */
+	module?: string | null,
 	/**  Fully qualified class (`com.acme.OrderTest`, nested: `com.acme.OrderTest$Nested`). */
 	className: string,
 	/**  Method name without `()`. */

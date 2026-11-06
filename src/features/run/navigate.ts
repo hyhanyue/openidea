@@ -37,14 +37,16 @@ async function findByName(target: FileTarget): Promise<string | null> {
   const tail = target.path.replace(/^\.?\//, "");
   const name = tail.split("/").pop() ?? tail;
   const matchesPath = (relPath: string) => relPath === tail || relPath.endsWith(`/${tail}`);
+  const module = target.module ? runDirectory(target.module).replace(/\/$/, "") : null;
+  const inModule = (path: string) => module === null || path.startsWith(`${module}/`);
   if (target.className && tail !== name) {
     // Query with the package path before the index caps the results for a common basename.
     const hits = await call(commands.findFiles(tail, 50)).catch(() => []);
-    const exact = hits.find((h) => matchesPath(h.relPath));
+    const exact = hits.find((h) => inModule(h.path) && matchesPath(h.relPath));
     if (exact) return exact.path;
   }
   try {
-    const hits = await call(commands.findFiles(name, 50));
+    const hits = (await call(commands.findFiles(name, 50))).filter((h) => inModule(h.path));
     const exact = hits.find((h) => matchesPath(h.relPath));
     if (exact) return exact.path;
     const named = hits.filter((h) => h.relPath.split("/").pop() === name);
@@ -96,7 +98,7 @@ export async function resolveTarget(target: FileTarget, cwd: string): Promise<st
       if (fromRoot !== candidate && (await exists(fromRoot))) return fromRoot;
     }
   }
-  return (await findByName(target)) ?? (target.className ? findLibraryClass(target.className) : null);
+  return (await findByName(target)) ?? (target.className && !target.module ? findLibraryClass(target.className) : null);
 }
 
 /** Regular-expression search over the project's Ruby files (or the given ones). */

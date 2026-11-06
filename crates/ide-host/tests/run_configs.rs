@@ -157,3 +157,134 @@ async fn gradle_init_scripts_are_written_by_the_host_that_runs_the_build() {
     let escaped = ops::run::run_gradle_init_script(&host, "main", "../escape".into(), String::new()).await;
     assert!(escaped.is_err(), "{escaped:?}");
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn maven_test_reports_include_reactor_modules() {
+    use ide_run::junit::TestCaseStatus::{Failed, Passed};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(tmp.path()).unwrap();
+    let reactor = root.join("reactor");
+    fs::create_dir_all(&reactor).unwrap();
+    fs::write(
+        reactor.join("build.xml"),
+        concat!(
+            "<project><artifactId>parent</artifactId><packaging>pom</packaging>",
+            "<modules><module>alpha</module><module>parts</module></modules>",
+            "<profiles><profile><id>extra</id><modules><module>${extra}</module></modules>",
+            "<properties><extra>extra</extra></properties></profile></profiles></project>"
+        ),
+    )
+    .unwrap();
+    for module in ["alpha", "parts/beta", "extra", "unrelated"] {
+        let dir = reactor.join(module);
+        fs::create_dir_all(dir.join("target/surefire-reports")).unwrap();
+        fs::create_dir_all(dir.join("target/failsafe-reports")).unwrap();
+        fs::write(dir.join("pom.xml"), format!("<project><artifactId>{module}</artifactId></project>")).unwrap();
+    }
+    fs::write(
+        reactor.join("parts/pom.xml"),
+        "<project><artifactId>parts</artifactId><packaging>pom</packaging><modules><module>beta</module></modules></project>",
+    )
+    .unwrap();
+    fs::create_dir_all(reactor.join("alpha/build/test-results/test")).unwrap();
+    let launcher = root.join("test-launcher");
+    fs::write(
+        &launcher,
+        r#"#!/bin/sh
+set -eu
+token=previous-run
+for arg; do
+    case "$arg" in -Dopenidea.testRun=*) token=${arg#*=} ;; esac
+done
+write_report() {
+    printf '<testsuite><properties><property name="openidea.testRun" value="%s"/></properties><testcase classname="%s" name="same">%s</testcase></testsuite>' "$2" "$3" "$4" > "$1"
+}
+case "$1" in
+    gradle)
+        write_report build/test-results/test/TEST-Gradle.xml "$token" GradleTest ''
+        write_report target/surefire-reports/TEST-Other.xml "$token" OtherTool ''
+        ;;
+    single)
+        write_report target/surefire-reports/TEST-Alpha.xml "$token" SingleTest ''
+        ;;
+    *)
+        write_report reactor/alpha/target/surefire-reports/TEST-Stale.xml previous-run StaleTest ''
+        write_report reactor/unrelated/target/surefire-reports/TEST-Unrelated.xml "$token" UnrelatedTest ''
+        write_report reactor/alpha/build/test-results/test/TEST-Gradle.xml "$token" GradleTest ''
+        case "$*" in
+            *-N*) ;;
+            *-pl*) write_report reactor/alpha/target/surefire-reports/TEST-Alpha.xml "$token" SharedTest '' ;;
+            *)
+                write_report reactor/alpha/target/surefire-reports/TEST-Alpha.xml "$token" SharedTest ''
+                write_report reactor/parts/beta/target/failsafe-reports/TEST-Beta.xml "$token" SharedTest '<failure message="beta"/>'
+                write_report reactor/extra/target/surefire-reports/TEST-Extra.xml "$token" ExtraTest ''
+                ;;
+        esac
+        ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+    let host = host(&root.join("app"));
+    host.trust.decide(&root, true, false).unwrap();
+    host.open_project("main", &root).unwrap();
+
+    for (kind, cwd, args, expected) in [
+        (
+            "maven",
+            None,
+            vec!["-f", "reactor/build.xml", "-Pextra", "verify"],
+            vec![
+                (Some("reactor/alpha"), "SharedTest", Passed),
+                (Some("reactor/extra"), "ExtraTest", Passed),
+                (Some("reactor/parts/beta"), "SharedTest", Failed),
+            ],
+        ),
+        (
+            "maven",
+            None,
+            vec!["--file=reactor/build.xml", "-pl", ":alpha", "test"],
+            vec![(Some("reactor/alpha"), "SharedTest", Passed)],
+        ),
+        ("maven", None, vec!["-f", "reactor/build.xml", "-N", "test"], vec![]),
+        ("maven", Some("reactor/alpha"), vec!["single"], vec![(None, "SingleTest", Passed)]),
+        ("gradle", Some("reactor/alpha"), vec!["gradle"], vec![(None, "GradleTest", Passed)]),
+    ] {
+        let config = ide_run::RunConfig {
+            id: "reports".into(),
+            name: "Reports".into(),
+            kind: kind.into(),
+            command: launcher.to_string_lossy().into_owned(),
+            args: args.iter().map(|s| (*s).into()).collect(),
+            cwd: cwd.map(|p| std::path::PathBuf::from(p).into()),
+            env: Default::default(),
+            detected: false,
+            is_test: true,
+            debug_adapter: None,
+            allow_parallel: false,
+            extras: ide_run::RunExtras { include_system_env: false, ..Default::default() },
+        };
+        let mut actual: Vec<_> =
+            reports_after_run(&host, config).await.into_iter().map(|r| (r.module, r.class_name, r.status)).collect();
+        actual.sort_by(|a, b| a.0.cmp(&b.0));
+        let expected: Vec<_> = expected.into_iter().map(|(m, c, s)| (m.map(str::to_owned), c.to_owned(), s)).collect();
+        assert_eq!(actual, expected, "{args:?}");
+    }
+}
+
+async fn reports_after_run(host: &Host, config: ide_run::RunConfig) -> Vec<ide_run::junit::TestCaseReport> {
+    let run = ops::run::start(host, "main", config, Arc::new(|_| {})).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        while ops::run::list(host).iter().any(|r| r.id == run.id && r.running) {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    ops::run::run_test_reports(host, "main", run.id).await.unwrap()
+}

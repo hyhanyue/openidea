@@ -931,13 +931,7 @@ function finishSession(sessionId: string, code: number | null) {
         // Surefire / Gradle print only failures and class totals: per-test results come from the XML reports.
         if (frameworkFor(session.config) === "jvm") {
           const reports = await jvmReports(session);
-          const tests = rt.tests;
-          // Tests the run reported already (Gradle's init script, Surefire failures) keep their output.
-          tests.apply(testReportEvents(reports).filter((e) => !("path" in e) || !tests.hasResult(e.path)));
-          moveToReportedClasses(
-            rt.tests,
-            reports.map((r) => r.className),
-          );
+          applyJvmReports(rt.tests, reports);
         }
         if (runtimes.get(sessionId) !== rt) return;
         rt.tests.finish(code);
@@ -956,13 +950,40 @@ function finishSession(sessionId: string, code: number | null) {
 }
 
 async function jvmReports(session: RunSession): Promise<TestCaseReport[]> {
-  if (!isTauri()) return [];
+  if (!isTauri() || session.runId === null) return [];
   try {
-    // Report files are written during the run; allow for coarse file-system timestamps.
-    return await call(commands.runTestReports(session.config.cwd ?? null, session.startedAt - 2000));
+    return await call(commands.runTestReports(session.runId));
   } catch {
     return [];
   }
+}
+
+/** Attach console output when its class belongs to one module. XML identifies the
+ * module of a shared class, where the unscoped console results are ambiguous. */
+export function applyJvmReports(tests: TestResults, reports: readonly TestCaseReport[]) {
+  const reportedClasses = new Map<string, Map<string, string[]>>();
+  for (const r of reports) {
+    if (!r.module || !r.className || !r.name) continue;
+    const path = [`${r.module}/`, r.className];
+    const simple = r.className.slice(r.className.lastIndexOf(".") + 1);
+    for (const name of new Set([r.className, simple])) {
+      const matches = reportedClasses.get(name) ?? new Map<string, string[]>();
+      matches.set(path.join("\0"), path);
+      reportedClasses.set(name, matches);
+    }
+  }
+  for (const root of [...tests.roots]) {
+    const matches = reportedClasses.get(root.name);
+    if (!matches) continue;
+    if (matches.size === 1) tests.move(root.path, matches.values().next().value!);
+    else tests.remove(root.path);
+  }
+  // Tests already reported by the console keep their captured output.
+  tests.apply(testReportEvents(reports).filter((e) => !("path" in e) || !tests.hasResult(e.path)));
+  moveToReportedClasses(
+    tests,
+    reports.filter((r) => !r.module).map((r) => r.className),
+  );
 }
 
 /** JUnit XML report cases → test tree events (`[class, method]`, failure output and source line). */
@@ -970,7 +991,7 @@ export function testReportEvents(reports: readonly TestCaseReport[]): TestEvent[
   const events: TestEvent[] = [];
   for (const r of reports) {
     if (!r.className || !r.name) continue;
-    const path = [r.className, r.name];
+    const path = r.module ? [`${r.module}/`, r.className, r.name] : [r.className, r.name];
     events.push({ type: "result", path, status: r.status, durationMs: r.durationMs ?? undefined });
     if (r.status !== "failed") continue;
     const text = [r.message, r.output].filter(Boolean).join("\n");

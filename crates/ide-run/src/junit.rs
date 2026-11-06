@@ -4,8 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +18,10 @@ pub enum TestCaseStatus {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TestCaseReport {
+    /// Maven module path for a reactor run, relative to the project where possible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub module: Option<String>,
     /// Fully qualified class (`com.acme.OrderTest`, nested: `com.acme.OrderTest$Nested`).
     pub class_name: String,
     /// Method name without `()`.
@@ -154,6 +158,7 @@ pub fn parse_report(xml: &str) -> Vec<TestCaseReport> {
                 let duration_ms =
                     attr(&a, "time").and_then(|t| t.replace(',', "").parse::<f64>().ok()).map(|s| s * 1000.0);
                 let case = TestCaseReport {
+                    module: None,
                     class_name,
                     name: if base.is_empty() { test.to_owned() } else { base },
                     status: TestCaseStatus::Passed,
@@ -187,20 +192,79 @@ pub fn parse_report(xml: &str) -> Vec<TestCaseReport> {
     out
 }
 
-/// Report directories of a module: Surefire, Failsafe and Gradle test results.
-pub fn report_dirs(module_dir: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![module_dir.join("target/surefire-reports"), module_dir.join("target/failsafe-reports")];
-    if let Ok(rd) = std::fs::read_dir(module_dir.join("build/test-results")) {
-        let mut tasks: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
-        tasks.sort();
-        dirs.extend(tasks);
-    }
-    dirs
+/// A JVM test run's report scope, captured before spawning the process.
+#[derive(Clone, Debug)]
+pub enum ReportPlan {
+    Maven { modules: Vec<PathBuf>, root: PathBuf, marker: Option<String> },
+    Gradle { cwd: PathBuf },
 }
 
-/// Test cases from every `TEST-*.xml` in `dirs` written at or after `since`
+pub const MAVEN_RUN_PROPERTY: &str = "openidea.testRun";
+
+impl ReportPlan {
+    pub fn reports(&self, started: SystemTime) -> Vec<TestCaseReport> {
+        // Tagged reports can tolerate coarse mtimes without including an earlier Maven run.
+        let coarse = started.checked_sub(Duration::from_secs(2)).unwrap_or(started);
+        match self {
+            Self::Maven { modules, root, marker } => {
+                let since = if marker.is_some() { coarse } else { started };
+                let mut reports = Vec::new();
+                for dir in modules {
+                    let module = marker.as_ref().map(|_| {
+                        let rel = dir.strip_prefix(root).unwrap_or(dir);
+                        if rel.as_os_str().is_empty() { ".".into() } else { ide_core::ipc_path::to_ipc(rel) }
+                    });
+                    let target = dir.join("target");
+                    let dirs = ["surefire-reports", "failsafe-reports"].map(|path| target.join(path));
+                    let mut seen = std::collections::HashSet::new();
+                    for file in report_files(&dirs, since) {
+                        let Ok(file) = dunce::canonicalize(file) else { continue };
+                        if !file.starts_with(&target) || !seen.insert(file.clone()) {
+                            continue;
+                        }
+                        let Ok(xml) = std::fs::read_to_string(file) else { continue };
+                        if marker.as_deref().is_some_and(|marker| !has_run_marker(&xml, marker)) {
+                            continue;
+                        }
+                        reports.extend(parse_report(&xml).into_iter().map(|mut case| {
+                            case.module.clone_from(&module);
+                            case
+                        }));
+                    }
+                }
+                reports
+            }
+            Self::Gradle { cwd } => {
+                let dirs: Vec<_> = std::fs::read_dir(cwd.join("build/test-results"))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|p| p.is_dir())
+                    .collect();
+                report_files(&dirs, coarse)
+                    .into_iter()
+                    .filter_map(|file| std::fs::read_to_string(file).ok())
+                    .flat_map(|xml| parse_report(&xml))
+                    .collect()
+            }
+        }
+    }
+}
+
+fn has_run_marker(xml: &str, marker: &str) -> bool {
+    let Some((_, properties)) = xml.split_once("<properties>") else { return false };
+    let Some((properties, _)) = properties.split_once("</properties>") else { return false };
+    properties.split("<property ").skip(1).any(|property| {
+        let Some((tag, _)) = property.split_once('>') else { return false };
+        let attrs = attrs(tag);
+        attr(&attrs, "name") == Some(MAVEN_RUN_PROPERTY) && attr(&attrs, "value") == Some(marker)
+    })
+}
+
+/// Every `TEST-*.xml` in `dirs` written at or after `since`
 /// (reports of earlier runs are ignored).
-pub fn read_reports(dirs: &[PathBuf], since: SystemTime) -> Vec<TestCaseReport> {
+fn report_files(dirs: &[PathBuf], since: SystemTime) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = Vec::new();
     for dir in dirs {
         let Ok(rd) = std::fs::read_dir(dir) else { continue };
@@ -217,7 +281,7 @@ pub fn read_reports(dirs: &[PathBuf], since: SystemTime) -> Vec<TestCaseReport> 
         }
     }
     files.sort();
-    files.iter().filter_map(|f| std::fs::read_to_string(f).ok()).flat_map(|xml| parse_report(&xml)).collect()
+    files
 }
 
 #[cfg(test)]
@@ -290,11 +354,13 @@ mod tests {
         std::fs::write(dir.join("a.B.txt"), "ignored").unwrap();
         std::fs::write(module.join("build/test-results/test/TEST-c.D.xml"), r#"<testcase classname="c.D" name="g"/>"#)
             .unwrap();
-        let dirs = report_dirs(module);
-        assert!(dirs.contains(&module.join("build/test-results/test")));
-        let all = read_reports(&dirs, SystemTime::UNIX_EPOCH);
-        assert_eq!(all.len(), 5);
-        let future = SystemTime::now() + std::time::Duration::from_secs(3600);
-        assert!(read_reports(&dirs, future).is_empty());
+        let module = dunce::canonicalize(module).unwrap();
+        let maven = ReportPlan::Maven { modules: vec![module.clone()], root: module.clone(), marker: None };
+        let gradle = ReportPlan::Gradle { cwd: module };
+        assert_eq!(maven.reports(SystemTime::UNIX_EPOCH).len(), 4);
+        assert_eq!(gradle.reports(SystemTime::UNIX_EPOCH).len(), 1);
+        let future = SystemTime::now() + Duration::from_secs(3600);
+        assert!(maven.reports(future).is_empty());
+        assert!(gradle.reports(future).is_empty());
     }
 }

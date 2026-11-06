@@ -1,0 +1,157 @@
+use ide_run::RunConfig;
+use ide_run::junit::{MAVEN_RUN_PROPERTY, ReportPlan};
+use ide_run::wrap;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+enum Tool {
+    Maven,
+    Gradle,
+}
+
+fn tool(config: &RunConfig) -> Option<Tool> {
+    match wrap::program_name(config.command.trim()).as_str() {
+        "mvn" | "mvnw" | "mvnd" => Some(Tool::Maven),
+        "gradle" | "gradlew" => Some(Tool::Gradle),
+        _ => match config.kind.as_str() {
+            "maven" => Some(Tool::Maven),
+            "gradle" => Some(Tool::Gradle),
+            _ => None,
+        },
+    }
+}
+
+pub(super) fn applies(config: &RunConfig) -> bool {
+    config.is_test && tool(config).is_some()
+}
+
+pub(super) fn prepare(root: &Path, config: &mut RunConfig, mut scopes: Vec<PathBuf>) -> Option<ReportPlan> {
+    let cwd = wrap::run_dir(root, config);
+    match tool(config)? {
+        Tool::Gradle => return Some(ReportPlan::Gradle { cwd }),
+        Tool::Maven => {}
+    }
+
+    if wrap::uses_shell(config, &cwd) || (config.detected && config.id.starts_with(ide_run::EXTERNAL_PREFIX)) {
+        // The direct Maven arguments are unavailable for shell or plugin launchers.
+        return Some(ReportPlan::Maven {
+            modules: vec![dunce::canonicalize(cwd).ok()?],
+            root: root.to_path_buf(),
+            marker: None,
+        });
+    }
+
+    let env = wrap::run_env(root, config).ok()?;
+    let env_args = env.get("MAVEN_ARGS").map_or_else(Vec::new, |s| ide_run::import::split_args(s));
+    let cli: Vec<&str> = env_args.iter().chain(&config.args).map(String::as_str).collect();
+    let cli_file = file_argument(&cli);
+    let base = env.get("MAVEN_BASEDIR").filter(|dir| !dir.is_empty()).map_or_else(
+        || {
+            // Maven's launcher uses a separate -f/--file argument to locate .mvn.
+            let pom = config
+                .args
+                .windows(2)
+                .take_while(|args| args[0] != "--")
+                .find(|args| matches!(args[0].as_str(), "-f" | "--file"))
+                .map(|args| pom_path(&cwd, &args[1]));
+            let start = pom.as_deref().and_then(Path::parent).unwrap_or(&cwd);
+            start.ancestors().find(|d| d.join(".mvn").is_dir()).unwrap_or(start).to_path_buf()
+        },
+        |dir| cwd.join(dir),
+    );
+    let config_text = std::fs::read_to_string(base.join(".mvn/maven.config")).unwrap_or_default();
+    // Maven 3.9+ takes one argument per line. Also accept the older whitespace-separated format
+    // when an option and its value are on the same line.
+    let file_args: Vec<String> = config_text
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.starts_with('#'))
+        .flat_map(|line| {
+            if line
+                .split_once(char::is_whitespace)
+                .is_some_and(|(flag, _)| flag.starts_with('-') && !flag.contains('='))
+            {
+                ide_run::import::split_args(line)
+            } else {
+                vec![line.to_owned()]
+            }
+        })
+        .collect();
+    let file_args: Vec<&str> = file_args.iter().map(String::as_str).collect();
+    let pom = pom_path(&cwd, cli_file.or_else(|| file_argument(&file_args)).unwrap_or("pom.xml"));
+    let pom = dunce::canonicalize(pom).ok()?;
+    let dir = pom.parent()?;
+
+    scopes.push(root.to_path_buf());
+    if !scopes.iter().any(|scope| dir.starts_with(scope)) {
+        // An explicitly chosen POM/working directory can be outside the opened project.
+        scopes.push(dir.to_path_buf());
+    }
+    let mut profiles = Vec::new();
+    let mut properties = HashMap::new();
+    for args in [&file_args, &cli] {
+        profiles.extend(
+            option_values(args, &["-P", "--activate-profiles"], Some("-P"))
+                .flat_map(|p| p.split(',').map(|p| p.trim().trim_start_matches('?').to_owned())),
+        );
+        properties.extend(option_values(args, &["-D", "--define"], Some("-D")).filter_map(|p| {
+            let (k, v) = p.split_once('=').unwrap_or((p, "true"));
+            (!k.is_empty()).then(|| (k.to_owned(), v.to_owned()))
+        }));
+    }
+    let local_repo = properties.get("maven.repo.local").map(|p| cwd.join(p)).or_else(|| {
+        option_values(&cli, &["-s", "--settings"], None)
+            .chain(option_values(&file_args, &["-s", "--settings"], None))
+            .next()
+            .and_then(|p| ide_build::maven::local_repository_of(&cwd.join(p)))
+    });
+    let mut modules = ide_build::maven::test_reactor_dirs(&pom, &scopes, local_repo, &profiles, &properties);
+    if modules.is_empty() {
+        modules.push(dir.to_path_buf());
+    }
+
+    let marker = (modules.len() > 1).then(|| {
+        // Surefire and Failsafe include Maven user properties in their standard XML.
+        // This identifies reports from the real reactor (including -pl, -N, and failures).
+        let epoch = std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_nanos();
+        let marker = format!("{}-{epoch}-{}", std::process::id(), ide_core::RunId::next().0);
+        config.args.insert(0, format!("-D{MAVEN_RUN_PROPERTY}={marker}"));
+        marker
+    });
+    Some(ReportPlan::Maven { modules, root: root.to_path_buf(), marker })
+}
+
+fn pom_path(cwd: &Path, file: &str) -> PathBuf {
+    let path = cwd.join(file);
+    if path.is_dir() { path.join("pom.xml") } else { path }
+}
+
+fn file_argument<'a>(args: &[&'a str]) -> Option<&'a str> {
+    let args: Vec<_> = args.iter().copied().filter(|a| !matches!(*a, "-fae" | "-ff" | "-fn")).collect();
+    option_values(&args, &["-f", "--file"], Some("-f")).next()
+}
+
+fn option_values<'a, 'b>(
+    args: &'b [&'a str],
+    names: &'b [&str],
+    attached: Option<&'b str>,
+) -> impl Iterator<Item = &'a str> + 'b
+where
+    'a: 'b,
+{
+    let mut args = args.iter().copied();
+    std::iter::from_fn(move || {
+        while let Some(arg) = args.next().filter(|a| *a != "--") {
+            if names.contains(&arg) {
+                return args.next();
+            }
+            if let Some((_, value)) = arg.split_once('=').filter(|(flag, _)| names.contains(flag)) {
+                return Some(value);
+            }
+            if let Some(value) = attached.and_then(|prefix| arg.strip_prefix(prefix)) {
+                return Some(value);
+            }
+        }
+        None
+    })
+}

@@ -1162,20 +1162,11 @@ pub fn load_with_linked(
         let props = resolver.properties_for(&pom, &ctx, &dir);
         let i = |s: &str| interpolate(s, &props);
 
-        let mut module_names: Vec<String> = pom.modules.clone();
-        for (_, p) in resolver.active(&pom.profiles) {
-            module_names.extend(p.modules.iter().cloned());
-        }
-        let mut modules: Vec<PathBuf> = Vec::new();
-        for m in module_names {
-            let mut mp = dir.join(i(&m));
-            if mp.is_dir() || mp.extension().is_none_or(|e| e != "xml") {
-                mp.push("pom.xml");
-            }
-            if mp.is_file() && !modules.contains(&mp) {
-                modules.push(mp);
-            }
-        }
+        let modules = module_poms(
+            &dir,
+            pom.modules.iter().chain(resolver.active(&pom.profiles).flat_map(|(_, p)| &p.modules)),
+            &props,
+        );
 
         let packaging = i(pom.packaging.as_deref().unwrap_or("jar"));
         let managed: HashMap<String, &RawDep> = ctx.managed.iter().map(|m| (m.key(), m)).collect();
@@ -1256,6 +1247,65 @@ pub fn load_with_linked(
         }
     }
     model
+}
+
+fn module_poms<'a>(
+    dir: &Path,
+    names: impl Iterator<Item = &'a String>,
+    props: &HashMap<String, String>,
+) -> Vec<PathBuf> {
+    let mut modules = Vec::new();
+    for name in names {
+        let mut path = dir.join(interpolate(name, props));
+        if path.is_dir() || path.extension().is_none_or(|e| e != "xml") {
+            path.push("pom.xml");
+        }
+        if path.is_file() && !modules.contains(&path) {
+            modules.push(path);
+        }
+    }
+    modules
+}
+
+/// Candidate modules reachable from the POM passed to Maven. Inactive profiles can
+/// contribute candidates too: only reports tagged by the launched Maven run are used.
+pub fn test_reactor_dirs(
+    pom: &Path,
+    scopes: &[PathBuf],
+    local_repo: Option<PathBuf>,
+    profiles: &[String],
+    properties: &HashMap<String, String>,
+) -> Vec<PathBuf> {
+    let mut resolver = Resolver::new(local_repo.or_else(default_local_repo), profiles);
+    let mut dirs = Vec::new();
+    let mut seen = HashSet::new();
+    let mut pending = vec![pom.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        if seen.len() >= MAX_PROJECTS {
+            break;
+        }
+        let Ok(path) = dunce::canonicalize(path) else { continue };
+        if !scopes.iter().any(|scope| path.starts_with(scope)) || !seen.insert(path.clone()) {
+            continue;
+        }
+        let Some(pom) = resolver.pom(&path) else { continue };
+        let Some(dir) = path.parent() else { continue };
+        if !dirs.iter().any(|p| p == dir) {
+            dirs.push(dir.to_path_buf());
+        }
+        let ctx = resolver.context(&path, 0);
+        let mut props = resolver.properties_for(&pom, &ctx, dir);
+        props.extend(properties.clone());
+        let mut modules = module_poms(dir, pom.modules.iter(), &props);
+        for profile in &pom.profiles {
+            let mut props = props.clone();
+            props.extend(profile.properties.iter().cloned());
+            props.extend(properties.clone());
+            modules.extend(module_poms(dir, profile.modules.iter(), &props));
+        }
+        pending.extend(modules.into_iter().rev());
+    }
+    dirs
 }
 
 /// Shared linkage decision for every Maven consumer, including modules outside a reactor directory.

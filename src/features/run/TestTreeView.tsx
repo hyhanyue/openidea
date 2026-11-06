@@ -5,6 +5,7 @@ import { Icon, IconButton, showContextMenu, Spinner, Tree, type MenuItem } from 
 import { openTarget } from "./navigate";
 import { nodeStatus, type TestNode, type TestResults, type TestStatus } from "./testing";
 import { parseComparison } from "./testing/comparison";
+import { mavenResultModule } from "./testing/jvm";
 import styles from "./Run.module.css";
 import { tx } from "@/platform/i18n";
 
@@ -125,8 +126,11 @@ export function TestTreeView({ results, version, cwd, selected, onSelect, runnin
   );
 
   const jumpToSource = (n: TestNode) => {
-    const target = n.location ?? firstLocated(n)?.location;
-    if (target) void openTarget(target, cwd, true);
+    const located = firstLocated(n);
+    if (located?.location) {
+      const module = located.location.className ? mavenResultModule(located.path) : undefined;
+      void openTarget({ ...located.location, module }, cwd, true);
+    }
   };
 
   const contextMenu = (node: TestNode | null, sel: Set<string>, e: MouseEvent) => {

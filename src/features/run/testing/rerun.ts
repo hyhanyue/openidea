@@ -8,6 +8,7 @@ import { formatArgs } from "../configs";
 import { djangoTestsOf } from "../djangoTypes";
 import { goTestParts, withoutGoSelection } from "../goArguments";
 import { frameworkFor } from "./index";
+import { mavenResultModule } from "./jvm";
 import { nodeStatus, type TestNode, type TestResults } from "./results";
 
 /** Paths of failed tests: failed leaves, plus failed suites without any failed children reported. */
@@ -106,12 +107,14 @@ function goArgs(base: string[], paths: string[][]): string[] | null {
 }
 
 function jvmArgs(config: RunConfig, paths: string[][]): string[] | null {
+  const maven = config.kind === "maven" || /\b(?:mvnw?|mvnd)\b/.test(config.command);
+  if (maven) paths = paths.map((path) => (mavenResultModule(path) !== undefined ? path.slice(1) : path));
   const tests = paths
     .filter((p) => p.length >= 2)
     .map((p) => ({ cls: p[0]!, method: p[p.length - 1]!.replace(/\(\)$/, "") }));
   const classes = unique(paths.filter((p) => p.length === 1).map((p) => p[0]!));
   if (!tests.length && !classes.length) return null;
-  if (config.kind === "maven" || /\bmvnw?\b/.test(config.command)) {
+  if (maven) {
     const byClass = new Map<string, string[]>();
     for (const t of tests) byClass.set(t.cls, [...(byClass.get(t.cls) ?? []), t.method]);
     const specs = [

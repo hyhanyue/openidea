@@ -91,10 +91,26 @@ export class TestResults {
   move(from: string[], into: string[]) {
     const source = this.byId.get(from.join(SEP));
     if (!source || from.join(SEP) === into.join(SEP)) return;
-    this.version++;
-    const parent = from.length > 1 ? this.byId.get(from.slice(0, -1).join(SEP))?.children : this.roots;
-    parent?.splice(parent.indexOf(source), 1);
+    this.detach(source);
     this.mergeInto(source, into);
+  }
+
+  /** Removes a subtree whose results have been replaced by more precise events. */
+  remove(path: string[]) {
+    const source = this.byId.get(path.join(SEP));
+    if (!source) return;
+    this.detach(source);
+    const forget = (node: TestNode) => {
+      this.byId.delete(node.id);
+      node.children.forEach(forget);
+    };
+    forget(source);
+  }
+
+  private detach(source: TestNode) {
+    this.version++;
+    const parent = source.path.length > 1 ? this.byId.get(source.path.slice(0, -1).join(SEP))?.children : this.roots;
+    parent?.splice(parent.indexOf(source), 1);
   }
 
   private mergeInto(source: TestNode, into: string[]) {

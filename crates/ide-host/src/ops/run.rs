@@ -5,6 +5,8 @@ use ide_core::{IdeError, IdeResult, RunId};
 use ide_run::{OutputChunk, RunConfig, RunInfo, StartOptions};
 use std::time::Duration;
 
+mod reports;
+
 /// Detected configs followed by user-defined ones (user ids win on conflict).
 pub fn configs(host: &Host, window: &str) -> IdeResult<Vec<RunConfig>> {
     host.require_trust(window)?;
@@ -215,6 +217,7 @@ pub async fn start(host: &Host, window: &str, config: RunConfig, on_output: Emit
                 python_paths: Vec::new(),
                 // A folder on this machine: not in the container.
                 ruby_reporter: None,
+                test_reports: None,
             };
             project.require_trust()?;
             return host.processes.start(
@@ -273,11 +276,33 @@ pub async fn start(host: &Host, window: &str, config: RunConfig, on_output: Emit
             })
             .await?;
     }
+    let test_reports = if reports::applies(&config) {
+        let project_root = project.root.clone();
+        let member = root.clone();
+        let report_project = project.clone();
+        let (prepared, reports) = host
+            .blocking(move || {
+                let scopes = report_project
+                    .content_roots()
+                    .into_iter()
+                    .chain([member])
+                    .filter_map(|path| dunce::canonicalize(path).ok())
+                    .collect();
+                let reports = reports::prepare(&project_root, &mut config, scopes);
+                Ok((config, reports))
+            })
+            .await?;
+        config = prepared;
+        reports
+    } else {
+        None
+    };
     let encoding = settings.console.encoding;
     let options = StartOptions {
         encoding: Some(encoding).filter(|e| !e.trim().is_empty()),
         python_paths: if *root != project.root { vec![root.clone()] } else { super::python::paths(&project) },
         ruby_reporter: ruby_reporter_dir(host, &config),
+        test_reports,
     };
     project.require_trust()?;
     let mut sink = project.sink.clone();

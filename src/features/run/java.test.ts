@@ -12,7 +12,8 @@ import { applicationConfig, jvmModuleDir, jvmTestConfig } from "./application";
 import { buildRows } from "./ConfigChooser";
 import { jdwpLaunch } from "./javaDebug";
 import { firstTopLevelType, jvmMainCandidates, scanJvmTargets } from "./jvmTargets";
-import { adoptTemporary, MAX_TEMPORARY, saveTemporary, testReportEvents, useRun } from "./store";
+import { adoptTemporary, applyJvmReports, MAX_TEMPORARY, saveTemporary, testReportEvents, useRun } from "./store";
+import { TestResults } from "./testing";
 import { detectRunTargets, targetConfig } from "./targets";
 
 const cfg = (over: Partial<RunConfig> & { id: string; kind: string }): RunConfig => ({
@@ -419,6 +420,22 @@ describe("JUnit XML reports", () => {
       type: "location",
       path: ["a.B$Inner", "bad"],
       location: { path: "a/B.java", line: 42, resolve: "name", className: "a.B$Inner" },
+    });
+  });
+
+  it("keeps matching classes and methods from separate Maven modules distinct", () => {
+    const tests = new TestResults();
+    tests.apply([{ type: "result", path: ["a.SharedTest", "same"], status: "failed" }]);
+    const shared = { className: "a.SharedTest", name: "same", durationMs: null, message: null, output: null };
+    applyJvmReports(tests, [
+      { ...shared, module: "alpha", status: "passed" },
+      { ...shared, module: "beta", status: "failed", output: "at a.SharedTest.same(SharedTest.java:18)" },
+    ]);
+    expect(tests.roots.map((n) => n.name)).toEqual(["alpha/", "beta/"]);
+    expect(tests.counts()).toMatchObject({ passed: 1, failed: 1, total: 2 });
+    expect(tests.firstFailure()).toMatchObject({
+      path: ["beta/", "a.SharedTest", "same"],
+      location: { path: "a/SharedTest.java", line: 18 },
     });
   });
 

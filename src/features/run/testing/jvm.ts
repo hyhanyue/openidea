@@ -158,6 +158,12 @@ export function jvmParser(): TestOutputParser {
   };
 }
 
+/** Reactor results use a directory as the first segment, before the JVM class. */
+export function mavenResultModule(path: readonly string[]): string | undefined {
+  const dir = path[0];
+  return dir?.endsWith("/") ? dir.slice(0, -1) : undefined;
+}
+
 /**
  * Gradle's console names a test class by its simple name and its XML reports by the
  * qualified one: moves the console's results to the reported class.

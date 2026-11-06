@@ -19,6 +19,8 @@ export interface FileTarget {
   resolve: "path" | "name" | "rubyTest";
   /** JVM frames: the class's binary name (`com.acme.OrderController$Inner`). */
   className?: string;
+  /** Maven reactor module, relative to the project where possible. */
+  module?: string;
 }
 
 /**

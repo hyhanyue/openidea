@@ -68,6 +68,17 @@ describe("JVM stack frame resolution", () => {
     expect(openFile).toHaveBeenCalledWith(source, { selection: { line: 51, col: 0 }, focus: true });
   });
 
+  it("resolves a reactor failure inside the reporting module", async () => {
+    const duplicate = "/p/child/src/test/java/com/acme/Util.java";
+    files[duplicate] = "package com.acme; class Util {}";
+    try {
+      const frame = jvmFrameTarget("com.acme.Util", "Util.java", 3);
+      expect(await resolveTarget({ ...frame, module: "/p/child" }, "/p")).toBe(duplicate);
+    } finally {
+      delete files[duplicate];
+    }
+  });
+
   it("finds Kotlin files outside their package directory by their package declaration", async () => {
     expect(await resolveTarget(jvmFrameTarget("com.acme.orders.OrdersKt", "Orders.kt", 1), "/p")).toBe(
       "/p/src/main/kotlin/Orders.kt",

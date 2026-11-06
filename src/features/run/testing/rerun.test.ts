@@ -154,7 +154,7 @@ describe("rerunFailedConfig", () => {
     expect(
       rerunFailedConfig(cfg("maven", "mvn", ["test"]), [
         ["com.a.FooTest", "bar"],
-        ["com.a.FooTest", "baz"],
+        ["child/", "com.a.FooTest", "baz"],
         ["com.a.BarTest"],
       ])!.args,
     ).toEqual(["test", "-Dtest=com.a.FooTest#bar+baz,com.a.BarTest"]);
