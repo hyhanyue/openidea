@@ -535,6 +535,61 @@ describe("single-file producers (scratches)", () => {
     expect(produceContext(input, ALL)!.config!.args.at(-1)).toBe("demo.AiChatApplication");
   });
 
+  it.each([
+    ["maven", ["test", "-Dtest=demo.StaticCases#staticCase", "-Dsurefire.failIfNoSpecifiedTests=false"]],
+    ["gradle", ["test", "--tests", "demo.StaticCases.staticCase"]],
+  ])("%s: runs class-level TestNG static methods and keeps Java mains runnable", (kind, methodArgs) => {
+    const configs = [cfg({ id: `${kind}:test`, kind, args: ["test"], isTest: true })];
+    const content = [
+      "package demo;",
+      "import org.testng.annotations.BeforeClass;",
+      "import org.testng.annotations.Test;",
+      "@Test",
+      "public class StaticCases {",
+      "  @BeforeClass public static void prepare() {}",
+      "  public static void staticCase() {}",
+      "}",
+    ].join("\n");
+    const input = { path: `${ROOT}/src/test/java/demo/StaticCases.java`, root: ROOT, configs, content };
+    expect(fileTargets(input, content).map((t) => [t.line, t.kind])).toEqual([
+      [4, "suite"],
+      [6, "test"],
+    ]);
+    expect(produceContext({ ...input, line: 6 }, ALL)?.config).toMatchObject({ kind, args: methodArgs, isTest: true });
+    const suite = produceFile(input, ALL)?.config;
+    expect(suite).toMatchObject({
+      kind,
+      args:
+        kind === "maven"
+          ? ["test", "-Dtest=demo.StaticCases", "-Dsurefire.failIfNoSpecifiedTests=false"]
+          : ["test", "--tests", "demo.StaticCases"],
+      isTest: true,
+    });
+    expect(produceContext({ ...input, line: 4 }, ALL)?.config).toEqual(suite);
+
+    const dual = {
+      ...input,
+      content: content.replace(
+        "  @BeforeClass public static void prepare() {}",
+        "  public static void main(String[] args) {}",
+      ),
+    };
+    expect(fileTargets(dual, dual.content).map((t) => [t.line, t.kind])).toEqual([
+      [4, "suite"],
+      [5, "main"],
+      [6, "test"],
+    ]);
+    expect(produceContext({ ...dual, line: 6 }, ALL)?.config?.args).toEqual(methodArgs);
+    expect(produceContext({ ...dual, line: 4 }, ALL)?.config).toEqual(suite);
+    const app = produceFile(dual, ALL)?.config;
+    expect(app).toMatchObject({
+      kind: "application",
+      isTest: false,
+      args: ["-cp", "${testClasspath}", "demo.StaticCases"],
+    });
+    expect(produceContext({ ...dual, line: 5 }, ALL)?.config).toEqual(app);
+  });
+
   describe("Java / Kotlin mains in a build nested in a folder of repositories", () => {
     // RuoYi-Vue-Plus (Maven) next to plus-ui (npm), opened together.
     const boot =

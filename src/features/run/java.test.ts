@@ -111,6 +111,7 @@ describe("scanJvmTargets (Java)", () => {
       '  @DataProvider(name = "more") public void notATest() {}',
       "  void packagePrivate() {}",
       "  private void util() {}",
+      "  @BeforeClass public static void prepare() {}",
       "  public static void shared() {}",
       "  public int value() { return 1; }",
       "}",
@@ -119,6 +120,7 @@ describe("scanJvmTargets (Java)", () => {
       [3, "suite", "a.b.PriceTest", null, false],
       [5, "test", "a.b.PriceTest", "rounds", false],
       [7, "test", "a.b.PriceTest", "parses", false],
+      [13, "test", "a.b.PriceTest", "shared", false],
     ]);
   });
 });

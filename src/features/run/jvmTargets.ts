@@ -248,14 +248,21 @@ function scan(src: string, relPath: string, kotlin: boolean) {
     const modifiers: string[] = [];
     for (let k = i - 1; k >= 0 && !MEMBER_END.has(tokens[k]!.text); k--) modifiers.push(tokens[k]!.text);
     const owner = top();
-    // TestNG `@Test` on a class (JUnit's is method-only): its public `void` methods are tests.
+    const isStatic = modifiers.includes("static");
+    const mainParams = name === "main" ? params.filter((p) => p !== "final").join(" ") : "";
+    const javaMain =
+      !kotlin &&
+      name === "main" &&
+      prev === "void" &&
+      (mainParams === "" || /^(java\s*\.\s*lang\s*\.\s*)?String\s*(\[\s*]|\.\s*\.\s*\.)/.test(mainParams));
+    // TestNG class-level `@Test` includes static methods. Keep Java entry points runnable.
     const classLevelTest =
       !kotlin &&
       owner?.kind === "class" &&
       owner.annotations.includes("Test") &&
       prev === "void" &&
       modifiers.includes("public") &&
-      !modifiers.includes("static") &&
+      !(isStatic && javaMain) &&
       !annotations.some((a) => TESTNG_NOT_TESTS.test(a));
     if ((annotations.some((a) => TEST_ANNOTATIONS.has(a)) || classLevelTest) && owner) {
       const className = qualify(binaryName(frames));
@@ -271,10 +278,7 @@ function scan(src: string, relPath: string, kotlin: boolean) {
         if (!frames[f - 1]!.annotations.includes("Nested")) break;
       }
     } else if (name === "main") {
-      const paramText = params.filter((p) => p !== "final").join(" ");
-      const stringArgs =
-        /^(java\s*\.\s*lang\s*\.\s*)?String\s*(\[\s*]|\.\s*\.\s*\.)/.test(paramText) || paramText === "";
-      const kotlinArgs = /^\w+\s*:\s*Array\s*<\s*(out\s+)?String\s*>$/.test(paramText) || paramText === "";
+      const kotlinArgs = /^\w+\s*:\s*Array\s*<\s*(out\s+)?String\s*>$/.test(mainParams) || mainParams === "";
       if (kotlin && kotlinArgs) {
         if (!owner) {
           const jvmName = /@file:JvmName\(\s*"([^"]+)"\s*\)/.exec(src)?.[1];
@@ -294,8 +298,7 @@ function scan(src: string, relPath: string, kotlin: boolean) {
             });
           }
         }
-      } else if (!kotlin && owner && prev === "void" && stringArgs) {
-        const isStatic = modifiers.includes("static");
+      } else if (owner && javaMain) {
         // Java 25 instance main methods (JEP 512) need no `static` / arguments.
         if (isStatic || owner.kind === "class" || owner.kind === "record") {
           const spring = classes.some((c) => c.annotations.includes("SpringBootApplication"));
