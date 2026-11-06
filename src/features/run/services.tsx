@@ -227,12 +227,11 @@ function executionDetail(s: ServiceSession | undefined): string | undefined {
   if (!s) return undefined;
   const debug = serviceDebugger(s);
   if (debug?.status === "paused") return "Suspended";
-  if (debug)
-    return s.run && busy(s.run) && s.run.httpPort
-      ? `:${s.run.httpPort}`
-      : debug.status === "starting"
-        ? "Starting"
-        : "Debugging";
+  if (debug) {
+    const port = s.run ? (busy(s.run) ? s.run.httpPort : undefined) : debug.httpPort;
+    if (port) return `:${port}`;
+    return debug.status === "starting" ? "Starting" : "Debugging";
+  }
   return s.run ? sessionDetail(s.run) : "Finished";
 }
 

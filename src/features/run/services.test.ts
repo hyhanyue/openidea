@@ -18,7 +18,7 @@ import {
   sessionDetail,
   sessionStatus,
 } from "./services";
-import { startedPort } from "./serverPort";
+import { startedPort } from "@/platform/serverPort";
 import { useRun, type RunSession } from "./store";
 import type { DebugServiceSession } from "@/workbench/contributions";
 
@@ -280,6 +280,7 @@ describe("embedded web server port", () => {
     expect(startedPort("Tomcat initialized with port 8080 (http)")).toBeNull();
     expect(startedPort("Started DemoApplication in 1.2 seconds")).toBeNull();
     expect(startedPort("Tomcat started on port 99999")).toBeNull();
+    expect(startedPort("Tomcat started on port 180808")).toBeNull();
   });
 });
 

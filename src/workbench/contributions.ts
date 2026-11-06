@@ -1470,6 +1470,7 @@ export interface DebugServiceSession {
   startedAt: number;
   status: "starting" | "running" | "paused" | "terminated";
   processId: number | null;
+  httpPort?: number;
   rerun: (() => void) | null;
   stop: (options?: { stopProcess?: boolean }) => Promise<void>;
   show: () => void;

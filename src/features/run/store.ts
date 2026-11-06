@@ -53,7 +53,7 @@ import { remoteLabel, startWithRemedies } from "./remote";
 import { TerminalOutput } from "./terminalOutput";
 import { typeFor } from "./types";
 import { recordRun } from "./services";
-import { startedPort } from "./serverPort";
+import { startedPort } from "@/platform/serverPort";
 import { tomcatBrowserUrl } from "./tomcat";
 import { gradleDelegation, gradleTestLaunch } from "./gradleRun";
 import { openUrl } from "./navigate";

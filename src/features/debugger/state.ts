@@ -8,6 +8,7 @@ import { executeAction } from "@/platform/actions";
 import { create } from "zustand";
 import { AnsiStream, appendSpans, type Span } from "@/ui/ansi";
 import { setContext } from "@/platform/context";
+import { startedPort } from "@/platform/serverPort";
 import {
   call,
   commands,
@@ -50,6 +51,8 @@ export interface DebugSession {
   programInput?: boolean;
   /** Process the session is attached to (a Run tab's build tool); stopped with the session. */
   process: RunId | null;
+  /** HTTP port announced by this debuggee's Spring Boot server. */
+  httpPort?: number;
   status: SessionStatus;
   stoppedThread: number | null;
   stopReason: string | null;
@@ -106,8 +109,12 @@ export const useExecutionPoint = create<ExecutionPoint>(() => ({ path: null, lin
 /** Console buffer: at most this many physical lines per session. */
 const MAX_CONSOLE_LINES = 50_000;
 let lineSeq = 0;
-/** ANSI state per session and output category (a colour can span several output events). */
-const ansiStreams = new Map<DebugSessionId, Map<string, AnsiStream>>();
+/** ANSI and incomplete startup lines are kept separately per session and output category. */
+interface ConsoleStream {
+  ansi: AnsiStream;
+  tail: string;
+}
+const consoleStreams = new Map<DebugSessionId, Map<string, ConsoleStream>>();
 
 /** Streamed output buffered until the next animation frame (one setState per frame). */
 interface PendingOutput {
@@ -125,11 +132,11 @@ function cancelOutputFlush() {
   outputFlushHandle = null;
 }
 
-function ansiStream(session: DebugSessionId, category: string): AnsiStream {
-  let streams = ansiStreams.get(session);
-  if (!streams) ansiStreams.set(session, (streams = new Map()));
+function consoleStream(session: DebugSessionId, category: string): ConsoleStream {
+  let streams = consoleStreams.get(session);
+  if (!streams) consoleStreams.set(session, (streams = new Map()));
   let stream = streams.get(category);
-  if (!stream) streams.set(category, (stream = new AnsiStream()));
+  if (!stream) streams.set(category, (stream = { ansi: new AnsiStream(), tail: "" }));
   return stream;
 }
 
@@ -246,7 +253,7 @@ function settleStart(id: DebugSessionId | null, discard = false) {
       for (const s of leftovers) {
         delete sessions[s];
         delete console[s];
-        ansiStreams.delete(s);
+        consoleStreams.delete(s);
       }
       return { sessions, console, active: st.active != null && sessions[st.active] ? st.active : null };
     });
@@ -261,7 +268,7 @@ function dropFinished() {
   useDebug.setState((s) => {
     const sessions = Object.fromEntries(Object.entries(s.sessions).filter(([, v]) => isLive(v)));
     const consoleLines = Object.fromEntries(Object.entries(s.console).filter(([k]) => sessions[+k]));
-    for (const id of ansiStreams.keys()) if (!sessions[id]) ansiStreams.delete(id);
+    for (const id of consoleStreams.keys()) if (!sessions[id]) consoleStreams.delete(id);
     return { sessions, console: consoleLines, active: s.active != null && sessions[s.active] ? s.active : null };
   });
   publishContext();
@@ -296,6 +303,12 @@ export function publishContext() {
           startedAt: session.startedAt ?? 0,
           status: paused ? ("paused" as const) : session.status,
           processId: session.process,
+          httpPort:
+            session.process === null
+              ? (session.httpPort ??
+                retained.find((child) => isLive(child) && child.httpPort != null && rootOf(child).id === session.id)
+                  ?.httpPort)
+              : undefined,
           rerun: session.runConfig || session.launch ? () => void rerunSession(session.id) : null,
           stop: (options?: { stopProcess?: boolean }) => stopSession(session.id, options),
           show: () => {
@@ -345,16 +358,7 @@ export function publishContext() {
 export function appendConsole(session: DebugSessionId, category: string, raw: string) {
   if (!raw) return;
   flushConsoleOutput();
-  const spans = ansiStream(session, category).parse(raw);
-  const text = spans.map((sp) => sp.text).join("");
-  if (!text) return;
-  useDebug.setState((s) => {
-    const prev = s.console[session] ?? [];
-    const next = [...prev];
-    appendConsoleLines(next, category, spans);
-    trimConsole(next);
-    return { console: { ...s.console, [session]: next } };
-  });
+  applyConsoleOutput([{ session, category, raw }]);
 }
 
 /**
@@ -381,22 +385,46 @@ export function appendConsoleQueued(session: DebugSessionId, category: string, r
 function flushConsoleOutput() {
   cancelOutputFlush();
   if (pendingOutput.length === 0) return;
-  const chunks = pendingOutput.splice(0);
+  const { sessions } = useDebug.getState();
+  applyConsoleOutput(pendingOutput.splice(0).filter(({ session }) => sessions[session]));
+}
+
+function outputPort(stream: ConsoleStream, text: string): number | null {
+  const lines = (stream.tail + text).split("\n");
+  // Keep the end of a partial line, without retaining arbitrarily long console output.
+  stream.tail = lines.pop()!.slice(-8192);
+  let port = null;
+  for (const line of lines) port = startedPort(line) ?? port;
+  return port;
+}
+
+function applyConsoleOutput(chunks: PendingOutput[]) {
+  if (chunks.length === 0) return;
+  const previousSessions = useDebug.getState().sessions;
   useDebug.setState((s) => {
+    let sessions = s.sessions;
     const consoleBySession = { ...s.console };
     for (const { session, category, raw } of chunks) {
-      if (!s.sessions[session]) continue;
-      const spans = ansiStream(session, category).parse(raw);
-      const text = spans.map((sp) => sp.text).join("");
-      if (!text) continue;
+      const stream = consoleStream(session, category);
+      const spans = stream.ansi.parse(raw);
+      if (!spans.length) continue;
+      const debug = sessions[session];
+      if (debug && debug.status !== "terminated" && debug.process === null && session > 0) {
+        if (category === "stdout" || category === "stderr") {
+          const port = outputPort(stream, spans.map((span) => span.text).join(""));
+          if (port !== null && port !== debug.httpPort)
+            sessions = { ...sessions, [session]: { ...debug, httpPort: port } };
+        }
+      }
       const prev = consoleBySession[session] ?? [];
       const next = [...prev];
       appendConsoleLines(next, category, spans);
       trimConsole(next);
       consoleBySession[session] = next;
     }
-    return { console: consoleBySession };
+    return { sessions, console: consoleBySession };
   });
+  if (useDebug.getState().sessions !== previousSessions) publishContext();
 }
 
 /** Split styled output at real line breaks, retaining partial lines across events. */
@@ -446,7 +474,7 @@ function trimConsole(lines: ConsoleLine[]) {
 
 export function clearConsole(session: DebugSessionId) {
   flushConsoleOutput();
-  ansiStreams.delete(session);
+  consoleStreams.delete(session);
   useDebug.setState((s) => ({ console: { ...s.console, [session]: [] } }));
 }
 
@@ -545,7 +573,7 @@ export async function startSession(
         console[id] = [...(console[preparation.id] ?? []), ...(console[id] ?? [])];
         delete console[preparation.id];
         delete sessions[preparation.id];
-        ansiStreams.delete(preparation.id);
+        consoleStreams.delete(preparation.id);
       }
       return {
         console,
@@ -663,7 +691,10 @@ export function removeSession(id: DebugSessionId) {
   const sessions: Record<number, DebugSession> = {};
   for (const s of Object.values(st.sessions)) if (!gone.has(s.id)) sessions[s.id] = s;
   const console = { ...st.console };
-  for (const goneId of gone) delete console[goneId];
+  for (const goneId of gone) {
+    delete console[goneId];
+    consoleStreams.delete(goneId);
+  }
   const at = order.indexOf(id);
   const neighbour =
     order
@@ -1057,7 +1088,7 @@ export function resetSessions() {
   for (const s of Object.values(sessions)) if (s.parent == null && isLive(s)) void stopSession(s.id);
   pendingOutput.length = 0;
   cancelOutputFlush();
-  ansiStreams.clear();
+  consoleStreams.clear();
   useDebug.setState({ sessions: {}, active: null, console: {}, stopSeq: 0 });
   useExecutionPoint.setState({ path: null, line: 0, top: true, values: {} });
   publishContext();

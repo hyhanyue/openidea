@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { commands, type RunConfig } from "@/platform/ipc";
 import { useProject } from "@/platform/project";
 import { validateSettings } from "@/features/settings/model/schema";
-import { adoptSession, appendConsole, useDebug } from "@/features/debugger/state";
+import { adoptSession, appendConsole, handleDebugEvent, useDebug } from "@/features/debugger/state";
 import { DebugServiceConsole } from "@/features/debugger/ui/DebugConsole";
 import { runServiceProvider } from "@/features/run/services";
 import { onRunExited, runtime, startRun, useRun } from "@/features/run/store";
@@ -135,6 +135,8 @@ it("shows the owning Run output for attached debugging and overrides both sets o
   render(<ServicesTreeView />);
   select();
   expect(screen.getByRole("log")).toHaveTextContent("Maven application log");
+  act(() => runtime(s!.id)!.console.append({ kind: "stdout", text: "Tomcat started on port 8085 (http)\n" }));
+  expect(screen.getByRole("tree")).toHaveTextContent(":8085");
   const actions = within(screen.getByRole("toolbar", { name: "Run actions" }));
   fireEvent.click(actions.getByRole("button", { name: "Rerun" }));
   expect(d.rerun).toHaveBeenCalledOnce();
@@ -155,4 +157,67 @@ it("group Stop stops all roots but terminates a shared Maven process only once",
   await vi.waitFor(() => expect(second.stop).toHaveBeenCalledOnce());
   expect(first.stop).toHaveBeenCalledExactlyOnceWith({ stopProcess: false });
   expect(second.stop).toHaveBeenCalledExactlyOnceWith();
+});
+
+it("shows a Spring Boot HTTP port discovered in direct debugger output", () => {
+  adoptSession(18080, { runConfig: config });
+  render(<ServicesTreeView />);
+  select();
+  expect(screen.getByRole("tree", { name: "Services" })).toHaveTextContent("Debugging");
+  act(() => appendConsole(18080, "stdout", "Tomcat started on port 18080 (http) with context path '/'\n"));
+  expect(screen.getByRole("log")).toHaveTextContent("Tomcat started on port 18080");
+  expect(screen.getByRole("tree", { name: "Services" })).toHaveTextContent(":18080");
+});
+
+it("follows split child output and keeps the port with its own debug execution", async () => {
+  adoptSession(101, { runConfig: config, startedAt: 1 });
+  adoptSession(102, { parent: 101 });
+  adoptSession(103, { runConfig: config, startedAt: 2 });
+  render(<ServicesTreeView />);
+  const tree = screen.getByRole("tree", { name: "Services" });
+  const output = (session: number, category: string, output: string) =>
+    handleDebugEvent(session, { kind: "output", category, output });
+  act(() => {
+    output(102, "stderr", "\x1b[3");
+    output(102, "stdout", "Listening for transport dt_socket at address: 5005\n");
+    output(102, "stderr", "2mNetty started on port 90");
+    output(102, "stdout", "99\n");
+  });
+  await vi.waitFor(() => expect(useDebug.getState().console[102]?.at(-1)?.text).toBe("99\n"));
+  expect(useDebugRunSessions.getState().serviceSessions.find((s) => s.id === 101)?.httpPort).toBeUndefined();
+
+  act(() => {
+    output(102, "stderr", "91\x1b[0m\r\n");
+    output(103, "stdout", "Tomcat started on port 8083 (http)\n");
+  });
+  await within(tree).findByText(":8083");
+  expect(tree).not.toHaveTextContent(":9091");
+  expect(tree).not.toHaveTextContent(":5005");
+
+  act(() => handleDebugEvent(103, { kind: "terminated" }));
+  expect(tree).toHaveTextContent(":9091");
+  act(() =>
+    handleDebugEvent(102, {
+      kind: "stopped",
+      reason: "pause",
+      threadId: 1,
+      description: null,
+      allThreadsStopped: true,
+    }),
+  );
+  expect(tree).toHaveTextContent("Suspended");
+  expect(tree).not.toHaveTextContent(":9091");
+  act(() => handleDebugEvent(102, { kind: "continued", threadId: 1, allThreadsContinued: true }));
+  expect(tree).toHaveTextContent(":9091");
+  act(() => handleDebugEvent(102, { kind: "terminated" }));
+  expect(tree).toHaveTextContent("Debugging");
+  expect(tree).not.toHaveTextContent(":9091");
+
+  act(() => {
+    handleDebugEvent(101, { kind: "terminated" });
+    adoptSession(104, { runConfig: config, startedAt: 3 });
+    appendConsole(104, "stdout", "Listening for transport dt_socket at address: 5006\n");
+  });
+  expect(tree).toHaveTextContent("Debugging");
+  expect(tree).not.toHaveTextContent(/:(8083|9091|5006)/);
 });

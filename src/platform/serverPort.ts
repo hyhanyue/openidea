@@ -4,7 +4,7 @@
  * "Netty started on port 8080", "Undertow started on port(s) 8080 (http)",
  * "Jetty started on port(s) 8080 (http/1.1)".
  */
-const STARTED = /\b(?:Tomcat|Netty|Undertow|Jetty)\b.*?\bstarted on port(?:\(s\))?:?\s*(\d{1,5})/i;
+const STARTED = /\b(?:Tomcat|Netty|Undertow|Jetty)\b.*?\bstarted on port(?:\(s\))?:?\s*(\d{1,5})(?!\d)/i;
 
 export function startedPort(line: string): number | null {
   if (!line.includes("tarted on port")) return null;

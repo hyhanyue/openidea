@@ -53,6 +53,28 @@ it("does not republish service metadata when console output changes", () => {
   expect(useDebugRunSessions.getState().serviceSessions).toBe(summaries);
 });
 
+it("retains a Spring Boot port announced before the debug start returns its configuration", async () => {
+  ipc.debugStart.mockImplementationOnce(async () => {
+    handleDebugEvent(42, { kind: "started", name: "app", adapter: "java-debug", parent: null });
+    handleDebugEvent(42, { kind: "output", category: "stdout", output: "Tomcat started on port 8080 (http)\n" });
+    return { status: "ok", data: 42 };
+  });
+  await startSession(
+    {
+      name: "app",
+      adapter: "java-debug",
+      request: "launch",
+      program: null,
+      args: [],
+      cwd: "/p",
+      env: {},
+      extraJson: null,
+    },
+    { runConfig: { ...config, kind: "spring-boot", debugAdapter: "java-debug" } },
+  );
+  expect(useDebugRunSessions.getState().serviceSessions).toMatchObject([{ id: 42, httpPort: 8080 }]);
+});
+
 it("stops shared-process debugger roots without stopping their process until requested", async () => {
   adoptSession(1, { runConfig: config, process: 7 });
   await stopSession(1, { stopProcess: false });
