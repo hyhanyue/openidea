@@ -18,6 +18,9 @@ parsing and run/debug improvements belong to the other chats. This branch avoids
   first-party launch-reference consumer, plain/property-class registrations and
   source dependency refresh. This is source-only; the parent will rebuild on SDK 1.4.
 
+- `ab269600`: integration handoff documentation. A final source correction normalizes
+  indexed environment names before nested fields, with matching Java 8 coverage.
+
 ## Earlier verified work
 
 Generic baseline: `Store<String>` incorrectly selected a primary `Store<Integer>`.
@@ -131,7 +134,7 @@ selection facts cannot survive deselection/conflict.
 
 ## Targeted verification
 
-Passed: **223** plugin tests, **40** shared parser/index tests, **8** real
+Passed: **224** plugin tests, **40** shared parser/index tests, **8** real
 Boot 2.7.18 / Java 8 tests, and **14** focused frontend tests. Plugin clippy
 (`-D warnings`), formatting, full frontend typecheck, frontend build, format check
 and knip pass. Lint completes with warnings only in pre-existing VCS hooks and

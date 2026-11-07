@@ -792,7 +792,13 @@ impl Snapshot {
             .collect()
     }
     pub fn candidates(&self, key: &str) -> Vec<&Source> {
-        let variable = key.replace('.', "_").replace('-', "").replace(['[', ']'], "_").to_uppercase();
+        let variable = key
+            .replace("].", "_")
+            .replace("][", "_")
+            .replace('.', "_")
+            .replace('-', "")
+            .replace(['[', ']'], "_")
+            .to_uppercase();
         let mut values: Vec<_> = self
             .sources
             .iter()
@@ -1205,5 +1211,14 @@ mod tests {
         let out = snapshot_project(&project, &BTreeMap::new(), None);
         assert!(matches!(out.resolve("value").state, State::Unknown(_)));
         assert!(out.warnings.iter().any(|w| w.contains("YAML")));
+    }
+    #[test]
+    fn indexed_environment_names_keep_one_separator_before_nested_fields() {
+        let (host, project) = setup("dev");
+        let mut data = envelope().unwrap();
+        data["launch"]["environment"]["DEMO_ITEMS_0_NAME"] = serde_json::json!({"state":"known","value":"nested-env"});
+        host.set_setting("springBeans.launchContext", &data.to_string());
+        let out = snapshot_project(&project, &BTreeMap::new(), None);
+        assert_eq!(out.resolve("demo.items[0].name").state, State::Value("nested-env".into()));
     }
 }

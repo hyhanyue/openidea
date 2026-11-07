@@ -58,10 +58,12 @@ class ConfigurationEnvironmentTest {
     @Test void environmentSystemJsonAndCommandLinePrecedence() {
         Map<String,Object> env = new LinkedHashMap<>();
         env.put("DEMO_NAME","environment");
+        env.put("DEMO_ITEMS_0_NAME","nested-env");
         Map<String,Object> system = new LinkedHashMap<>();
         system.put("demo.name","system");
         try(ConfigurableApplicationContext context = start(env,system,"--spring.profiles.active=dev")) {
             assertEquals("system",context.getBean(DemoProperties.class).getName());
+            assertEquals("nested-env",context.getEnvironment().getProperty("demo.items[0].name"));
         }
         env.put("SPRING_APPLICATION_JSON","{\"demo\":{\"name\":\"json\"}}");
         try(ConfigurableApplicationContext context = start(env,system,"--spring.profiles.active=dev")) {
