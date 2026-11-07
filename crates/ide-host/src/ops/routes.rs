@@ -42,8 +42,8 @@ pub(crate) fn sources_in(root: &Path, excludes: &[String]) -> Vec<RouteSource> {
             return;
         }
         let Ok(text) = std::fs::read_to_string(path) else { return };
-        // Only a file that names a mapping annotation is worth parsing.
-        if !text.contains("Mapping") {
+        // Consumers of composed annotations and inherited contracts need not name a mapping.
+        if !text.contains('@') && !text.contains("extends") && !text.contains("implements") && !text.contains(':') {
             return;
         }
         let Ok(mut found) = found.lock() else { return };
@@ -108,16 +108,19 @@ mod tests {
     }
 
     #[test]
-    fn files_that_name_no_mapping_are_left_out() {
+    fn mapping_contracts_and_annotation_consumers_are_retained() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("src")).unwrap();
         std::fs::write(tmp.path().join("src/Ctl.java"), "class Ctl { @GetMapping(\"/a\") void a() {} }").unwrap();
         std::fs::write(tmp.path().join("src/Plain.java"), "class Plain { void a() {} }").unwrap();
+        std::fs::write(tmp.path().join("src/Custom.java"), "@Api class Custom { @Read void a() {} }").unwrap();
+        std::fs::write(tmp.path().join("src/Intermediate.java"), "interface Intermediate extends Api {}").unwrap();
         std::fs::write(tmp.path().join("src/Notes.txt"), "@GetMapping(\"/a\")").unwrap();
         let files = sources_in(tmp.path(), &[]);
-        assert_eq!(files.len(), 1, "{:?}", files.iter().map(|f| &f.path).collect::<Vec<_>>());
-        assert!(files[0].path.ends_with("src/Ctl.java"), "{:?}", files[0].path);
-        assert!(files[0].text.contains("@GetMapping"));
+        assert_eq!(files.len(), 3, "{:?}", files.iter().map(|f| &f.path).collect::<Vec<_>>());
+        assert!(files.iter().any(|f| f.path.ends_with("src/Ctl.java")));
+        assert!(files.iter().any(|f| f.path.ends_with("src/Custom.java")));
+        assert!(files.iter().any(|f| f.path.ends_with("src/Intermediate.java")));
     }
 
     #[test]

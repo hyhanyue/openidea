@@ -38,11 +38,15 @@ pub fn find_dirs(window: Window, state: State<'_, AppState>, query: String, limi
 /// Spring Web mapping sources for the request-path index of Search Everywhere.
 #[tauri::command]
 #[specta::specta]
-pub fn spring_route_sources(
+pub async fn spring_route_sources(
     window: Window,
     state: State<'_, AppState>,
 ) -> IdeResult<Vec<ide_host::ops::routes::RouteSource>> {
-    ide_host::ops::routes::spring_route_sources(&state.host, window.label())
+    let host = state.host.clone();
+    let label = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || ide_host::ops::routes::spring_route_sources(&host, &label))
+        .await
+        .map_err(|error| ide_core::IdeError::internal(error.to_string()))?
 }
 
 #[tauri::command]

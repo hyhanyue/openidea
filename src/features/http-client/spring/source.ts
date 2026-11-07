@@ -22,6 +22,7 @@ export type Expr = Tok[];
 export interface Annotation {
   /** Simple name (`GetMapping` of `@org.springframework…GetMapping`). */
   name: string;
+  qualifiedName: string;
   /** Arguments by name; a positional argument is `value`. */
   args: Map<string, Expr>;
 }
@@ -49,10 +50,15 @@ export interface Method {
   /** Whole declaration, annotations included. */
   start: number;
   end: number;
+  defaultValue: Expr | null;
 }
 
 export interface ClassDecl {
   name: string;
+  kind: "class" | "interface" | "annotation" | "enum" | "record" | "object";
+  abstract: boolean;
+  typeParams: string[];
+  supers: string[];
   annotations: Annotation[];
   nameStart: number;
   /** Whole declaration, annotations included. */
@@ -232,14 +238,17 @@ class Reader {
     if (!this.is(i, "@") || this.toks[i + 1]?.kind !== "id" || this.is(i + 1, "interface")) return null;
     let j = i + 1;
     let name = this.toks[j]!.text;
+    let qualifiedName = name;
     // Kotlin use-site targets: `@field:JsonProperty`.
     if (this.is(j + 1, ":") && this.toks[j + 2]?.kind === "id") {
       j += 2;
       name = this.toks[j]!.text;
+      qualifiedName = name;
     }
     while (this.is(j + 1, ".") && this.toks[j + 2]?.kind === "id") {
       j += 2;
       name = this.toks[j]!.text;
+      qualifiedName += `.${name}`;
     }
     j++;
     const args = new Map<string, Expr>();
@@ -265,7 +274,7 @@ class Reader {
       }
       j = close + 1;
     }
-    return [{ name, args }, j];
+    return [{ name, qualifiedName, args }, j];
   }
 
   /** Splits `[from, to)` at top-level commas (brackets and generics nest). */
@@ -383,6 +392,10 @@ class Reader {
         const nameTok = companion ? t : this.toks[i + 1]!;
         const cls: ClassDecl = {
           name: companion ? "Companion" : nameTok.text,
+          kind: this.is(i - 1, "@") ? "annotation" : t.text as ClassDecl["kind"],
+          abstract: header.some((h) => h.text === "abstract"),
+          typeParams: [],
+          supers: [],
           annotations,
           nameStart: nameTok.start,
           start: declStart,
@@ -395,11 +408,13 @@ class Reader {
         };
         let j = companion ? i + 1 : i + 2;
         if (this.is(j, "<")) {
+          const start = j + 1;
           let depth = 0;
           for (; j < to; j++) {
             if (this.is(j, "<")) depth++;
             else if (this.is(j, ">") && --depth === 0) break;
           }
+          cls.typeParams = this.split(start, j).map((p) => p.find((t) => t.kind === "id")?.text ?? "").filter(Boolean);
           j++;
         }
         // Kotlin `class A @Inject constructor(…)`.
@@ -413,9 +428,16 @@ class Reader {
           cls.ctorParams = this.params(j);
           j = this.match[j]! + 1;
         }
+        const hierarchy = j;
         for (; j < to; j++) {
           if (this.is(j, "{") || this.is(j, ";") || this.startsMember(j)) break;
           if (OPEN[this.toks[j]!.text] && this.toks[j]!.kind === "p") j = this.match[j]!;
+        }
+        const parents = this.toks.slice(hierarchy, j);
+        const splitAt = parents.findIndex((t) => ["extends", "implements", ":"].includes(t.text));
+        if (splitAt >= 0) {
+          const parts = new Reader(parents.slice(splitAt + 1).map((t) => t.text === "implements" ? { ...t, kind: "p" as const, text: "," } : t));
+          cls.supers = parts.split(0, parts.toks.length).map((p) => joined(p.slice(0, p.findIndex((t) => t.text === "(") < 0 ? undefined : p.findIndex((t) => t.text === "("))));
         }
         if (this.is(j, "{")) {
           const close = Math.min(this.match[j]!, to);
@@ -432,10 +454,20 @@ class Reader {
         t.kind === "id" &&
         this.is(i + 1, "(") &&
         !NOT_METHOD.has(t.text) &&
-        !header.some((h) => h.kind === "p" && (h.text === "=" || h.text === "."))
+        !header.some((h) => h.kind === "p" && h.text === "=") &&
+        header.at(-1)?.text !== "."
       ) {
         const params = this.params(i + 1);
         let j = this.match[i + 1]! + 1;
+        let defaultValue: Expr | null = null;
+        if (into.kind === "annotation" && this.is(j, "default")) {
+          const start = ++j;
+          while (j < to && !this.is(j, ";")) {
+            if (this.toks[j]!.kind === "p" && OPEN[this.toks[j]!.text]) j = this.match[j]!;
+            j++;
+          }
+          defaultValue = this.toks.slice(start, j);
+        }
         for (; j < to; j++) {
           if (this.is(j, "{")) {
             j = this.match[j]! + 1;
@@ -449,7 +481,7 @@ class Reader {
           if (this.toks[j]!.kind === "p" && OPEN[this.toks[j]!.text]) j = this.match[j]!;
         }
         const end = this.toks[Math.min(j, this.toks.length) - 1]?.end ?? t.end;
-        into.methods.push({ name: t.text, annotations, params, nameStart: t.start, start: declStart, end });
+        into.methods.push({ name: t.text, annotations, params, nameStart: t.start, start: declStart, end, defaultValue });
         reset();
         i = j;
         continue;
@@ -532,6 +564,10 @@ export function parseSource(text: string): SourceFile {
   }
   const root: ClassDecl = {
     name: "",
+    kind: "class",
+    abstract: false,
+    typeParams: [],
+    supers: [],
     annotations: [],
     nameStart: 0,
     start: 0,

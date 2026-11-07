@@ -15,7 +15,7 @@ import {
   type TextEditorHandle,
 } from "@/editor/api";
 import { tx } from "@/platform/i18n";
-import { call, commands, emitLocalIdeEvent, IpcError } from "@/platform/ipc";
+import { call, commands, emitLocalIdeEvent, onIdeEvent, IpcError } from "@/platform/ipc";
 import { ipcPath } from "@/platform/paths";
 import { useProject } from "@/platform/project";
 import { isVirtualUri } from "@/platform/virtualDocs";
@@ -24,6 +24,7 @@ import { editorService, notifications, type MenuGroupContext } from "@/workbench
 import { springAt, springControllers, type Controller, type Endpoint } from "./endpoints";
 import { appendRequests, bodyLookup, findHost, renderRequest, skeleton, type SourceReader } from "./request";
 import { parseSource } from "./source";
+import { controllersForSource, isRouteSource, knownControllers } from "./routeIndex";
 import styles from "../HttpClient.module.css";
 
 export const SPRING_LANGUAGES = new Set(["java", "kotlin"]);
@@ -45,6 +46,7 @@ const reader: SourceReader = {
 export interface Target {
   endpoint: Endpoint;
   path?: string;
+  method?: string;
 }
 
 async function scratchFile(): Promise<{ path: string; created: boolean }> {
@@ -97,8 +99,8 @@ export async function generateRequests(sourcePath: string, text: string, targets
         reader,
       ),
     ]);
-    const blocks = targets.map(({ endpoint, path }) =>
-      renderRequest(endpoint, {
+    const blocks = targets.map(({ endpoint, path, method }) =>
+      renderRequest(method ? { ...endpoint, httpMethod: method } : endpoint, {
         host,
         path,
         body: endpoint.bodyType ? skeleton(endpoint.bodyType, lookup) : undefined,
@@ -127,16 +129,20 @@ export async function generateRequests(sourcePath: string, text: string, targets
 }
 
 function endpointItems(sourcePath: string, text: string, e: Endpoint): MenuItem[] {
-  const generate = (path?: string) => void generateRequests(sourcePath, text, [{ endpoint: e, path }]);
+  const targets = targetsOf(e);
   return [
-    e.paths.length > 1
+    targets.length > 1
       ? {
           label: "Generate Request in HTTP Client",
           icon: "file-http",
-          submenu: e.paths.map((p) => ({ label: `${e.httpMethod} ${p}`, verbatim: true, run: () => generate(p) })),
+          submenu: targets.map((target) => ({ label: `${target.method} ${target.path}`, verbatim: true, run: () => void generateRequests(sourcePath, text, [target]) })),
         }
-      : { label: "Generate Request in HTTP Client", icon: "file-http", run: () => generate() },
+      : { label: "Generate Request in HTTP Client", icon: "file-http", run: () => void generateRequests(sourcePath, text, targets) },
   ];
+}
+
+function targetsOf(endpoint: Endpoint): Target[] {
+  return (endpoint.httpMethods.length ? endpoint.httpMethods : [endpoint.httpMethod]).flatMap((method) => endpoint.paths.map((path) => ({ endpoint, method, path })));
 }
 
 function controllerItems(sourcePath: string, text: string, c: Controller): MenuItem[] {
@@ -149,7 +155,7 @@ function controllerItems(sourcePath: string, text: string, c: Controller): MenuI
             void generateRequests(
               sourcePath,
               text,
-              c.endpoints.map((endpoint) => ({ endpoint })),
+              c.endpoints.flatMap(targetsOf),
             ),
         },
       ]
@@ -158,11 +164,11 @@ function controllerItems(sourcePath: string, text: string, c: Controller): MenuI
 
 /** Editor context menu items for the caret at `offset`: the generate actions (a path choice for several paths). */
 export function springMenuItems(sourcePath: string, text: string, offset: number): MenuItem[] {
-  const { controller, endpoint } = springAt(springControllers(text), offset);
+  const { controller, endpoint } = springAt(knownControllers(useProject.getState().project?.root ?? null, sourcePath, text), offset);
   const items: MenuItem[] = [];
   if (endpoint)
     items.push(
-      endpoint.paths.length > 1
+      targetsOf(endpoint).length > 1
         ? endpointItems(sourcePath, text, endpoint)[0]!
         : { kind: "action", action: GENERATE_REQUEST, icon: "file-http" },
     );
@@ -185,7 +191,8 @@ export async function generateAtCaret(scope: "endpoint" | "controller"): Promise
   const e = activeEditor();
   if (!e || !SPRING_LANGUAGES.has(e.ctx.language)) return;
   const text = e.view.state.doc.toString();
-  const { controller, endpoint } = springAt(springControllers(text), e.view.state.selection.main.head);
+  const controllers = await controllersForSource(useProject.getState().project?.root ?? null, e.ctx.path, text);
+  const { controller, endpoint } = springAt(controllers, e.view.state.selection.main.head);
   const endpoints = scope === "endpoint" ? (endpoint ? [endpoint] : []) : (controller?.endpoints ?? []);
   if (!endpoints.length) {
     notifications().notify({
@@ -198,7 +205,7 @@ export async function generateAtCaret(scope: "endpoint" | "controller"): Promise
   await generateRequests(
     e.ctx.path,
     text,
-    endpoints.map((x) => ({ endpoint: x })),
+    endpoints.flatMap(targetsOf),
   );
 }
 
@@ -223,23 +230,23 @@ const marksField = StateField.define<Mark[]>({
   },
 });
 
-function computeMarks(state: EditorState): Mark[] {
+function computeMarks(state: EditorState, controllers: Controller[]): Mark[] {
   const doc = state.doc;
   const marks: Mark[] = [];
   const lineStart = (offset: number) => doc.lineAt(Math.min(offset, doc.length)).from;
-  for (const c of springControllers(doc.toString())) {
+  for (const c of controllers) {
     if (c.endpoints.length)
       marks.push({
         pos: lineStart(c.offset),
-        key: `class:${c.name}`,
+        key: `class:${c.name}:${JSON.stringify(c.endpoints)}`,
         title: "Generate Requests for Controller",
         items: (path, text) => controllerItems(path, text, c),
       });
-    for (const e of c.endpoints)
+    for (const e of c.endpoints.filter((e) => !e.origin))
       marks.push({
         pos: lineStart(e.offset),
-        key: `${e.httpMethod} ${e.paths.join(",")}`,
-        title: `${e.httpMethod} ${e.paths[0] ?? "/"}`,
+        key: JSON.stringify(e),
+        title: `${e.httpMethods.join("|") || "*"} ${e.paths[0] ?? "/"}`,
         items: (path, text) => endpointItems(path, text, e),
       });
   }
@@ -273,7 +280,12 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
   const detector = ViewPlugin.fromClass(
     class {
       timer: ReturnType<typeof setTimeout> | undefined;
+      revision = 0;
+      unsubscribe: () => void;
       constructor(readonly view: EditorView) {
+        this.unsubscribe = onIdeEvent("fsChanged", (event) => {
+          if ([...event.created, ...event.modified, ...event.removed].some((p) => isRouteSource(String(p)))) this.schedule(0);
+        });
         this.schedule(0);
       }
       update(u: ViewUpdate) {
@@ -281,8 +293,12 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
       }
       schedule(delay: number) {
         clearTimeout(this.timer);
-        this.timer = setTimeout(() => {
-          const found = computeMarks(this.view.state);
+        const revision = ++this.revision;
+        this.timer = setTimeout(async () => {
+          const state = this.view.state;
+          const controllers = await controllersForSource(useProject.getState().project?.root ?? null, path, state.doc.toString());
+          if (this.revision !== revision || this.view.state.doc !== state.doc) return;
+          const found = computeMarks(this.view.state, controllers);
           const cur = this.view.state.field(marksField);
           const same =
             cur.length === found.length && cur.every((m, i) => m.pos === found[i]!.pos && m.key === found[i]!.key);
@@ -290,6 +306,8 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
         }, delay);
       }
       destroy() {
+        this.revision++;
+        this.unsubscribe();
         clearTimeout(this.timer);
       }
     },
@@ -298,14 +316,14 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
     // Only files that have mappings (the gutter found some) are parsed again here.
     if (!view.state.field(marksField, false)?.length) return [];
     const text = view.state.doc.toString();
-    const { controller, endpoint } = springAt(springControllers(text), view.state.selection.main.head);
+    const { controller, endpoint } = springAt(knownControllers(useProject.getState().project?.root ?? null, path, text), view.state.selection.main.head);
     const out: ContributedIntention[] = [];
     if (endpoint)
       out.push({
         id: GENERATE_REQUEST,
         label: "Generate Request in HTTP Client",
         icon: "file-http",
-        run: () => generateRequests(path, text, [{ endpoint }]),
+        run: () => generateRequests(path, text, targetsOf(endpoint)),
       });
     if (controller?.endpoints.length)
       out.push({
@@ -316,7 +334,7 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
           generateRequests(
             path,
             text,
-            controller.endpoints.map((e) => ({ endpoint: e })),
+            controller.endpoints.flatMap(targetsOf),
           ),
       });
     return out;

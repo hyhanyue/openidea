@@ -2,7 +2,9 @@
 import { call, commands, onIdeEvent } from "@/platform/ipc";
 import { ipcPath, isSameOrInside } from "@/platform/paths";
 import { registerEndpointProvider, type EndpointEntry } from "@/workbench/contributions";
-import { springControllers } from "./endpoints";
+import { projectControllers, springControllers, type Controller } from "./endpoints";
+import { MappingProject, type MappingSource } from "./mappings";
+import { parseSource } from "./source";
 
 export function registerSpringEndpointProvider(): () => void {
   clearRouteIndex();
@@ -17,7 +19,8 @@ export function registerSpringEndpointProvider(): () => void {
   };
 }
 
-let cached: { root: string; promise: Promise<EndpointEntry[]> } | null = null;
+interface Index { project: MappingProject; routes: EndpointEntry[] }
+let cached: { root: string; promise: Promise<Index>; index?: Index } | null = null;
 
 /** Whether `path` is a source a mapping can live in (a Java or Kotlin file). */
 export function isRouteSource(path: string): boolean {
@@ -30,42 +33,59 @@ export function clearRouteIndex() {
 }
 
 /** The project's routes, scanned once per project and kept in memory. */
-export function routeIndex(root: string | null): Promise<EndpointEntry[]> {
-  if (!root) return Promise.resolve([]);
-  if (cached?.root === root) return cached.promise;
-  const promise = scan(root);
-  cached = { root, promise };
-  return promise;
+export async function routeIndex(root: string | null): Promise<EndpointEntry[]> {
+  return root ? (await load(root)).routes : [];
 }
 
-async function scan(root: string): Promise<EndpointEntry[]> {
-  const sources = await call(commands.springRouteSources());
-  const routes: EndpointEntry[] = [];
+export function knownControllers(root: string | null, path: string, text: string): Controller[] {
+  const index = root && cached?.root === root ? cached.index : undefined;
+  return index ? projectControllers(index.project, ipcPath(path), text) : springControllers(text);
+}
+
+export async function controllersForSource(root: string | null, path: string, text: string): Promise<Controller[]> {
+  if (!root) return springControllers(text);
+  try { return projectControllers((await load(root)).project, ipcPath(path), text); }
+  catch { return springControllers(text); }
+}
+
+function load(root: string): Promise<Index> {
+  if (cached?.root === root) return cached.promise;
+  const entry: NonNullable<typeof cached> = { root, promise: scan(root) };
+  cached = entry;
+  void entry.promise.then((index) => { if (cached === entry) entry.index = index; }, () => { if (cached === entry) cached = null; });
+  return entry.promise;
+}
+
+async function scan(root: string): Promise<Index> {
+  const raw = await call(commands.springRouteSources());
+  const sources: MappingSource[] = [];
   const base = ipcPath(root).replace(/\/$/, "");
-  for (const source of sources) {
+  for (const source of raw) {
     const path = ipcPath(source.path);
     if (!isSameOrInside(path, base)) continue;
-    for (const controller of springControllers(source.text)) {
-      for (const endpoint of controller.endpoints) {
-        const at = lineCol(source.text, endpoint.offset);
-        // A mapping without a path answers nothing to look up by URL; the method
-        // itself is still reachable through the symbol index.
-        for (const url of endpoint.paths) {
-          routes.push({
-            method: endpoint.httpMethod,
-            url,
-            controller: controller.name,
-            methodName: endpoint.methodName,
-            path,
-            rel: path.slice(base.length + 1),
-            line: at.line,
-            col: at.col,
-          });
-        }
+    sources.push({ path, text: source.text, file: parseSource(source.text) });
+    // Parsing large source sets yields to editor input between batches.
+    if (sources.length % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  const project = new MappingProject(sources), routes: EndpointEntry[] = [];
+  const texts = new Map(sources.map((s) => [s.path, s.text]));
+  const seen = new Set<string>();
+  for (let i = 0; i < sources.length; i++) {
+    const source = sources[i]!;
+    for (const controller of projectControllers(project, source.path)) for (const endpoint of controller.endpoints) {
+      const path = endpoint.origin?.path || source.path;
+      const at = lineCol(texts.get(path) ?? source.text, endpoint.origin?.offset ?? endpoint.offset);
+      for (const method of endpoint.httpMethods.length ? endpoint.httpMethods : ["*"]) for (const url of endpoint.paths) {
+        const key = JSON.stringify([controller.name, endpoint.methodName, method, url, path, at.line, at.col]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        routes.push({ method, url, controller: controller.name, methodName: endpoint.methodName, path,
+          rel: path.slice(base.length + 1), line: at.line, col: at.col });
       }
     }
+    if (i % 16 === 15) await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
-  return routes;
+  return { project, routes };
 }
 
 function lineCol(text: string, offset: number): { line: number; col: number } {
