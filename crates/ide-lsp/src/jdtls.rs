@@ -544,7 +544,18 @@ impl LspManager {
         let started = Instant::now();
         let (server, run) = self.jdtls(path, cancel).await?;
         let ready_ms = started.elapsed().as_millis();
-        Self::jdtls_request_on(&server, &run, method, params, timeout, cancel, ready_ms).await
+        let classpath = params.get("command").and_then(Value::as_str) == Some("java.project.getClasspaths");
+        Self::jdtls_request_on(&server, &run, method, params, timeout, cancel, ready_ms).await.map_err(|error| {
+            if classpath
+                && missing_classpath_project(&error)
+                && let Some(failure) = run.maven_import_failure.lock().clone()
+                && path.join("pom.xml").is_file()
+            {
+                IdeError::new(error.kind, failure)
+            } else {
+                error
+            }
+        })
     }
 
     async fn jdtls_request_on(
@@ -576,17 +587,7 @@ impl LspManager {
             success = result.is_ok(),
             "Java launch request"
         );
-        result.map_err(|error| {
-            if phase == "java.project.getClasspaths"
-                && missing_classpath_project(&error)
-                && let Some(failure) = run.maven_import_failure.lock().clone()
-                && path.join("pom.xml").is_file()
-            {
-                IdeError::new(error.kind, failure)
-            } else {
-                error
-            }
-        })
+        result
     }
 
     /// `workspace/executeCommand` on the jdtls serving `path`.
