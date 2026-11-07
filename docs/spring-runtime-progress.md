@@ -52,7 +52,7 @@ No native app was built/launched, and **no GUI screenshots or macOS end-to-end r
 
 1. Cherry-pick phase commits onto the integration checkout. Small shared-file additions: `src/features/index.ts`, `src-tauri/src/commands/mod.rs`, `crates/ide-http/src/lib.rs`, en/zh text catalog append.
 2. Run `pnpm gen:bindings` during the unified native build and commit its generated result. `src/bindings.ts` was not hand-edited. Current frontend uses the isolated typed `invokeLocal<Snapshot>` adapter; runtime command is registered in the Specta builder. The generated-command drift check is **not complete** until regeneration.
-3. Command contract: `spring_runtime_snapshot { request, base, user, password } -> IdeResult<serde_json::Value>`, represented by frontend `Snapshot`/`RuntimeRow`/`RuntimeState` in `model.ts`. Cancellation uses existing local `cancel_request`. There are no credentials/config values in the result. No remote host operation is required or added.
+3. Command contract: `spring_runtime_snapshot { request, base, user, password } -> IdeResult<ide_http::spring_runtime::SpringRuntimeSnapshot>`, represented by frontend `Snapshot`/`RuntimeRow`/`RuntimeState` in `model.ts`. Cancellation uses existing local `cancel_request`. There are no credentials/config values in the result. No remote host operation is required or added.
 4. Run `pnpm tauri dev`/`pnpm dev:app` once in the integration checkout; use its explicit MCP port. Open Java 8 fixture and action “Spring Runtime”. Capture before/after only with synthetic fixture data and empty password input.
 5. Verify narrow Services layouts and keyboard focus, en/zh labels, source Beans/Graph buttons, real Bean/type and controller navigation, unresolved library/proxy/duplicate identities, refresh after application restart, disconnect during I/O, project switch, disabled endpoint and bad base path, 401/403, malformed/redirect response, stopped runtime. Ensure runtime facts disappear on disconnect and HTTP history has no runtime exchanges.
 6. A newer Boot server, localhost IPv6-only server and local trusted HTTPS certificate are compatibility/manual GUI scenarios, not claimed live-verified here. Reactive container and unknown-field tolerance have module coverage.
@@ -161,3 +161,49 @@ the controller FQN instead of the declaration FQN.
 Native compilation, generated bindings and macOS GUI/end-to-end acceptance remain pending
 for unified integration, unchanged from the original delivery. No GUI screenshots or
 native navigation acceptance are claimed by the fixture/module checks.
+
+
+## Follow-up: concrete Specta IPC result
+
+Main-session native export reached a genuine compilation failure: `IdeResult<serde_json::Value>`
+does not implement the required Specta FunctionResult. This independent patch replaces the
+IPC result with a concrete domain contract; it does not import any other integrated line.
+
+- `ide-http::spring_runtime` publicly re-exports `SpringRuntimeSnapshot`, `SpringRuntimeData`,
+  `SpringRuntimeRow`, `SpringRuntimeState`, and `SpringRuntimeOutcome`. All derive
+  Serialize/Deserialize/Specta Type. Snapshot explicitly contains the five endpoint data
+  fields; data/rows contain only named strings, string vectors, booleans, u16 status and
+  enum values. There are no Value/Unknown/flatten fields in the exported wire types.
+- Missing optional fields deserialize to None and serialize with skip-none; optional fields
+  are also marked optional for Specta. Existing camelCase field/state/outcome strings are
+  preserved. Required endpoint/row fields remain required. Unknown fields/type/enum drift
+  fail validation rather than passing unknown data through IPC.
+- The existing allowlist JSON projection remains internal to the runtime pipeline. Its
+  completed sanitized object is consumed/validated into `SpringRuntimeSnapshot` before
+  return. Conversion runs in a blocking worker, honors cancellation, and reports only a
+  constant internal error if the contract fails; projected contents never enter errors.
+- Tauri glue now returns `IdeResult<SpringRuntimeSnapshot>` directly. Frontend and generated
+  bindings were not edited. The frontend's native-only `invokeLocal` path and local
+  cancellation path, plus the native adapter's remote-project rejection, remain unchanged.
+- A lightweight regression test binds Specta FunctionResult to the **actual production
+  snapshot future**, so changing its return type back to an unsupported type breaks this
+  module test without needing a Tauri/native build. A dev-only Specta function feature
+  enables this check; no dependency versions or Cargo.lock changes are needed.
+
+Verification on this patch:
+
+- `cargo test -p ide-http --offline`: **35 passed**, 2 fixture tests ignored by default.
+- `fixtures/spring-runtime-java8/verify.py`: both actual Java 8 / Boot 2.7.18 fixture tests
+  passed through the new typed return boundary (including inheritance/nested identities,
+  source redaction and actual 401/403/disabled-404 behavior). Children stopped automatically.
+- Four contract tests cover actual async FunctionResult support, missing optional fields /
+  omitted None serialization, unchanged field/state/outcome wire casing and strict schema
+  rejection with no data in the error. Final `cargo clippy -p ide-http --all-targets --offline -- -D warnings` and `cargo fmt --all --check` passed.
+
+Integration: cherry-pick only this new commit on top of the main session's already-integrated
+runtime patch (main reported current integration `cfde029a`). Then rerun the main native
+`export_bindings` command. Generated public type names are the SpringRuntime-prefixed names
+above, and the command result is now concrete. If the frontend adopts those generated
+aliases, retain `invokeLocal` (or an explicitly native-only command adapter); do not route
+this command or its cancellation through a remote server. No heavy native build or GUI
+verification is claimed from this session; main performs that unified check.

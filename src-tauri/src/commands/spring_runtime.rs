@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use ide_core::{IdeError, IdeResult, RequestId};
-use serde_json::Value;
+use ide_http::spring_runtime::SpringRuntimeSnapshot;
 use tauri::{State, Window};
 
 /// Local-only, ephemeral, sanitized Actuator snapshot; never recorded in HTTP history.
@@ -13,7 +13,7 @@ pub async fn spring_runtime_snapshot(
     base: String,
     user: String,
     password: String,
-) -> IdeResult<Value> {
+) -> IdeResult<SpringRuntimeSnapshot> {
     if state.remote_dev.get(window.label()).is_some() {
         return Err(IdeError::unavailable("Spring Runtime requires a local project"));
     }

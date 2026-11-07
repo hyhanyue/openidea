@@ -19,5 +19,6 @@ rustls-platform-verifier.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+specta = { workspace = true, features = ["function"] }
 tokio = { workspace = true, features = ["net"] }
 tempfile.workspace = true

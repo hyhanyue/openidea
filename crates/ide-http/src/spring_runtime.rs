@@ -6,6 +6,9 @@ use std::{
     time::Duration,
 };
 
+mod model;
+pub use model::{SpringRuntimeData, SpringRuntimeOutcome, SpringRuntimeRow, SpringRuntimeSnapshot, SpringRuntimeState};
+
 const ENDPOINTS: [&str; 5] = ["beans", "conditions", "env", "configprops", "mappings"];
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ROWS: usize = 20_000;
@@ -291,7 +294,12 @@ fn runtime_client() -> IdeResult<reqwest::Client> {
         .map_err(|_| IdeError::internal("Cannot create runtime client"))
 }
 
-pub async fn snapshot(base: &str, user: &str, password: &str, cancel: &CancellationToken) -> IdeResult<Value> {
+pub async fn snapshot(
+    base: &str,
+    user: &str,
+    password: &str,
+    cancel: &CancellationToken,
+) -> IdeResult<SpringRuntimeSnapshot> {
     let base = base_url(base)?;
     let client = runtime_client()?;
     let mut result = serde_json::Map::new();
@@ -305,7 +313,16 @@ pub async fn snapshot(base: &str, user: &str, password: &str, cancel: &Cancellat
     if cancel.is_cancelled() {
         return Err(IdeError::cancelled());
     }
-    Ok(Value::Object(result))
+    let converted = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(IdeError::cancelled()),
+        result = tokio::task::spawn_blocking(move || SpringRuntimeSnapshot::from_projection(Value::Object(result))) =>
+            result.map_err(|_| IdeError::internal("Spring Runtime snapshot conversion failed"))?,
+    }?;
+    if cancel.is_cancelled() {
+        return Err(IdeError::cancelled());
+    }
+    Ok(converted)
 }
 
 #[cfg(test)]
@@ -435,7 +452,7 @@ mod tests {
     #[ignore = "requires the isolated Java 8 Boot 2.7.18 fixture"]
     async fn real_java8_fixture() {
         let base = std::env::var("SPRING_RUNTIME_FIXTURE_URL").expect("fixture URL required");
-        let data = snapshot(&base, "", "", &CancellationToken::new()).await.unwrap();
+        let data = serde_json::to_value(snapshot(&base, "", "", &CancellationToken::new()).await.unwrap()).unwrap();
         for endpoint in ENDPOINTS {
             assert_eq!(data[endpoint]["state"], "ok", "{endpoint}");
         }
@@ -507,11 +524,13 @@ mod fixture_error_tests {
     #[ignore = "requires secured Java 8 fixture with env disabled; credentials in process environment only"]
     async fn real_java8_security_and_disabled_endpoint() {
         let base = std::env::var("SPRING_RUNTIME_FIXTURE_URL").expect("fixture URL required");
-        let anonymous = snapshot(&base, "", "", &CancellationToken::new()).await.unwrap();
+        let anonymous =
+            serde_json::to_value(snapshot(&base, "", "", &CancellationToken::new()).await.unwrap()).unwrap();
         assert_eq!(anonymous["beans"]["state"], "unauthorized");
         let user = std::env::var("FIXTURE_TEST_USER").expect("ephemeral fixture user required");
         let password = std::env::var("FIXTURE_TEST_PASSWORD").expect("ephemeral fixture password required");
-        let authenticated = snapshot(&base, &user, &password, &CancellationToken::new()).await.unwrap();
+        let authenticated =
+            serde_json::to_value(snapshot(&base, &user, &password, &CancellationToken::new()).await.unwrap()).unwrap();
         assert_eq!(authenticated["beans"]["state"], "ok");
         assert_eq!(authenticated["conditions"]["state"], "ok");
         assert_eq!(authenticated["mappings"]["state"], "ok");
