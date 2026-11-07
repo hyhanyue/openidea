@@ -63,6 +63,105 @@ fn lang(id: &str, ext: &str, server: LanguageServerConfig) -> LanguageConfig {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires official Spring Tools/JDT LS bundles and the prepared Java 8 Maven demo"]
+async fn spring_tools_uses_java8_project_metadata_through_the_native_bridge() {
+    use serde_json::json;
+    let env_path = |name| std::path::PathBuf::from(std::env::var(name).expect(name));
+    let project = env_path("OPENIDEA_SPRING_TEST_PROJECT");
+    let spring = env_path("OPENIDEA_SPRING_HOME");
+    let jdt = env_path("OPENIDEA_JDT_HOME");
+    let runtime = env_path("OPENIDEA_LS_JAVA_HOME");
+    let project_jdk = env_path("OPENIDEA_PROJECT_JAVA_HOME");
+    let cache = tempfile::tempdir().unwrap();
+    let bundle_paths: Vec<_> = std::fs::read_dir(spring.join("jars"))
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "jar"))
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let executable = std::fs::read_dir(spring.join("language-server"))
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .find(|p| p.to_string_lossy().ends_with("-exec.jar"))
+        .unwrap();
+    let registry = LanguageRegistry::load(None).unwrap();
+    let mut java = registry.get(&LanguageId::new("java")).unwrap();
+    let java_server = &mut java.language_servers[0];
+    java_server.command = jdt.join("bin/jdtls").to_string_lossy().into_owned();
+    java_server.args = vec!["-data".into(), cache.path().join("java-workspace").to_string_lossy().into_owned()];
+    java_server.env.insert("JAVA_HOME".into(), runtime.to_string_lossy().into_owned());
+    let options = java_server.initialization_options.as_mut().unwrap();
+    options["bundles"] = toml::Value::try_from(bundle_paths).unwrap();
+    options["settings"]["java"]["autobuild"]["enabled"] = toml::Value::Boolean(false);
+    options["settings"]["java"]["maven"]["downloadSources"] = toml::Value::Boolean(false);
+    options["settings"]["java"]["configuration"].as_table_mut().unwrap().insert(
+        "runtimes".into(),
+        toml::Value::try_from(vec![json!({"name": "JavaSE-1.8", "path": project_jdk, "default": true})]).unwrap(),
+    );
+    let mut spring_server = java_server.clone();
+    spring_server.name = "spring-boot".into();
+    spring_server.command = runtime.join("bin/java").to_string_lossy().into_owned();
+    spring_server.args = vec![
+        "-Dspring.config.location=classpath:/application.properties".into(),
+        "-Dserver.port=-1".into(),
+        "-Xmx1g".into(),
+        "-jar".into(),
+        executable.to_string_lossy().into_owned(),
+    ];
+    spring_server.initialization_options = Some(
+        toml::Value::try_from(json!({
+            "enableJdtClasspath": true, "workspaceFolders": [ide_lsp::path_to_uri_string(&project)]
+        }))
+        .unwrap(),
+    );
+    spring_server.env.clear();
+    java.language_servers.push(spring_server.clone());
+    let properties = lang("properties", "properties", spring_server);
+    let (mgr, events) = manager(&project, LanguageRegistry::from_configs(vec![java, properties]));
+    for (typed, expected) in [("server.po", "server.port"), ("demo.gre", "demo.greeting")] {
+        let doc = DocId::next();
+        let path = project.join("src/main/resources/application.properties");
+        mgr.did_open(doc, &path, &LanguageId::new("properties"), 1, typed);
+        retry(expected, Duration::from_secs(120), || {
+            let mgr = mgr.clone();
+            let events = events.clone();
+            async move {
+                if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) =
+                    last_status(&events, "spring-boot")
+                {
+                    panic!("Spring failed: {msg:?}");
+                }
+                let results =
+                    mgr.completion(doc, Pos::new(0, typed.len() as u32), None, Default::default()).await.ok()?;
+                results.items.iter().any(|i| i.label == expected).then_some(())
+            }
+        })
+        .await;
+        println!("PASS native Spring: {typed} -> {expected}");
+        mgr.did_close(doc);
+    }
+    let doc = DocId::next();
+    mgr.did_open(
+        doc,
+        &project.join("src/main/resources/application.properties"),
+        &LanguageId::new("properties"),
+        1,
+        "demo.greeting=Hello",
+    );
+    retry("Spring configuration definition", Duration::from_secs(30), || {
+        let mgr = mgr.clone();
+        async move {
+            let locations = mgr.goto(doc, Pos::new(0, 7), GotoKind::Definition).await.ok()?;
+            locations.iter().any(|l| l.path.to_path_buf().ends_with("DemoProperties.java")).then_some(())
+        }
+    })
+    .await;
+    println!("PASS native Spring navigation: demo.greeting -> DemoProperties.java");
+    mgr.did_close(doc);
+    mgr.shutdown_all().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires jdtls on PATH and a compatible JDK"]
 async fn intellij_java_formatter_preserves_manual_breaks_and_wraps_long_lines() {

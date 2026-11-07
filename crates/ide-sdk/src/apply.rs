@@ -981,7 +981,20 @@ pub fn server_protocol_overrides(cfg: &mut LanguageServerConfig, s: &Settings) {
         cfg.code_action_kinds = kinds.clone();
     }
     if let Some(options) = &ls.initialization_options {
-        merge_init_options(cfg, options.clone());
+        let mut options = options.clone();
+        if cfg.name == "jdtls"
+            && let Some(additional) = options.get_mut("bundles").and_then(Value::as_array_mut)
+            && let Some(existing) =
+                cfg.initialization_options.as_ref().and_then(|o| o.get("bundles")).and_then(toml::Value::as_array)
+        {
+            for path in existing.iter().filter_map(toml::Value::as_str) {
+                let path = json!(path);
+                if !additional.contains(&path) {
+                    additional.push(path);
+                }
+            }
+        }
+        merge_init_options(cfg, options);
     }
     if let Some(settings) = &ls.settings {
         let mut current = cfg.settings.take().filter(Value::is_object).unwrap_or_else(|| json!({}));

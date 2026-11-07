@@ -305,6 +305,10 @@ impl Handler for ClientHandler {
                 Ok(Value::Null)
             }
             "workspace/applyEdit" => self.apply_edit(&mgr, params),
+            "workspace/executeClientCommand" => mgr.spring.callback(&mgr, &self.server, self.generation, params),
+            method if method.starts_with("sts/") => {
+                mgr.spring.request(&mgr, &self.server, self.generation, method, params)
+            }
             "workspace/semanticTokens/refresh" | "workspace/inlayHint/refresh" | "workspace/codeLens/refresh" => {
                 let kind = match method {
                     "workspace/semanticTokens/refresh" => LspRefreshKind::SemanticTokens,

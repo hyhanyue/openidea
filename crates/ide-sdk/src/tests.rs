@@ -10,6 +10,32 @@ use ide_run::RunConfig;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[test]
+fn jdtls_additional_bundles_preserve_debugging_and_navigation_extensions() {
+    use ide_core::settings::LanguageServerSettings;
+    use serde_json::json;
+    let mut settings = Settings::default();
+    settings.language_servers.insert(
+        "jdtls".into(),
+        LanguageServerSettings {
+            initialization_options: Some(json!({"bundles": ["spring.jar", "debug.jar"]})),
+            ..Default::default()
+        },
+    );
+    let mut cfg = server("jdtls");
+    cfg.initialization_options = Some(toml::Value::try_from(json!({"bundles": ["debug.jar", "usages.jar"]})).unwrap());
+    crate::apply::server_protocol_overrides(&mut cfg, &settings);
+    let value = serde_json::to_value(cfg.initialization_options).unwrap();
+    assert_eq!(value["bundles"], json!(["spring.jar", "debug.jar", "usages.jar"]));
+    // Other servers retain the existing array-replacement contract.
+    let mut other = server("another");
+    other.initialization_options = Some(toml::Value::try_from(json!({"bundles": ["original"]})).unwrap());
+    settings.language_servers.insert("another".into(), settings.language_servers["jdtls"].clone());
+    crate::apply::server_protocol_overrides(&mut other, &settings);
+    let value = serde_json::to_value(other.initialization_options).unwrap();
+    assert_eq!(value["bundles"], json!(["spring.jar", "debug.jar"]));
+}
+
 fn fake_venv(root: &Path, name: &str) -> std::path::PathBuf {
     let venv = root.join(name);
     std::fs::create_dir_all(venv.join(bin_dir())).unwrap();

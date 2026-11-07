@@ -190,6 +190,30 @@ describe("applying completions", () => {
     expect(view.state.doc.toString()).toBe("service.create()");
   });
 
+  it("shows IntelliJ dot-prefixed filters and accepts their dot-inclusive edit exactly once", async () => {
+    const { view, req, pos } = setup("userMapper.f|;");
+    const c = makeCompletion(
+      item({
+        label: "findById",
+        filterText: ".findById",
+        insertText: ".findById(${0})",
+        isSnippet: true,
+        replaceRange: { start: { line: 0, col: 10 }, end: { line: 0, col: pos } },
+      }),
+      req,
+    );
+    view.dispatch({
+      effects: StateEffect.appendConfig.of([
+        completionExtension(),
+        EditorState.languageData.of(() => [{ openideaCompletion: () => ({ from: 11, options: [c] }) }]),
+      ]),
+    });
+    startCompletion(view);
+    await vi.waitFor(() => expect(currentCompletions(view.state).map((i) => i.label)).toEqual(["findById"]));
+    applyLspCompletion(view, c, 11, pos, "insert");
+    expect(view.state.doc.toString()).toBe("userMapper.findById();");
+  });
+
   it("leaves the caret inside a call snippet without stops, past `)` once nothing takes arguments", async () => {
     const { view, req } = setup("new Arr|");
     view.dispatch({ effects: StateEffect.appendConfig.of(lspDoc.of({ doc: 1 } as EditorDocContext)) });

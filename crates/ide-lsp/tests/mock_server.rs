@@ -15,6 +15,55 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spring_java_requests_and_classpath_callbacks_use_the_existing_java_server() {
+    let mut java_caps = incremental_caps();
+    java_caps["executeCommandProvider"]["commands"] =
+        json!(["sts.java.type", "sts.java.addClasspathListener", "sts.java.removeClasspathListener"]);
+    let h = harness_for("java", "java", &[("jdtls", java_caps), ("spring-boot", incremental_caps())], &[]);
+    h.open("Main.java", "class Main {}");
+    h.wait_status("jdtls", ServerStatus::Ready).await;
+    h.wait_status("spring-boot", ServerStatus::Ready).await;
+    let java = h.launcher.state("jdtls");
+    let spring = h.launcher.state("spring-boot");
+    java.respond("workspace/executeCommand", json!({ "name": "java.lang.String" }));
+    let params = json!({"projectUri": uri_of(&h.root), "bindingKey": "Ljava/lang/String;"});
+    let answer: Value = spring.peer().request("sts/javaType", params.clone(), None).await.unwrap();
+    assert_eq!(answer["name"], "java.lang.String");
+    assert!(java.requested("workspace/executeCommand").contains(&json!({
+        "command": "sts.java.type", "arguments": [params]
+    })));
+    let listener = json!({"callbackCommandId": "spring.classpath"});
+    spring.peer().request::<_, Value>("sts/addClasspathListener", listener.clone(), None).await.unwrap();
+    spring.respond("workspace/executeCommand", json!("received"));
+    let event = json!({"command": "spring.classpath", "arguments": ["project-created", {"uri": uri_of(&h.root)}]});
+    let ack: Value = java.peer().request("workspace/executeClientCommand", event.clone(), None).await.unwrap();
+    assert_eq!(ack, "received");
+    assert!(spring.requested("workspace/executeCommand").contains(&event));
+    spring.peer().request::<_, Value>("sts/removeClasspathListener", listener, None).await.unwrap();
+    assert!(java.peer().request::<_, Value>("workspace/executeClientCommand", event, None).await.is_err());
+    assert!(spring.peer().request::<_, Value>("sts/unrecognized", json!({}), None).await.is_err());
+    assert!(java.peer().request::<_, Value>("sts/javaType", json!({}), None).await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spring_only_changes_its_own_configuration_document_language_id() {
+    let h = harness_for(
+        "properties",
+        "properties",
+        &[("spring-boot", incremental_caps()), ("properties-ls", incremental_caps())],
+        &[],
+    );
+    h.open("application.properties", "server.port=18088");
+    h.wait_status("spring-boot", ServerStatus::Ready).await;
+    h.wait_status("properties-ls", ServerStatus::Ready).await;
+    for (name, expected) in [("spring-boot", "spring-boot-properties"), ("properties-ls", "properties")] {
+        let state = h.launcher.state(name);
+        eventually(|| !state.notified("textDocument/didOpen").is_empty()).await;
+        assert_eq!(state.notified("textDocument/didOpen")[0]["textDocument"]["languageId"], expected);
+    }
+}
+
 // ------------------------------------------------------------------ mock server
 
 #[derive(Default)]

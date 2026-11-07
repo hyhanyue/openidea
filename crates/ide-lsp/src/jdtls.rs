@@ -508,7 +508,7 @@ impl LspManager {
 
     /// The jdtls instance serving `path` (a module directory or source file),
     /// started if needed and waited for.
-    async fn jdtls(&self, path: &Path, cancel: &CancellationToken) -> IdeResult<(Arc<Server>, Running)> {
+    pub(crate) async fn jdtls(&self, path: &Path, cancel: &CancellationToken) -> IdeResult<(Arc<Server>, Running)> {
         let java = LanguageId::new("java");
         let server = self
             .servers_for(&java, path)

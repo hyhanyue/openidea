@@ -35,13 +35,19 @@ export function completionSymbolKind(kind: CompletionKind | null): string {
   return kind ? KIND_TO_SYMBOL[kind] : "text";
 }
 
+/** IntelliJ includes the member-access dot in its edit and filter, but the lookup matches the word after it. */
+export function completionMatchText(item: Pick<CompletionItem, "filterText" | "label">): string {
+  return item.filterText === `.${item.label}` ? item.label : (item.filterText ?? item.label);
+}
+
 /**
  * Maps the declarative fields. `label` is what CodeMirror filters on, so an
  * LSP `filterText` that differs from the label becomes the label and the
  * original label is shown through `displayLabel`.
  */
 export function toCmCompletion(item: CompletionItem): Completion {
-  const filter = item.filterText && item.filterText !== item.label && !extendsLabel(item) ? item.filterText : null;
+  const match = completionMatchText(item);
+  const filter = match !== item.label && !extendsLabel(item) ? match : null;
   const c: Completion = {
     label: filter ?? item.label,
     type: completionSymbolKind(item.kind),

@@ -36,6 +36,7 @@ import {
 } from "@/platform/ipc";
 import { useProject } from "@/platform/project";
 import {
+  completionMatchText,
   completionSymbolKind,
   identifierEnd,
   toCmCompletion,
@@ -459,7 +460,7 @@ async function lspCompletionSource(ctx: CompletionContext): Promise<CompletionRe
   const typed = word?.text ?? "";
   let items = withoutDuplicates(
     prefs.matchCase
-      ? list.items.filter((it) => matchesCase(it.filterText ?? it.label, typed, prefs.caseSensitivity))
+      ? list.items.filter((it) => matchesCase(completionMatchText(it), typed, prefs.caseSensitivity))
       : list.items,
   );
   // A server snippet named like a live template (jdtls `sout`, `fori`) would be listed twice; the template wins.

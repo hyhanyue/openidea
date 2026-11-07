@@ -22,6 +22,7 @@ mod loading;
 mod pull;
 mod scope;
 mod server;
+mod spring;
 mod tcp;
 mod text;
 mod ts_file_moves;
@@ -189,6 +190,7 @@ pub struct LspManager {
     execution_allowed: AtomicBool,
     java_usages_warned: AtomicBool,
     configuration_cache: Arc<Mutex<jdtls::configuration::ConfigurationCache>>,
+    spring: spring::Bridge,
     /// `window/showMessage` texts already surfaced; servers repeat them on every restart/reconfigure.
     shown_messages: Mutex<HashSet<(String, String)>>,
     /// Virtual (non-`file:`) URIs a server returned, by the server that owns them.
@@ -239,12 +241,13 @@ fn rpc_err(server: &str, method: &str, e: RpcError) -> IdeError {
 
 /// Sends the user's `didOpen` for `path`, closing a transient copy of the file
 /// first (one a references search opened).
-fn user_did_open(server: &Server, run: &Running, path: &Path, uri: &lsp::Uri, params: Value) {
+fn user_did_open(server: &Server, run: &Running, path: &Path, uri: &lsp::Uri, mut params: Value) {
     if server.take_transient(path, run.generation)
         && let Err(e) = run.peer.notify("textDocument/didClose", json!({ "textDocument": { "uri": uri } }))
     {
         tracing::debug!("{}: didClose: {e}", server.name);
     }
+    spring::configure_document(&server.name, &mut params);
     if let Err(e) = run.peer.notify("textDocument/didOpen", params) {
         tracing::debug!("{}: didOpen: {e}", server.name);
     }
@@ -382,6 +385,7 @@ impl LspManager {
             execution_allowed: AtomicBool::new(true),
             java_usages_warned: AtomicBool::new(false),
             configuration_cache: Arc::new(Mutex::new(Default::default())),
+            spring: spring::Bridge::default(),
             shown_messages: Mutex::new(HashSet::new()),
             virtual_origins: Mutex::new(HashMap::new()),
             virtual_docs: Mutex::new(HashMap::new()),
@@ -668,7 +672,8 @@ impl LspManager {
             }
             let open_close = run.caps.read().open_close;
             for (id, d) in docs.iter_mut() {
-                let params = d.did_open_params();
+                let mut params = d.did_open_params();
+                spring::configure_document(&server.name, &mut params);
                 for a in d.servers.iter_mut().filter(|a| a.server.id == server.id && a.opened_gen != Some(generation)) {
                     if open_close && let Err(e) = peer.notify("textDocument/didOpen", params.clone()) {
                         tracing::debug!("{}: didOpen: {e}", server.name);
