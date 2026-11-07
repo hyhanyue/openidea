@@ -1506,7 +1506,13 @@ pub fn test_reactor_modules(
     profiles: &[String],
     properties: &HashMap<String, String>,
 ) -> MavenTestReactor {
-    let mut resolver = Resolver::new(local_repo.or_else(default_local_repo), profiles);
+    let root = scopes
+        .iter()
+        .filter(|scope| pom.starts_with(scope))
+        .min_by_key(|scope| scope.components().count())
+        .map(PathBuf::as_path)
+        .unwrap_or_else(|| pom.parent().unwrap_or(pom));
+    let mut resolver = Resolver::new(root, local_repo.or_else(default_local_repo), profiles);
     let mut reactor = MavenTestReactor::default();
     let mut seen = HashSet::new();
     let mut pending = vec![pom.to_path_buf()];

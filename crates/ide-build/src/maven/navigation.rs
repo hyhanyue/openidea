@@ -169,7 +169,7 @@ pub fn pom_definition(
         .filter(|_| in_text && (root.inner_start..root.inner_end).contains(&offset))
         .map(|(name, _)| name.to_owned());
     let source = Source::new(path, text, root)?;
-    let resolver = Resolver::new(local_repo.or_else(default_local_repo), profiles);
+    let resolver = Resolver::new(source.path.parent()?, local_repo.or_else(default_local_repo), profiles);
     let reference = match property {
         Some(name) => Reference::Property(name),
         None => {
