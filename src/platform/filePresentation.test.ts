@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { addFileIconProvider, registerExternalIcons } from "@/ui/icons";
 import { presentationIcon } from "./filePresentation";
 import type { RootFolder } from "./languageSettings";
 import type { JvmPresentation } from "./ipc";
@@ -50,4 +51,19 @@ describe("JVM file presentation", () => {
   it("uses the entire Boot icon on application classes", () => {
     expect(icon("App.java", { ...type("class"), springBoot: true, runnable: true })).toBe("spring-boot");
   });
+});
+
+it("keeps plugin Mapper file icons ahead of JVM interface presentation and restores after unload", () => {
+  const name = "ext:fileIcon/mybatis/mapper-java";
+  const off = registerExternalIcons([[name, '<svg viewBox="0 0 16 16"><path d="M1 1h12v12H1z"/></svg>']]);
+  const remove = addFileIconProvider((file) => (file.endsWith("Mapper.java") ? name : null));
+  try {
+    expect(icon("UserMapper.java", type("interface"))).toBe(name);
+    expect(icon("UserService.java", type("class"))).toBe("class");
+    expect(icon("Other.java", type("interface"))).toBe("interface");
+  } finally {
+    remove();
+    off();
+  }
+  expect(icon("UserMapper.java", type("interface"))).toBe("interface");
 });

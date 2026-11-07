@@ -1,10 +1,10 @@
 id = "openidea.mybatis"
 name = "MyBatis Navigator"
-version = "0.2.0-dev.1"
+version = "0.2.0-dev.2"
 description = "Navigates MyBatis mappers, generates missing XML statements from Java methods, and completes SQL using project schema files, statement ids and #{parameters}."
 authors = ["OpenIDEA contributors"]
 license = "Apache-2.0"
-change-notes = "0.2.0-dev.1 — local development build: generate missing statements in existing mapper XML; SQL keyword, table and column completion from project SQL files. No live database connection."
+change-notes = "0.2.0-dev.2 — local build: MyBatisX bird file and navigation icons; XML generation and schema-based SQL completion."
 categories = ["frameworks"]
 engines.openidea = "^1.2"
 wasm = "dist/plugin.wasm"
@@ -20,3 +20,13 @@ languages = ["java", "xml"]
 [[contributes.providers]]
 kinds = ["code-actions"]
 languages = ["java"]
+
+[[contributes.fileIcons]]
+id = "mapper-java"
+patterns = ["*Mapper.java"]
+icon = "icons/mapper.svg"
+
+[[contributes.fileIcons]]
+id = "mapper-xml"
+patterns = ["*Mapper.xml"]
+icon = "icons/xml.svg"

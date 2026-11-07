@@ -38,3 +38,19 @@ personal test package should use a distinct local id and name, and be loaded usi
 `openidea-plugin link <folder>` workflow. Disable the installed MyBatis Navigator while testing
 that package to avoid duplicate providers. This development version has not been published to
 the marketplace.
+
+## MyBatisX bird icons
+
+`*Mapper.java` and `*Mapper.xml` use dedicated file/tab icons regardless of icon theme.
+These are filename patterns, not content-based Mapper detection. Other Java/XML files
+keep their normal icons. Navigation markers use the matching target's bird: red from
+Java to XML, blue from XML to Java, as in MyBatisX. This requires the updated desktop
+renderer; an older OpenIDEA app falls back to its built-in navigation glyph.
+
+The two bird SVGs are adapted from [baomidou/MybatisX](https://github.com/baomidou/MybatisX),
+licensed under Apache-2.0 (the accompanying LICENSE). Original paths:
+`src/main/resources/images/statement.svg` (Git blob `51fd725bb8a6856b815425478f437660e9225ced`)
+and `mapper_method.svg` (Git blob `af2ce866c6c850c3737bced5a660b7e8eeda4cc7`).
+Modifications inline class fills, normalize local ids and remove editor metadata for
+OpenIDEA's existing SVG sanitizer. Geometry and colors are retained. No MyBatisX code
+is incorporated and this local package does not claim official MyBatisX affiliation.

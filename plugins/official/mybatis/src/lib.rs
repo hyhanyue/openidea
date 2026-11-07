@@ -279,7 +279,7 @@ impl Providers for Navigator {
     }
 
     fn line_markers(&mut self, doc: &Document) -> Vec<LineMarker> {
-        let icon = if doc.language == "xml" { "implementing" } else { "implemented" };
+        let icon = if doc.language == "xml" { "file-icon:mapper-java" } else { "file-icon:mapper-xml" };
         self.links(doc)
             .into_iter()
             .map(|(n, target, tip)| LineMarker {
@@ -411,6 +411,7 @@ mod tests {
         let markers = n.line_markers(&java);
         assert_eq!(markers.iter().map(|m| m.line).collect::<Vec<_>>(), [5, 7], "search has no statement");
         assert_eq!(markers[0].tooltip, "Go to UserMapper.xml: findById");
+        assert_eq!(markers[0].icon.as_deref(), Some("file-icon:mapper-xml"));
         let target = markers[0].target.as_ref().unwrap();
         assert_eq!(
             (target.path.as_str(), target.range.start),
@@ -423,6 +424,7 @@ mod tests {
         assert_eq!((to_java[0].path.ends_with("UserMapper.java"), to_java[0].range.start), (true, Position::new(7, 8)));
         assert!(n.definition(&xml, Position::new(3, 5)).is_empty(), "not on an id");
         assert_eq!(n.line_markers(&xml)[0].tooltip, "Go to UserMapper.findById()");
+        assert_eq!(n.line_markers(&xml)[0].icon.as_deref(), Some("file-icon:mapper-java"));
     }
 
     #[test]

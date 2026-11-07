@@ -1042,3 +1042,11 @@ A new host function touches:
 Then run `plugins/build.sh`; CI's `plugins` job runs `plugins/build.sh --check`
 plus fmt, clippy (host and wasm) and the tests of the SDK, the official
 plugins and the fixtures.
+
+### Plugin navigation icons
+
+A line marker can use `icon = "file-icon:<id>"` to reference one of its own
+`contributes.fileIcons` declarations. The host renders the already-sanitized SVG
+and keeps built-in navigation as the fallback for missing/unknown references.
+This renderer support requires the updated desktop app; older apps keep their
+built-in marker icon. The string-based WIT interface is unchanged.

@@ -1,7 +1,7 @@
 /** Visible-file JVM presentation: one bounded IPC batch, shared cache and watcher. */
 import { useEffect, useMemo } from "react";
 import { create } from "zustand";
-import { fileIconName, useFileIconRevision, type IconName } from "@/ui/icons";
+import { fileIconName, fileIconOverrideName, useFileIconRevision, type IconName } from "@/ui/icons";
 import { call, commands, isTauri, onIdeEvent, type JvmPresentation } from "./ipc";
 import { basename, relativePath, useProject } from "./project";
 import { rootFor, type RootFolder } from "./languageSettings";
@@ -120,6 +120,8 @@ export function presentationIcon(
   spring: boolean,
 ): IconName {
   const name = basename(path);
+  const explicit = fileIconOverrideName(name);
+  if (explicit) return explicit;
   const role = root ? rootFor(roots, relativePath(root, path))?.kind : null;
   if (
     /^(application|bootstrap).*\.(yml|yaml|properties)$/.test(name) &&

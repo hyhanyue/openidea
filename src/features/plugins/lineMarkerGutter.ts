@@ -10,7 +10,7 @@ import type { EditorDocContext } from "@/editor/api";
 import { navigationButton } from "./navigationButton";
 import { pluginsBackend } from "./backend";
 import { commands, type LineMarkerInfo } from "@/platform/ipc";
-import { gutterIconMarkup } from "@/ui";
+import { gutterIconMarkup, isIconName, useFileIconRevision } from "@/ui";
 import styles from "@/editor/navigation/LineMarkers.module.css";
 
 const DEBOUNCE_MS = 400;
@@ -24,9 +24,15 @@ const ICONS: Record<string, string> = {
   navigate: "gutter-implementing",
 };
 
-/** Icon name for a plugin marker (`navigate` when unknown). */
-export function markerIcon(icon: string | null): string {
-  return ICONS[icon ?? "navigate"] ?? ICONS.navigate!;
+/** Built-in icon or a sanitized file icon declared by this plugin; otherwise navigate. */
+export function markerIcon(icon: string | null, pluginId?: string): string {
+  const id = icon?.startsWith("file-icon:") ? icon.slice("file-icon:".length) : null;
+  if (pluginId && id && /^[a-z0-9][a-z0-9._-]*$/.test(id)) {
+    const name = `ext:fileIcon/${pluginId}/${id}`;
+    if (isIconName(name)) return name;
+  }
+  const builtin = icon ?? "navigate";
+  return Object.hasOwn(ICONS, builtin) ? ICONS[builtin]! : ICONS.navigate!;
 }
 
 interface Placed {
@@ -51,25 +57,28 @@ export function placeMarkers(doc: Text, markers: readonly LineMarkerInfo[]): Pla
 }
 
 class PluginMarker extends GutterMarker {
+  readonly icon: string;
+
   constructor(readonly marker: LineMarkerInfo) {
     super();
+    this.icon = markerIcon(marker.icon, marker.pluginId);
   }
   override eq(other: GutterMarker): boolean {
     return (
       other instanceof PluginMarker &&
+      other.icon === this.icon &&
+      other.marker.pluginId === this.marker.pluginId &&
       other.marker.tooltip === this.marker.tooltip &&
       other.marker.icon === this.marker.icon &&
       JSON.stringify(other.marker.target) === JSON.stringify(this.marker.target)
     );
   }
   override toDOM(): Node {
-    const el = this.marker.target
-      ? navigationButton([this.marker.target], markerIcon(this.marker.icon))
-      : document.createElement("span");
+    const el = this.marker.target ? navigationButton([this.marker.target], this.icon) : document.createElement("span");
     el.className = `${styles.marker} cm-plugin-mapping-button`;
     el.title = this.marker.tooltip;
     el.setAttribute("aria-label", this.marker.tooltip);
-    el.innerHTML = gutterIconMarkup(markerIcon(this.marker.icon)) ?? "";
+    el.innerHTML = gutterIconMarkup(this.icon) ?? "";
     return el;
   }
 }
@@ -79,6 +88,7 @@ class MarkersPlugin {
   private generation = 0;
   private shown = false;
   private off: () => void;
+  private offIcons: () => void;
 
   constructor(
     private view: EditorView,
@@ -92,6 +102,7 @@ class MarkersPlugin {
       this.view.dispatch({ effects: [setMarkers.of([]), this.column.reconfigure([])] });
       this.schedule();
     });
+    this.offIcons = useFileIconRevision.subscribe(() => this.schedule());
     this.schedule();
   }
 
@@ -127,6 +138,7 @@ class MarkersPlugin {
 
   destroy() {
     this.off();
+    this.offIcons();
     if (this.timer) clearTimeout(this.timer);
     this.generation++;
   }

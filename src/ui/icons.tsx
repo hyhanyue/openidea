@@ -1064,14 +1064,21 @@ export function addFileIconProvider(resolve: (fileName: string) => string | null
   };
 }
 
-/** Picks a file-type icon from a file name. */
-export function fileIconName(fileName: string, path: string | null = null): IconName {
+/** Explicit user/plugin file icons take precedence over inferred JVM symbol icons. */
+export function fileIconOverrideName(fileName: string): IconName | null {
   const custom = iconOverride?.(fileName);
   if (custom) return custom;
   for (const provide of fileIconProviders) {
     const icon = provide(fileName);
     if (icon && iconPath(icon)) return icon as IconName;
   }
+  return null;
+}
+
+/** Picks a file-type icon from a file name. */
+export function fileIconName(fileName: string, path: string | null = null): IconName {
+  const override = fileIconOverrideName(fileName);
+  if (override) return override;
   const themed = fileIconTheme?.file(fileName, path);
   if (themed) return themed as IconName;
   const lower = fileName.toLowerCase();
