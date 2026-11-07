@@ -1,5 +1,7 @@
+#[cfg(unix)]
+use crate::apply::jdtls_jdk;
 use crate::apply::{
-    apply_to_run_configs, configure_server, jdtls_jdk, maven_command, maven_options, project_jdk, python_interpreter,
+    apply_to_run_configs, configure_server, maven_command, maven_options, project_jdk, python_interpreter,
     ruff_configuration, terminal_activation, tsdk, without_derived,
 };
 use crate::python::parse_pip_list;
