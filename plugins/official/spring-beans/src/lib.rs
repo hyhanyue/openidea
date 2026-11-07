@@ -7,12 +7,15 @@
 mod annotation_checks;
 mod aop;
 mod checks;
+mod configuration;
 mod context;
 mod dependencies;
+mod environment;
 mod generics;
 mod injection_checks;
 mod kotlin;
 mod kotlin_build;
+mod launch;
 mod model;
 mod resolution;
 mod sites;
@@ -23,7 +26,7 @@ pub use model::{Bean, FileModel, Injection, parse};
 
 use openidea_plugin::providers::{CodeAction, CompletionItem, CompletionKind, Document, LineMarker, Providers};
 use openidea_plugin::text::{offset, position};
-use openidea_plugin::views::{Body, Button, TreeItem, View, ViewEvent, Viewport, Views};
+use openidea_plugin::views::{Body, Button, Field, FieldValue, TreeItem, View, ViewEvent, Viewport, Views};
 use openidea_plugin::{
     Context, Diagnostic, Error, Event, EventKind, Invocation, Location, LogLevel, Plugin, Position, Range, Severity,
     TextEdit, host, register_plugin,
@@ -422,18 +425,54 @@ fn subscribe_to_file_events() {
 pub struct Navigator {
     indexes: Indexes<FileModel>,
     expansion: Expansion,
+    config_filters: BTreeMap<String, String>,
+    config_filter_open: BTreeSet<String>,
 }
 
 impl Default for Navigator {
     fn default() -> Self {
-        Self { indexes: Indexes::new(GLOBS, model::parse), expansion: Expansion::default() }
+        environment::invalidate();
+        Self {
+            indexes: Indexes::new(GLOBS, model::parse),
+            expansion: Expansion::default(),
+            config_filters: BTreeMap::new(),
+            config_filter_open: BTreeSet::new(),
+        }
     }
+}
+
+fn materialize_imports(index: &mut Index<FileModel>, current: Option<(&str, &str)>) -> bool {
+    let context = context::Index::new(index.files());
+    let changes: Vec<_> = index
+        .iter()
+        .filter(|(p, _)| p.ends_with(".java"))
+        .filter_map(|(path, m)| {
+            let wanted: BTreeMap<_, _> = m
+                .types
+                .iter()
+                .filter_map(|t| context.registrations.get(&t.qualified).map(|kind| (t.qualified.clone(), *kind)))
+                .collect();
+            (wanted != m.materialized_imports).then_some((path.to_owned(), wanted))
+        })
+        .collect();
+    let complete = changes.len() <= 32;
+    for (path, wanted) in changes.into_iter().take(32) {
+        let text = current
+            .filter(|(p, _)| *p == path)
+            .map(|(_, text)| text.to_owned())
+            .or_else(|| spring_text::index::project_of(&path).and_then(|p| p.read_file(&path).ok()));
+        if let Some(text) = text {
+            index.replace(&path, model::java_model_imported(&text, &wanted));
+        }
+    }
+    complete
 }
 
 impl Navigator {
     /// Runs `f` on the project of `doc`, its index brought up to date with the document.
     fn with_doc<R: Default>(&mut self, doc: &Document, f: impl FnOnce(&World, &FileModel) -> R) -> R {
         let Some(index) = self.indexes.for_document(&doc.path, &doc.text, PROVIDER_BUDGET) else { return R::default() };
+        materialize_imports(index, Some((&doc.path, &doc.text)));
         let world = World::new(index);
         let empty = FileModel::default();
         let model = world.files.get(&doc.path).unwrap_or(&empty);
@@ -456,6 +495,7 @@ impl Navigator {
         if language == "java" {
             let file = java::parse(text);
             if let Some(index) = self.indexes.for_document(path, text, PROVIDER_BUDGET) {
+                materialize_imports(index, Some((path, text)));
                 let findings =
                     checks::check_java(path, &file, text, &World::new(index), checks::Groups::from_settings());
                 problems.extend(findings.iter().map(|f| f.diagnostic(text)));
@@ -539,6 +579,10 @@ impl Providers for Navigator {
         let hit = sites::at(hits(doc), cursor);
         let text = doc.text.as_str();
         self.with_doc(doc, |world, model| {
+            let config = configuration::definition(doc, at, world.files);
+            if !config.is_empty() {
+                return config;
+            }
             let to_locations = |found: Vec<Found>| {
                 found.into_iter().map(|(p, b)| Location { path: p.into(), range: b.range }).collect()
             };
@@ -886,10 +930,28 @@ impl Views for Navigator {
     fn render(&mut self, view: &str, _viewport: Option<Viewport>, ctx: &Invocation) -> Result<View, Error> {
         let Some(project) = ctx.project() else { return Ok(View::message("Open a project to see its Spring beans.")) };
         let index = self.indexes.get(&project, COMMAND_BUDGET);
-        if !index.complete() {
+        if !materialize_imports(index, None) || !index.complete() {
             host::refresh_view(view);
         }
-        let mut shown = if view == GRAPH_VIEW { Self::graph(index) } else { Self::tree(index) };
+        let root = project.root().unwrap_or_default();
+        let mut shown = if view == configuration::VIEW {
+            let filter = self.config_filters.get(&root).cloned().unwrap_or_default();
+            if self.config_filter_open.contains(&root) {
+                View::new(Body::Form(vec![Field::new("filter", "Filter configuration keys", FieldValue::Text(filter))]))
+                    .button(Button::new("apply-filter", "Apply"))
+                    .button(Button::new("reset-filter", "Clear filter"))
+            } else {
+                configuration::view(
+                    &environment::snapshot_project(&project, index.files(), None),
+                    index.files(),
+                    &filter,
+                )
+            }
+        } else if view == GRAPH_VIEW {
+            Self::graph(index)
+        } else {
+            Self::tree(index)
+        };
         if let Body::Tree(items) = &mut shown.body {
             self.expansion.apply(items);
         }
@@ -902,8 +964,32 @@ impl Views for Navigator {
             return Ok(());
         }
 
+        if view == configuration::VIEW {
+            let root = ctx.project().and_then(|p| p.root().ok()).unwrap_or_default();
+            match &event {
+                ViewEvent::Button(button) if button == "filter" => {
+                    self.config_filter_open.insert(root);
+                    host::refresh_view(view);
+                    return Ok(());
+                }
+                ViewEvent::Field(key, value) if key == "filter" => {
+                    self.config_filters.insert(root, value.chars().take(256).collect());
+                    return Ok(());
+                }
+                ViewEvent::Button(button) if button == "apply-filter" || button == "reset-filter" => {
+                    self.config_filter_open.remove(&root);
+                    if button == "reset-filter" {
+                        self.config_filters.remove(&root);
+                    }
+                    host::refresh_view(view);
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         let key = match event {
             ViewEvent::Button(b) if b == "refresh" => {
+                environment::invalidate();
                 // Starting over mid-scan would throw the progress away, and a
                 // big project would never finish.
                 if let Some(project) = ctx.project() {
@@ -914,6 +1000,7 @@ impl Views for Navigator {
                 }
                 host::refresh_view(BEANS_VIEW);
                 host::refresh_view(GRAPH_VIEW);
+                host::refresh_view(configuration::VIEW);
                 return Ok(());
             }
             ViewEvent::Activate(key) | ViewEvent::Message(key) => key,
@@ -926,6 +1013,10 @@ impl Views for Navigator {
             {
                 host::open_location(path, line.parse().unwrap_or(0), col.parse().unwrap_or(0))?;
             }
+            return Ok(());
+        }
+        if let Some(location) = configuration::location(&key) {
+            host::open_location(&location.path, location.range.start.line, location.range.start.character)?;
             return Ok(());
         }
         let mut parts = key.splitn(4, ':');
@@ -950,9 +1041,29 @@ impl Plugin for Navigator {
                 Event::FileSaved(path) | Event::FileOpened(path) => Some(path.as_str()),
                 _ => None,
             })
-            .filter(|path| [".java", ".kt", ".xml"].iter().any(|ext| path.ends_with(ext)))
+            .filter(|path| {
+                [
+                    ".java",
+                    ".kt",
+                    ".xml",
+                    ".properties",
+                    ".yaml",
+                    ".yml",
+                    "/.openidea/run.toml",
+                    "/.openidea/run.local.toml",
+                ]
+                .iter()
+                .any(|ext| path.ends_with(ext))
+            })
             .collect();
         for path in paths {
+            environment::invalidate();
+            host::refresh_view(BEANS_VIEW);
+            host::refresh_view(GRAPH_VIEW);
+            host::refresh_view(configuration::VIEW);
+            if ![".java", ".kt", ".xml"].iter().any(|ext| path.ends_with(ext)) {
+                continue;
+            }
             let Some(project) = host::projects()
                 .unwrap_or_default()
                 .into_iter()

@@ -17,6 +17,8 @@ Endpoints, Spring Boot run configurations and `@Value` key navigation are built 
 
 Source matching uses the source context and generic model below. For Java, resolved JDT classpaths also contribute referenced Maven-module and dependency-JAR registrations. Binary matching uses fully qualified identities; unresolved generic qualifiers or runtime conditions remain candidates, and the gutter does not claim a unique injection for them.
 
+This is not a runtime container inspection.
+
 ```sh
 cargo test
 openidea-plugin build
@@ -32,7 +34,7 @@ MyBatis `@Mapper` interfaces. An ambiguous gutter has no arbitrary first target;
 Go to Definition lists the candidates. Optional/provider/collection injections,
 library types and profile/condition-dependent candidates are not diagnosed.
 This is a conservative source index, not a complete Spring application context:
-programmatic registration, component scan boundaries and auto-configuration can
+programmatic registration, custom scan filters and auto-configuration ordering can
 require runtime verification.
 
 Concrete Java generic qualifiers now narrow candidates before primary/name
@@ -87,3 +89,41 @@ Java 依赖模型要求 API 1.4：只使用受信任项目已经解析的 JDT �
 依赖里的 `@Component` 不会自动生效。运行时条件、动态注册与尚未解析的泛型限定保持
 未知；定义、gutter、Bean 列表和依赖图共用候选并显示模块或 JAR 来源。发现工作在
 可取消的后台完成，不授予插件任意读取 `.m2` 的能力。
+
+### Configuration sources and Java links
+
+The Spring Configuration Sources view lists source origins, overridden declarations,
+placeholder chains and Java binding locations without displaying property values.
+It follows Java annotation placeholders and `@ConfigurationProperties` fields back
+to their configuration declarations. Definition support in properties/YAML also
+follows placeholders and nested defaults. Spring Tools retains configuration
+completion and validation; source-only key-to-field navigation is opt-in through
+`springBeans.configurationBindingFallback`.
+
+The source environment models Boot 2.7 default location groups, profile-file order,
+activated multi-documents, project-local classpath/file imports, optional and missing
+imports, load-once cycles, includes and nested profile groups. Imported profile
+variants have Boot's precedence over ordinary profile files in their location group.
+Ordinary imported documents remain beneath later documents in their enclosing file.
+Unknown source overlaps, complex syntax, outside-project paths and remote providers
+are reported without guessing or fetching external content.
+
+The first-party Run bridge supplies the separate, transient
+`springBeans.launchContext` v1 object. It is not a user setting or a persisted
+property override. Saved launches are recovered in memory only from the current
+project's `.openidea/run.toml` / `run.local.toml`, by exact selected ID and matching
+reference fields; the shared file wins duplicate IDs. Unsaved/redacted unknown
+facts block lower-priority values instead of being interpreted as known absence.
+Simple authorized env files, explicit environment, JVM system properties, application
+JSON and command-line properties retain their source precedence; manual analysis
+overrides remain last. Inherited process environment is never enumerated. Values
+are never written to settings, logs or the source view. See
+`docs/spring-context-config-progress.md` for the shared integration contract,
+Java 8 acceptance and pending integrated Mac checks.
+
+Plain imported classes and `@EnableConfigurationProperties` / project property scans
+participate in the Bean index, including constructor dependencies. Property-class
+registration names use Boot's prefix-and-qualified-name convention. Explicit
+`@EnableConfigurationProperties` registrations follow their enabling configuration's
+eligibility; the property class's own `@Profile` does not filter this registrar.
+Dynamic selectors/registrars remain uncertain.

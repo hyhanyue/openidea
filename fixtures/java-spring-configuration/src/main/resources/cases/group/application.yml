@@ -1,0 +1,4 @@
+flag: base
+---
+spring.config.activate.on-profile: dev
+flag: activated-document

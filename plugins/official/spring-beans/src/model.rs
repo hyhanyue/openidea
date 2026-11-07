@@ -108,6 +108,8 @@ pub struct Pointcut {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileModel {
+    pub materialized_imports: std::collections::BTreeMap<String, bool>,
+    pub configuration: crate::configuration::Model,
     pub context: crate::context::Metadata,
     pub generics: crate::generics::Model,
     pub beans: Vec<Bean>,
@@ -258,11 +260,16 @@ pub fn is_repository<'a>(kind: &str, mut supers: impl Iterator<Item = &'a str>) 
 }
 
 fn java_model(text: &str) -> FileModel {
+    java_model_imported(text, &std::collections::BTreeMap::new())
+}
+
+pub(super) fn java_model_imported(text: &str, registrations: &std::collections::BTreeMap<String, bool>) -> FileModel {
     let file = java::parse(text);
     let mut out = FileModel {
         auto_configuration: file.types.iter().any(|t| t.has(&["SpringBootApplication", "EnableAutoConfiguration"])),
         ..Default::default()
     };
+    out.materialized_imports = registrations.clone();
     for (index, t) in file.types.iter().enumerate() {
         let supers: Vec<String> = t.supers().map(|s| s.name.clone()).collect();
         out.types.push(TypeInfo {
@@ -283,6 +290,28 @@ fn java_model(text: &str) -> FileModel {
         } else {
             class_bean(text, &t.name, &short_name(&file, t), t.at, &t.annotations, repository || mapper)
         };
+        if bean.is_none()
+            && t.kind == "class"
+            && let Some(properties) = registrations.get(&file.qualified(index))
+        {
+            let qualified = file.qualified(index);
+            let prefix = t
+                .annotation("ConfigurationProperties")
+                .and_then(|a| strings_of(a, &["value", "prefix"]).pop())
+                .unwrap_or_default();
+            bean = Some(Bean {
+                name: if *properties && !prefix.is_empty() { format!("{prefix}-{qualified}") } else { qualified },
+                aliases: vec![],
+                kind: if *properties { "@ConfigurationProperties".into() } else { "@Import".into() },
+                ty: t.name.clone(),
+                primary: t.has(&["Primary"]),
+                profiles: values(&t.annotations, &["Profile"]),
+                qualifiers: values(&t.annotations, &["Qualifier", "Named"]),
+                conditional: is_conditional(&t.annotations),
+                is_abstract: false,
+                range: range(text, t.at, t.at + t.name.len()),
+            });
+        }
         if let Some(b) = &mut bean {
             if mapper {
                 b.kind = "MyBatis Mapper".into();
@@ -366,6 +395,7 @@ fn java_model(text: &str) -> FileModel {
     }
     out.generics = crate::generics::Model::java(text, &file, &out);
     out.context = crate::context::Metadata::java(text, &file, &out);
+    out.configuration = crate::configuration::Model::java(text, &file);
     out
 }
 

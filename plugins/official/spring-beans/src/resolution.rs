@@ -3,7 +3,7 @@ use crate::World;
 use openidea_plugin::{Diagnostic, Severity};
 
 pub(super) fn problems(path: &str, world: &World, file: &spring_text::java::JavaFile) -> Vec<Diagnostic> {
-    if !world.complete {
+    if !world.complete || world.context.uncertain_registrations {
         return Vec::new();
     }
     if ["Service", "Component", "Repository", "Controller", "RestController", "Configuration", "Autowired", "Qualifier"]

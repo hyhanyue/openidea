@@ -1,0 +1,449 @@
+{
+  "protocol": "openidea.spring-launch-context",
+  "version": 1,
+  "writer": "Spring run/debug session F; session A reads this shared contract",
+  "transport": {
+    "command": "pluginRunCommand",
+    "commandId": "openidea.setLaunchContext",
+    "pluginIds": ["hyhanyue.spring-beans", "aritti.spring-beans", "hyhanyue.spring-beans-local"],
+    "argument": {
+      "projectRoot": "absolute current authorized project root",
+      "context": "SpringLaunchContextV1 or null"
+    },
+    "guestSetting": "springBeans.launchContext",
+    "guestValue": "JSON object, not JSON-in-a-string; no settings schema/persisted setting rewrite"
+  },
+  "schema": {
+    "context": {
+      "version": 1,
+      "launch": {
+        "configId": "exact selected run configuration ID",
+        "name": "display label",
+        "kind": "application | spring-boot | maven",
+        "persisted": "boolean; true only for a saved, non-temporary user config",
+        "mainClass": "string | null",
+        "module": "project-relative/absolute module | null (unknown); empty string means project root",
+        "cwd": "working directory | null (project default)",
+        "profiles": {
+          "state": "known | unknown",
+          "values": "string[]; [] with state known means explicit empty/default; unknown values MUST be []",
+          "source": "commandLine | systemProperties | environment | unknown"
+        },
+        "commandLineProperties": "Map<string, Fact>",
+        "systemProperties": "Map<string, Fact>",
+        "environment": "Map<explicit-config-env-name, Fact>; never inherited environment",
+        "inheritEnvironment": "boolean",
+        "envFiles": "configured paths only; do not read outside authorized current project",
+        "unresolvedSources": "subset of inheritedEnvironment, implicitJvmOptions, springApplicationJson, envFiles"
+      }
+    },
+    "Fact": {
+      "known": {
+        "state": "known",
+        "value": "string (production bridge permits non-sensitive literal true/false and validated spring.profiles.active / SPRING_PROFILES_ACTIVE profile names)"
+      },
+      "unknown": {
+        "state": "unknown"
+      }
+    }
+  },
+  "semantics": [
+    "The host replaces the complete temporary context atomically per window/project and snapshots it per guest invocation. Raw launch args and environment values are never transported.",
+    "Transport context:null removes the temporary layer; it never writes or erases persistent plugin settings. Unset guest setting means no selected launch. Guest {version:1,launch:null} means conflicting/unknown selection and must not reuse previous launch facts.",
+    "The old springBeans.propertyOverrides persistent setting remains user-owned. This protocol is separate; do not put this object into the old JSON string envelope.",
+    "For persisted:true, the consumer should read only .openidea/run.toml and .openidea/run.local.toml inside the current authorized project and select EXACT configId (shared/project file wins duplicate IDs). Do not choose by name, main class or last-run config. Parse args/env/env-files in memory, never write their values to artifacts, logs, UI, screenshots or this contract. This uses the plugin existing project.read permission; do not expand third-party plugin scope.",
+    "Persisted live values may replace sanitized unknown Fact values only after the exact config was successfully found and its ID/kind/main/module/cwd and known facts match the selected reference. A missing, unreadable, mismatched or unsaved reference retains unknown facts; it must never borrow another config values.",
+    "Resolve effective precedence: command-line properties > Spring application JSON > Java system properties > explicit configured environment > env files > application config data. Extra implicit JVM options and inherited environment are unresolved sources, not enumerated here. Respect Boot config-data/profile processing and source completeness.",
+    "A Fact state unknown is a PRESENT high-priority override with an unavailable value. It blocks fallback for that key to lower sources. It is NEVER known absence, false, or the legacy user !key tombstone. Absence of a key in an incomplete source does not prove absence.",
+    "Repeated Boot CLI options combine values with commas. Profiles state known carries explicitly determined launch selection, not a claim that include/group/programmatic activation is fully known; consumer must account for those separately.",
+    "For unsaved configs, safe boolean Facts may resolve conditions; other values remain unknown unless independently available from authorized current project sources. Never permanently downgrade saved non-boolean application properties solely because the transport redacts their values.",
+    "Editor providers without window identity may consume matching facts only when all windows for a root agree; conflicts yield {version:1,launch:null}. Views retain window identity.",
+    "Known package aliases are matched by exact ID and actual enabled active/inactive status. Prefer stable fork ID; never call an arbitrary similar ID or guess an uninstalled package."
+  ],
+  "fixtures": [
+    {
+      "name": "dev",
+      "producerInput": {
+        "config": {
+          "id": "user:dev",
+          "name": "Dev",
+          "kind": "spring-boot",
+          "command": "java",
+          "args": ["-cp", "${classpath}", "example.App", "--spring.profiles.active=dev"],
+          "cwd": "launch work",
+          "module": "app",
+          "env": {
+            "FEATURE_ENABLED": "true"
+          },
+          "includeSystemEnv": false,
+          "detected": false,
+          "isTest": false,
+          "debugAdapter": "java-debug"
+        },
+        "persisted": true
+      },
+      "producerExpected": {
+        "version": 1,
+        "launch": {
+          "configId": "user:dev",
+          "name": "Dev",
+          "kind": "spring-boot",
+          "persisted": true,
+          "mainClass": "example.App",
+          "module": "app",
+          "cwd": "launch work",
+          "profiles": {
+            "state": "known",
+            "values": ["dev"],
+            "source": "commandLine"
+          },
+          "commandLineProperties": {
+            "spring.profiles.active": {
+              "state": "known",
+              "value": "dev"
+            }
+          },
+          "systemProperties": {},
+          "environment": {
+            "FEATURE_ENABLED": {
+              "state": "known",
+              "value": "true"
+            }
+          },
+          "inheritEnvironment": false,
+          "envFiles": [],
+          "unresolvedSources": []
+        }
+      },
+      "projectFiles": {
+        ".openidea/run.toml": "[[configurations]]\nid = \"user:dev\"\nname = \"Dev\"\nkind = \"spring-boot\"\ncommand = \"java\"\nargs = [\"-cp\", \"${classpath}\", \"example.App\", \"--spring.profiles.active=dev\"]\ncwd = \"launch work\"\nmodule = \"app\"\ninclude-system-env = false\n[configurations.env]\nFEATURE_ENABLED = \"true\"\n",
+        "app/src/main/resources/application.properties": "feature.enabled=false\n"
+      },
+      "consumerExpected": {
+        "profiles": ["dev"],
+        "properties": {
+          "feature.enabled": {
+            "state": "known",
+            "value": "true",
+            "source": "environment"
+          }
+        }
+      }
+    },
+    {
+      "name": "prod-persisted-nonboolean",
+      "producerInput": {
+        "config": {
+          "id": "user:prod",
+          "name": "Prod",
+          "kind": "spring-boot",
+          "command": "java",
+          "args": ["-cp", "${classpath}", "example.App", "--spring.profiles.active=prod", "--feature.mode=production"],
+          "cwd": "launch work",
+          "module": "app",
+          "env": {},
+          "includeSystemEnv": false,
+          "detected": false,
+          "isTest": false,
+          "debugAdapter": "java-debug"
+        },
+        "persisted": true
+      },
+      "producerExpected": {
+        "version": 1,
+        "launch": {
+          "configId": "user:prod",
+          "name": "Prod",
+          "kind": "spring-boot",
+          "persisted": true,
+          "mainClass": "example.App",
+          "module": "app",
+          "cwd": "launch work",
+          "profiles": {
+            "state": "known",
+            "values": ["prod"],
+            "source": "commandLine"
+          },
+          "commandLineProperties": {
+            "spring.profiles.active": {
+              "state": "known",
+              "value": "prod"
+            },
+            "feature.mode": {
+              "state": "unknown"
+            }
+          },
+          "systemProperties": {},
+          "environment": {},
+          "inheritEnvironment": false,
+          "envFiles": [],
+          "unresolvedSources": []
+        }
+      },
+      "projectFiles": {
+        ".openidea/run.toml": "[[configurations]]\nid = \"user:prod\"\nname = \"Prod\"\nkind = \"spring-boot\"\ncommand = \"java\"\nargs = [\"-cp\", \"${classpath}\", \"example.App\", \"--spring.profiles.active=prod\", \"--feature.mode=production\"]\ncwd = \"launch work\"\nmodule = \"app\"\ninclude-system-env = false\n[configurations.env]\n",
+        "app/src/main/resources/application.properties": "feature.mode=base\n"
+      },
+      "consumerExpected": {
+        "profiles": ["prod"],
+        "properties": {
+          "feature.mode": {
+            "state": "known",
+            "value": "production",
+            "source": "commandLine"
+          }
+        }
+      }
+    },
+    {
+      "name": "command-line-precedence",
+      "producerInput": {
+        "config": {
+          "id": "user:precedence",
+          "name": "Dev",
+          "kind": "spring-boot",
+          "command": "java",
+          "args": [
+            "-Dspring.profiles.active=vm",
+            "-Dfeature.mode=system",
+            "-cp",
+            "${classpath}",
+            "example.App",
+            "--spring.profiles.active=prod",
+            "--feature.mode=command"
+          ],
+          "cwd": "launch work",
+          "module": "app",
+          "env": {
+            "SPRING_PROFILES_ACTIVE": "dev",
+            "FEATURE_MODE": "environment"
+          },
+          "includeSystemEnv": false,
+          "detected": false,
+          "isTest": false,
+          "debugAdapter": "java-debug"
+        },
+        "persisted": true
+      },
+      "producerExpected": {
+        "version": 1,
+        "launch": {
+          "configId": "user:precedence",
+          "name": "Dev",
+          "kind": "spring-boot",
+          "persisted": true,
+          "mainClass": "example.App",
+          "module": "app",
+          "cwd": "launch work",
+          "profiles": {
+            "state": "known",
+            "values": ["prod"],
+            "source": "commandLine"
+          },
+          "commandLineProperties": {
+            "spring.profiles.active": {
+              "state": "known",
+              "value": "prod"
+            },
+            "feature.mode": {
+              "state": "unknown"
+            }
+          },
+          "systemProperties": {
+            "spring.profiles.active": {
+              "state": "known",
+              "value": "vm"
+            },
+            "feature.mode": {
+              "state": "unknown"
+            }
+          },
+          "environment": {
+            "SPRING_PROFILES_ACTIVE": {
+              "state": "known",
+              "value": "dev"
+            },
+            "FEATURE_MODE": {
+              "state": "unknown"
+            }
+          },
+          "inheritEnvironment": false,
+          "envFiles": [],
+          "unresolvedSources": []
+        }
+      },
+      "projectFiles": {
+        ".openidea/run.toml": "[[configurations]]\nid = \"user:precedence\"\nname = \"Dev\"\nkind = \"spring-boot\"\ncommand = \"java\"\nargs = [\"-Dspring.profiles.active=vm\", \"-Dfeature.mode=system\", \"-cp\", \"${classpath}\", \"example.App\", \"--spring.profiles.active=prod\", \"--feature.mode=command\"]\ncwd = \"launch work\"\nmodule = \"app\"\ninclude-system-env = false\n[configurations.env]\nSPRING_PROFILES_ACTIVE = \"dev\"\nFEATURE_MODE = \"environment\"\n",
+        "app/src/main/resources/application.properties": "feature.mode=file\n"
+      },
+      "consumerExpected": {
+        "profiles": ["prod"],
+        "properties": {
+          "feature.mode": {
+            "state": "known",
+            "value": "command",
+            "source": "commandLine"
+          }
+        }
+      }
+    },
+    {
+      "name": "unknown-high-priority-blocks-file",
+      "producerInput": {
+        "config": {
+          "id": "temporary:unknown",
+          "name": "Unsaved",
+          "kind": "spring-boot",
+          "command": "java",
+          "args": [
+            "-cp",
+            "${classpath}",
+            "example.App",
+            "--spring.profiles.active=dev",
+            "--feature.mode=synthetic-private-value"
+          ],
+          "cwd": "launch work",
+          "module": "app",
+          "env": {},
+          "includeSystemEnv": false,
+          "detected": false,
+          "isTest": false,
+          "debugAdapter": "java-debug"
+        },
+        "persisted": false
+      },
+      "producerExpected": {
+        "version": 1,
+        "launch": {
+          "configId": "temporary:unknown",
+          "name": "Unsaved",
+          "kind": "spring-boot",
+          "persisted": false,
+          "mainClass": "example.App",
+          "module": "app",
+          "cwd": "launch work",
+          "profiles": {
+            "state": "known",
+            "values": ["dev"],
+            "source": "commandLine"
+          },
+          "commandLineProperties": {
+            "spring.profiles.active": {
+              "state": "known",
+              "value": "dev"
+            },
+            "feature.mode": {
+              "state": "unknown"
+            }
+          },
+          "systemProperties": {},
+          "environment": {},
+          "inheritEnvironment": false,
+          "envFiles": [],
+          "unresolvedSources": []
+        }
+      },
+      "projectFiles": {
+        "app/src/main/resources/application.properties": "feature.mode=base\n"
+      },
+      "consumerExpected": {
+        "profiles": ["dev"],
+        "properties": {
+          "feature.mode": {
+            "state": "unknown",
+            "source": "commandLine"
+          }
+        }
+      }
+    },
+    {
+      "name": "deselect-clears-launch",
+      "producerInput": {
+        "config": null,
+        "persisted": false
+      },
+      "producerExpected": null,
+      "projectFiles": {},
+      "consumerExpected": {
+        "launch": null,
+        "previousLaunchProfilesMustNotSurvive": ["dev", "prod"]
+      }
+    },
+    {
+      "name": "stable-plugin-id",
+      "producerInput": {
+        "config": {
+          "id": "user:stable",
+          "name": "Dev",
+          "kind": "spring-boot",
+          "command": "java",
+          "args": ["-cp", "${classpath}", "example.App", "--spring.profiles.active=dev"],
+          "cwd": "launch work",
+          "module": "app",
+          "env": {},
+          "includeSystemEnv": false,
+          "detected": false,
+          "isTest": false,
+          "debugAdapter": "java-debug"
+        },
+        "persisted": true
+      },
+      "producerExpected": {
+        "version": 1,
+        "launch": {
+          "configId": "user:stable",
+          "name": "Dev",
+          "kind": "spring-boot",
+          "persisted": true,
+          "mainClass": "example.App",
+          "module": "app",
+          "cwd": "launch work",
+          "profiles": {
+            "state": "known",
+            "values": ["dev"],
+            "source": "commandLine"
+          },
+          "commandLineProperties": {
+            "spring.profiles.active": {
+              "state": "known",
+              "value": "dev"
+            }
+          },
+          "systemProperties": {},
+          "environment": {},
+          "inheritEnvironment": false,
+          "envFiles": [],
+          "unresolvedSources": []
+        }
+      },
+      "projectFiles": {
+        ".openidea/run.toml": "[[configurations]]\nid = \"user:stable\"\nname = \"Dev\"\nkind = \"spring-boot\"\ncommand = \"java\"\nargs = [\"-cp\", \"${classpath}\", \"example.App\", \"--spring.profiles.active=dev\"]\ncwd = \"launch work\"\nmodule = \"app\"\ninclude-system-env = false\n[configurations.env]\n"
+      },
+      "consumerExpected": {
+        "profiles": ["dev"],
+        "pluginId": "hyhanyue.spring-beans"
+      },
+      "installedPlugins": [
+        {
+          "id": "aritti.spring-beans",
+          "enabled": false,
+          "status": "disabled"
+        },
+        {
+          "id": "hyhanyue.spring-beans",
+          "enabled": true,
+          "status": "active"
+        }
+      ]
+    }
+  ],
+  "sequence": [
+    "dev",
+    "prod-persisted-nonboolean",
+    "deselect-clears-launch",
+    "unknown-high-priority-blocks-file",
+    "command-line-precedence",
+    "stable-plugin-id"
+  ],
+  "privacy": "All examples are public synthetic values. No user environment/credentials are included. production payload must not contain synthetic-private-value, raw programArgs, VM options or complete inherited environment."
+}

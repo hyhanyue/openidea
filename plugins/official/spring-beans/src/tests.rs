@@ -256,7 +256,7 @@ fn actual_java8_demo_mapper_injection_resolves() {
         if path.extension().is_some_and(|e| e == "java") {
             host.add_file(
                 &format!("src/main/java/com/acme/{}", path.file_name().unwrap().to_string_lossy()),
-                &std::fs::read_to_string(path).unwrap(),
+                &std::fs::read_to_string(&path).unwrap(),
             );
         }
     }
@@ -551,7 +551,7 @@ fn views_list_and_draw_beans() {
     assert!(host.refreshed_views().is_empty(), "a complete scan doesn't re-render");
 
     n.handle(GRAPH_VIEW, ViewEvent::Button("refresh".into()), &host.invocation()).unwrap();
-    assert_eq!(host.refreshed_views(), [BEANS_VIEW, GRAPH_VIEW]);
+    assert_eq!(host.refreshed_views(), [BEANS_VIEW, GRAPH_VIEW, configuration::VIEW]);
 }
 
 #[test]
@@ -3020,4 +3020,153 @@ fn unresolved_binary_generic_qualifiers_never_claim_a_unique_injected_bean() {
             .iter()
             .any(|m| m.tooltip.contains("eligibility unknown") && m.target.is_none())
     );
+}
+
+#[test]
+fn plain_imports_register_beans_with_constructor_dependencies_and_are_removed_on_root_change() {
+    let host = MockHost::install();
+    host.set_setting("springBeans.applicationClass", "\"com.acme.App\"");
+    host.add_file(
+        "src/main/java/com/acme/App.java",
+        "package com.acme; @SpringBootApplication @Import(other.Plain.class) class App {}",
+    );
+    host.add_file(
+        "src/main/java/com/acme/Second.java",
+        "package com.acme; @SpringBootApplication(scanBasePackages=\"isolated\") class Second {}",
+    );
+    host.add_file(
+        "src/main/java/other/Plain.java",
+        "package other; public class Plain { public Plain(com.acme.Dependency dependency) {} }",
+    );
+    host.add_file("src/main/java/com/acme/Dependency.java", "package com.acme; @Component class Dependency {}");
+    let text = "package com.acme; import other.Plain; @Service class Client { Client(Plain plain) {} }";
+    let mut n = Navigator::default();
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Client(Plain", 1))[0].0, "Plain.java");
+    let tree = n.render(BEANS_VIEW, None, &host.invocation()).unwrap();
+    let Body::Tree(items) = tree.body else { panic!("tree") };
+    assert!(items.iter().any(|i| i.label == "other.Plain"));
+    let plain = doc(
+        "/project/src/main/java/other/Plain.java",
+        "package other; public class Plain { public Plain(com.acme.Dependency dependency) {} }",
+    );
+    assert_eq!(n_definition(&mut n, &plain, after(&plain.text, "com.acme.Dependency", 1))[0].0, "Dependency.java");
+    host.set_setting("springBeans.applicationClass", "\"com.acme.Second\"");
+    assert!(n_definition(&mut n, &java("Client.java", text), after(text, "Client(Plain", 1)).is_empty());
+}
+
+#[test]
+fn configuration_property_registrations_follow_enable_and_scan_boundaries() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/App.java", "package com.acme; @SpringBootApplication @EnableConfigurationProperties(other.Enabled.class) @ConfigurationPropertiesScan(basePackages=\"settings\") class App {}");
+    host.add_file(
+        "src/main/java/other/Enabled.java",
+        "package other; @ConfigurationProperties(prefix=\"demo.enabled\") public class Enabled {}",
+    );
+    host.add_file(
+        "src/main/java/settings/Scanned.java",
+        "package settings; @ConfigurationProperties(\"demo.scanned\") public class Scanned {}",
+    );
+    host.add_file(
+        "src/main/java/outside/Excluded.java",
+        "package outside; @ConfigurationProperties(\"demo.excluded\") public class Excluded {}",
+    );
+    let text = "package com.acme; import other.Enabled; import settings.Scanned; @Service class Client { Client(Enabled enabled, Scanned scanned) {} }";
+    let mut n = Navigator::default();
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Client(Enabled", 1))[0].0, "Enabled.java");
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, " Scanned", 1))[0].0, "Scanned.java");
+    let Body::Tree(items) = n.render(BEANS_VIEW, None, &host.invocation()).unwrap().body else { panic!("tree") };
+    assert!(items.iter().any(|i| i.label == "demo.enabled-other.Enabled"));
+    assert!(items.iter().any(|i| i.label == "demo.scanned-settings.Scanned"));
+    assert!(!items.iter().any(|i| i.label.contains("demo.excluded")));
+}
+
+#[test]
+fn scanning_does_not_execute_imports_on_unregistered_plain_classes() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/App.java", "package com.acme; @SpringBootApplication class App {}");
+    host.add_file(
+        "src/main/java/com/acme/NotRegistered.java",
+        "package com.acme; @Import(other.Plain.class) class NotRegistered {}",
+    );
+    host.add_file("src/main/java/other/Plain.java", "package other; public class Plain {}");
+    let text = "package com.acme; import other.Plain; @Service class Client { Client(Plain plain) {} }";
+    let mut n = Navigator::default();
+    assert!(n_definition(&mut n, &java("Client.java", text), after(text, "Client(Plain", 1)).is_empty());
+    assert!(findings(&host, &mut n, "Client.java", text).iter().any(|(code, _)| code == "missing-bean"));
+}
+
+#[test]
+fn dynamic_import_registration_never_reports_definite_missing_injection() {
+    let host = MockHost::install();
+    host.add_file(
+        "src/main/java/com/acme/App.java",
+        "package com.acme; @SpringBootApplication @Import(Selector.class) class App {}",
+    );
+    host.add_file("src/main/java/com/acme/Selector.java", "package com.acme; class Selector implements ImportSelector { public String[] selectImports(AnnotationMetadata metadata) {return null;} }");
+    host.add_file("src/main/java/com/acme/Port.java", "package com.acme; interface Port {}");
+    let text = "package com.acme; @Service class Client { Client(Port port) {} }";
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert!(!n.line_markers(&java("Client.java", text)).iter().any(|m| m.target.is_some()));
+}
+
+#[test]
+fn real_java8_configuration_fixture_matches_sources_bindings_and_navigation() {
+    let host = MockHost::install();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/java-spring-configuration");
+    for directory in ["src/main", "testdata", "config"] {
+        let mut todo = vec![fixture.join(directory)];
+        while let Some(path) = todo.pop() {
+            if path.is_dir() {
+                todo.extend(std::fs::read_dir(path).unwrap().map(|e| e.unwrap().path()));
+            } else {
+                host.add_file(
+                    &path.strip_prefix(&fixture).unwrap().to_string_lossy(),
+                    &std::fs::read_to_string(&path).unwrap(),
+                );
+            }
+        }
+    }
+    host.add_file(
+        "application-dev.properties",
+        &std::fs::read_to_string(fixture.join("application-dev.properties")).unwrap(),
+    );
+    let context = serde_json::json!({"version":1,"launch":{
+        "name":"Java 8 configuration fixture","mainClass":"dev.openidea.configuration.App","module":"","cwd":".","inheritEnvironment":false,
+        "commandLineProperties":{"spring.profiles.active":{"state":"known","value":"production"}},"systemProperties":{},"environment":{},"envFiles":[],"unresolvedSources":[]
+    }});
+    host.set_setting("springBeans.launchContext", &context.to_string());
+    let mut n = Navigator::default();
+    n.render(configuration::VIEW, None, &host.invocation()).unwrap();
+    let index = n.indexes.get(&host.invocation().project().unwrap(), COMMAND_BUDGET);
+    let snapshot = environment::snapshot(index.files(), None);
+    assert_eq!(snapshot.profile_order, ["common", "production", "proddb", "prodmq"]);
+    for (key, value) in [
+        ("demo.name", "imported-production"),
+        ("demo.greeting", "hello imported-production"),
+        ("demo.nested-default", "imported-production"),
+        ("demo.unicode", "默认"),
+        ("demo.document", "last-document"),
+        ("cycle.a", "present"),
+        ("cycle.b", "present"),
+        ("external.priority", "external"),
+        ("wildcard.flag", "yes"),
+        ("location.flag", "config-base"),
+    ] {
+        assert_eq!(snapshot.resolve(key).state, environment::State::Value(value.into()), "{key}");
+    }
+    assert!(matches!(snapshot.resolve("demo.a").state, environment::State::Unknown(_)));
+    let text = "package dev.openidea.configuration; import org.springframework.beans.factory.annotation.Value; class Client { @Value(\"${demo.name}\") String name; }";
+    let document = doc("/project/src/main/java/dev/openidea/configuration/Client.java", text);
+    assert_eq!(n_definition(&mut n, &document, after(text, "${demo.na", 1))[0].0, "base-production.properties");
+    let path = "/project/src/main/java/dev/openidea/configuration/DemoProperties.java";
+    let source = host.invocation().project().unwrap().read_file(path).unwrap();
+    assert_eq!(
+        n_definition(&mut n, &doc(path, &source), after(&source, "String nam", 1))[0].0,
+        "base-production.properties"
+    );
+    let Body::Tree(items) = n.render(BEANS_VIEW, None, &host.invocation()).unwrap().body else { panic!("tree") };
+    assert!(items.iter().any(|i| i.label == "demo-dev.openidea.configuration.DemoProperties"));
+    assert!(items.iter().any(|i| i.label == "dev.openidea.configuration.Plain"));
+    assert!(items.iter().any(|i| i.label == "enabled-profile-dev.openidea.configuration.EnabledProfileProperties"));
 }

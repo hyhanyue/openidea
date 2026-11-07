@@ -1,0 +1,27 @@
+spring:
+  config:
+    import: "classpath:settings/base.properties,optional:classpath:absent.properties"
+  profiles:
+    include:
+      - common
+    group:
+      production:
+        - proddb
+        - prodmq
+demo:
+  name: base
+  greeting: "hello ${demo.alias}"
+  alias: "${demo.name}"
+  nested:
+    label: nested-yaml
+  nested-default: "${not.present:${demo.name}}"
+  unicode: "${名字:默认}"
+  a: "${demo.b}"
+  b: "${demo.a}"
+scan.mode: scanned
+---
+spring.config.activate.on-profile: production & !dev
+demo.document: activated
+---
+spring.config.activate.on-profile: prodmq
+demo.document: last-document

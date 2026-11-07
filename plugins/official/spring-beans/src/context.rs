@@ -1,7 +1,6 @@
 //! Eligibility in a selected source context, never a substitute for the runtime.
 use crate::model::{Bean, FileModel};
-use openidea_plugin::{Range, host};
-use serde_json::Value;
+use openidea_plugin::Range;
 use spring_text::java::{self, Annotation, JavaFile, MemberKind};
 use spring_text::range;
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,6 +36,10 @@ struct Class {
     auto: bool,
     scans: Vec<String>,
     imports: Vec<String>,
+    property_imports: Vec<String>,
+    property_scans: Vec<String>,
+    properties_type: bool,
+    component: bool,
     uncertain_scan: bool,
     conditions: Vec<Condition>,
 }
@@ -131,7 +134,7 @@ fn conditions(file: &JavaFile, annotations: &[Annotation]) -> Vec<Condition> {
                 "ConditionalOnMissingBean" => {
                     let types = classes(a, &["value"]);
                     let mut named_types = strings(a, &["type"]);
-                    named_types.extend(types);
+                    named_types.extend(types.into_iter().map(|name| qualify(file, &name)));
                     let names = strings(a, &["name"]);
                     if a.args.iter().any(|v| !["value", "type", "name"].contains(&v.name.as_str())) {
                         Condition::Unknown
@@ -146,6 +149,9 @@ fn conditions(file: &JavaFile, annotations: &[Annotation]) -> Vec<Condition> {
         .collect()
 }
 impl Metadata {
+    pub fn application_names(&self) -> impl Iterator<Item = &str> {
+        self.classes.iter().filter(|c| c.boot).map(|c| c.name.as_str())
+    }
     pub fn java(text: &str, file: &JavaFile, model: &FileModel) -> Self {
         let mut out = Self::default();
         for (i, ty) in file.types.iter().enumerate() {
@@ -153,6 +159,8 @@ impl Metadata {
             let boot = ty.has(&["SpringBootApplication"]);
             let mut scans = Vec::new();
             let mut imports = Vec::new();
+            let mut property_imports = Vec::new();
+            let mut property_scans = Vec::new();
             let mut uncertain_scan = ty.supers().any(|s| {
                 ["ImportSelector", "DeferredImportSelector", "ImportBeanDefinitionRegistrar"].contains(&s.name.as_str())
             });
@@ -186,6 +194,27 @@ impl Metadata {
                     }
                     scans.extend(packages);
                 }
+                if annotation.name == "EnableConfigurationProperties" {
+                    let names = classes(annotation, &["value"]);
+                    if names.is_empty() && !annotation.args.is_empty() {
+                        uncertain_scan = true;
+                    }
+                    property_imports.extend(names.iter().map(|n| qualify(file, n)));
+                }
+                if annotation.name == "ConfigurationPropertiesScan" {
+                    let mut packages = strings(annotation, &["value", "basePackages"]);
+                    packages.extend(
+                        classes(annotation, &["basePackageClasses"])
+                            .iter()
+                            .map(|n| qualify(file, n).rsplit_once('.').map_or(String::new(), |(p, _)| p.into())),
+                    );
+                    uncertain_scan |= packages.iter().any(|p| p.contains('$'))
+                        || !literal_strings(annotation, &["value", "basePackages"]);
+                    if packages.is_empty() {
+                        packages.push(file.package.clone());
+                    }
+                    property_scans.extend(packages);
+                }
                 if annotation.name == "Import" {
                     let imported = classes(annotation, &["value"]);
                     uncertain_scan |= imported.is_empty();
@@ -199,6 +228,15 @@ impl Metadata {
                 auto: ty.has(&["AutoConfiguration"]),
                 scans,
                 imports,
+                property_imports,
+                property_scans,
+                component: model.beans.iter().any(|b| {
+                    b.range == range(text, ty.at, ty.at + ty.name.len())
+                        && b.kind != "@Import"
+                        && b.kind != "@ConfigurationProperties"
+                }),
+                properties_type: ty.has(&["ConfigurationProperties"])
+                    && !ty.annotations.iter().any(|a| java::STEREOTYPES.contains(&a.name.as_str())),
                 uncertain_scan,
                 conditions: conditions(file, &ty.annotations),
             });
@@ -223,64 +261,65 @@ impl Metadata {
 pub struct Environment {
     pub root: String,
     pub profiles: Option<BTreeSet<String>>,
-    pub properties: BTreeMap<String, Option<String>>,
-    pub complete: bool,
+    snapshot: crate::environment::Snapshot,
 }
 impl Environment {
-    fn settings(classes: &[&Class]) -> Self {
-        let root = host::setting_string("springBeans.applicationClass").unwrap_or_default();
-        let roots: Vec<_> = classes.iter().filter(|c| c.boot).collect();
-        let root = if root.is_empty() && roots.len() == 1 { roots[0].name.clone() } else { root };
-        let profiles = host::setting_string("springBeans.activeProfiles").map(|p| {
-            let set: BTreeSet<_> = p.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
-            if set.is_empty() { BTreeSet::from(["default".into()]) } else { set }
-        });
-        let raw = host::setting("springBeans.propertyOverrides").and_then(|s| serde_json::from_str::<Value>(&s).ok());
-        let properties = match raw {
-            Some(Value::Object(map)) => map.into_iter().map(|(k, v)| (k, v.as_str().map(str::to_owned))).collect(),
-            Some(Value::String(text)) => {
-                let mut map: BTreeMap<_, _> =
-                    spring_text::config::properties(&text).into_iter().map(|k| (k.key, Some(k.value))).collect();
-                for line in text.lines().filter_map(|s| s.trim().strip_prefix('!')) {
-                    map.insert(line.trim().to_owned(), None);
-                }
-                map
-            }
-            _ => BTreeMap::new(),
-        };
-        Self {
-            root,
-            profiles,
-            properties,
-            complete: host::setting_bool("springBeans.environmentComplete").unwrap_or(false),
-        }
+    fn settings(files: &BTreeMap<String, FileModel>) -> Self {
+        let snapshot = crate::environment::snapshot(files, None);
+        Self { root: snapshot.application.clone(), profiles: snapshot.profiles.clone(), snapshot }
     }
 }
 
 pub struct Index {
     states: BTreeMap<usize, State>,
     pub label: String,
+    pub registrations: BTreeMap<String, bool>,
+    pub uncertain_registrations: bool,
 }
 impl Index {
     pub fn new(files: &BTreeMap<String, FileModel>) -> Self {
         let classes: Vec<_> = files.values().flat_map(|m| &m.context.classes).collect();
-        let env = Environment::settings(&classes);
+        let env = Environment::settings(files);
         let root = classes.iter().find(|c| c.name == env.root);
         let mut reachable = BTreeMap::new();
-        let mut scans = BTreeMap::new();
+        let mut scans: BTreeMap<String, State> = BTreeMap::new();
         let mut uncertain = false;
+        let mut imports = BTreeMap::new();
+        let mut properties = BTreeMap::new();
+        let mut enabled_properties = BTreeMap::new();
+        let mut property_scans: BTreeMap<String, State> = BTreeMap::new();
+        let mut passes = 0;
         if let Some(root) = root {
             reachable.insert(root.name.clone(), State::Active);
         }
         loop {
+            passes += 1;
+            if passes > 64 {
+                uncertain = true;
+                break;
+            }
             let mut changed = false;
             for class in &classes {
                 let scanned = scans
                     .iter()
-                    .filter(|(p, _)| class.package == **p || class.package.starts_with(&format!("{p}.")))
+                    .filter(|(p, _)| {
+                        p.is_empty() || class.package == **p || class.package.starts_with(&format!("{p}."))
+                    })
                     .fold(State::Inactive, |s, (_, state)| join(s, *state));
-                if scanned != State::Inactive {
+                if class.component && scanned != State::Inactive {
                     changed |= merge(&mut reachable, &class.name, scanned);
+                }
+                if class.properties_type {
+                    let scanned = property_scans
+                        .iter()
+                        .filter(|(p, _)| {
+                            p.is_empty() || class.package == **p || class.package.starts_with(&format!("{p}."))
+                        })
+                        .fold(State::Inactive, |s, (_, state)| join(s, *state));
+                    if scanned != State::Inactive {
+                        changed |= merge(&mut properties, &class.name, scanned);
+                        changed |= merge(&mut reachable, &class.name, scanned);
+                    }
                 }
                 let state = reachable
                     .get(&class.name)
@@ -297,7 +336,21 @@ impl Index {
                     }
                     for name in &class.imports {
                         changed |= merge(&mut reachable, name, state);
+                        changed |= merge(&mut imports, name, state);
                     }
+                    for name in &class.property_imports {
+                        changed |= merge(&mut enabled_properties, name, state);
+                        changed |= merge(&mut reachable, name, state);
+                        changed |= merge(&mut properties, name, state);
+                    }
+                    for package in &class.property_scans {
+                        changed |= merge(
+                            &mut property_scans,
+                            package,
+                            if class.uncertain_scan { state.and(State::Unknown) } else { state },
+                        );
+                    }
+
                     uncertain |= class.uncertain_scan
                         || class.imports.iter().any(|name| !classes.iter().any(|c| c.name == *name));
                 }
@@ -324,7 +377,29 @@ impl Index {
                                 State::Inactive
                             });
                         }
-                        state = state.and(evaluate(&class.conditions, &env)).and(evaluate(conditions, &env));
+                        if bean.kind == "@Import" || bean.kind == "@ConfigurationProperties" {
+                            let registrations = if bean.kind == "@Import" { &imports } else { &properties };
+                            state = registrations.get(owner).copied().unwrap_or(State::Unknown);
+                            if imports.contains_key(owner) && properties.contains_key(owner) {
+                                state = State::Unknown;
+                            }
+                        }
+                        if classes.iter().filter(|c| c.name == *owner).count() > 1 {
+                            state = State::Unknown;
+                        }
+                        let class_state =
+                            if bean.kind == "@ConfigurationProperties" && enabled_properties.contains_key(owner) {
+                                state = enabled_properties[owner];
+                                State::Active
+                            } else {
+                                evaluate(&class.conditions, &env)
+                            };
+                        state = state.and(class_state).and(evaluate(conditions, &env));
+                        if imports.contains_key(owner) && properties.contains_key(owner)
+                            || classes.iter().filter(|c| c.name == *owner).count() > 1
+                        {
+                            state = state.and(State::Unknown);
+                        }
                         missing.extend(
                             class
                                 .conditions
@@ -347,6 +422,7 @@ impl Index {
             }
         }
         let unconditional = states.clone();
+        let generic_types = crate::generics::Index::new(files.values());
         for (key, bean, auto, missing) in &definitions {
             if !auto || missing.is_empty() || states[key] == State::Inactive {
                 continue;
@@ -360,15 +436,25 @@ impl Index {
                         && cs.is_empty()
                         && unconditional[other] == State::Active
                         && (names.iter().any(|n| b.answers_to(n))
-                            || types.iter().any(|t| is_a(files, &b.ty, t.rsplit('.').next().unwrap_or(t))))
+                            || types.iter().any(|t| generic_types.known_assignable(b, t)))
                 });
                 if present {
                     states.insert(*key, State::Inactive);
                 }
             }
         }
+        let mut registrations: BTreeMap<String, bool> = imports.keys().map(|n| (n.clone(), false)).collect();
+        registrations.extend(properties.keys().map(|n| (n.clone(), true)));
+        uncertain |= registrations.keys().any(|name| {
+            files.values().any(|m| {
+                m.types.iter().any(|t| t.qualified == *name)
+                    && !m.beans.iter().any(|b| b.ty == name.rsplit('.').next().unwrap_or(name))
+            })
+        });
         Self {
             states,
+            registrations,
+            uncertain_registrations: uncertain,
             label: if env.root.is_empty() {
                 "Source context: unselected".into()
             } else {
@@ -407,27 +493,6 @@ fn merge(map: &mut BTreeMap<String, State>, key: &str, state: State) -> bool {
     }
 }
 
-fn is_a(files: &BTreeMap<String, FileModel>, ty: &str, target: &str) -> bool {
-    let mut todo = vec![ty];
-    let mut seen = BTreeSet::new();
-    while let Some(name) = todo.pop() {
-        if name == target {
-            return true;
-        }
-        if seen.insert(name) {
-            todo.extend(
-                files
-                    .values()
-                    .flat_map(|m| &m.types)
-                    .filter(|t| t.name == name)
-                    .flat_map(|t| &t.supers)
-                    .map(String::as_str),
-            );
-        }
-    }
-    false
-}
-
 fn evaluate(conditions: &[Condition], env: &Environment) -> State {
     conditions.iter().fold(State::Active, |state, c| {
         state.and(match c {
@@ -444,9 +509,8 @@ fn evaluate(conditions: &[Condition], env: &Environment) -> State {
                 if unknown { State::Unknown } else { State::Inactive }
             }),
             Condition::Property { names, having, missing } => names.iter().fold(State::Active, |result, key| {
-                result.and(match env.properties.get(key) {
-                    Some(Some(value)) if value.contains("${") => State::Unknown,
-                    Some(Some(value)) => {
+                result.and(match env.snapshot.resolve(key).state {
+                    crate::environment::State::Value(value) => {
                         if if having.is_empty() {
                             !value.eq_ignore_ascii_case("false")
                         } else {
@@ -457,21 +521,14 @@ fn evaluate(conditions: &[Condition], env: &Environment) -> State {
                             State::Inactive
                         }
                     }
-                    Some(None) => {
+                    crate::environment::State::Missing => {
                         if *missing {
                             State::Active
                         } else {
                             State::Inactive
                         }
                     }
-                    None if env.complete => {
-                        if *missing {
-                            State::Active
-                        } else {
-                            State::Inactive
-                        }
-                    }
-                    None => State::Unknown,
+                    crate::environment::State::Unknown(_) => State::Unknown,
                 })
             }),
         })

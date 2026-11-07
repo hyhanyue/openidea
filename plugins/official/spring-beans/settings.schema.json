@@ -91,6 +91,11 @@
       "type": "boolean",
       "title": "Treat properties absent from the selected source environment as missing (only for a fully specified development launch)",
       "default": false
+    },
+    "springBeans.configurationBindingFallback": {
+      "type": "boolean",
+      "title": "Provide source-only configuration key definitions when Spring Tools navigation is unavailable",
+      "default": false
     }
   }
 }

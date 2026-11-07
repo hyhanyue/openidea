@@ -293,6 +293,33 @@ impl<'a> Index<'a> {
         self.walk(ty, target, &mut BTreeSet::new(), 0)
     }
 
+    pub fn known_assignable(&self, bean: &crate::Bean, target: &str) -> bool {
+        let target = if target.contains('.') {
+            target
+        } else {
+            let Some(declarations) = self.declarations.get(target).filter(|d| d.len() == 1) else { return false };
+            &declarations[0].name
+        };
+        let Some(ty) = self.beans.get(&(std::ptr::from_ref(bean) as usize)) else { return false };
+        let mut pending = vec![ty.name.as_str()];
+        let mut seen = BTreeSet::new();
+        while let Some(name) = pending.pop() {
+            if name == target {
+                return true;
+            }
+            if seen.len() >= 256 || !seen.insert(name) {
+                continue;
+            }
+            let matching: Vec<_> =
+                self.declarations.get(simple(name)).into_iter().flatten().filter(|d| d.name == name).collect();
+            if matching.len() != 1 {
+                continue;
+            }
+            pending.extend(matching[0].supers.iter().filter(|t| !t.unknown).map(|t| t.name.as_str()));
+        }
+        false
+    }
+
     fn reaches(&self, ty: &str, target: &str) -> bool {
         let mut todo = vec![ty];
         let mut seen = BTreeSet::new();

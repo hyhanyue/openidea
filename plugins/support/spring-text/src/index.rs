@@ -100,6 +100,15 @@ impl<T: Clone> Index<T> {
         self.files.insert(path.to_owned(), value);
     }
 
+    /// Installs a derived source model, preserving an in-progress replacement pass.
+    pub fn replace(&mut self, path: &str, model: T) {
+        self.unread.retain(|p| p != path);
+        if self.reading && self.passes > 0 {
+            self.next.insert(path.to_owned(), model.clone());
+        }
+        self.files.insert(path.to_owned(), model);
+    }
+
     /// Whether a whole pass over the project has been read.
     pub fn complete(&self) -> bool {
         self.passes > 0
@@ -206,6 +215,23 @@ mod tests {
         assert_eq!(index.files().keys().collect::<Vec<_>>(), ["/project/src/A.java", "/project/src/B.java"]);
         let index = indexes.for_document("/project/README.md", "x y", PROVIDER_BUDGET).unwrap();
         assert_eq!(index.files().len(), 2, "not one of the globs");
+    }
+
+    #[test]
+    fn derived_models_survive_an_in_progress_replacement_scan() {
+        let host = MockHost::install();
+        host.add_file("src/A.java", "one");
+        host.add_file("src/B.java", "two three");
+        let project = host.invocation().project().unwrap();
+        let mut index = Index::new(&["**/*.java"], words);
+        index.scan(&project, COMMAND_BUDGET);
+        index.scanned = None;
+        index.scan(&project, Duration::ZERO);
+        index.replace("/project/src/A.java", 99);
+        assert_eq!(index.files()["/project/src/A.java"], 99);
+        index.scan(&project, COMMAND_BUDGET);
+        assert_eq!(index.files()["/project/src/A.java"], 99);
+        assert_eq!(index.files()["/project/src/B.java"], 2);
     }
 
     #[test]

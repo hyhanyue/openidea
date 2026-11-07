@@ -8,7 +8,7 @@ change-notes = "0.2.0: Kotlin and XML bean configuration; bean names, aliases, @
 categories = ["frameworks"]
 engines.openidea = "^1.4"
 wasm = "dist/plugin.wasm"
-activation = ["on-language:java", "on-language:kotlin", "on-language:xml", "on-event:file-opened", "on-event:file-saved"]
+activation = ["on-language:java", "on-language:kotlin", "on-language:xml", "on-language:yaml", "on-language:properties", "on-event:file-opened", "on-event:file-saved"]
 
 [capabilities]
 required = ["project.read"]
@@ -17,6 +17,16 @@ optional = ["events"]
 [[contributes.providers]]
 kinds = ["definition", "line-markers", "completion", "code-actions"]
 languages = ["java", "kotlin", "xml"]
+
+[[contributes.providers]]
+kinds = ["definition"]
+languages = ["properties", "yaml"]
+
+[[contributes.views]]
+id = "configuration-sources"
+title = "Spring Configuration Sources"
+icon = "spring-config"
+location = "left"
 
 [[contributes.views]]
 id = "beans"
