@@ -17,7 +17,39 @@ env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
+  bindings:
+    name: Generate TypeScript bindings
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with: { version: 11 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "clippy, rustfmt" }
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: compile-macos-arm64
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - name: Generate bindings from Rust types
+        run: |
+          mkdir -p dist
+          pnpm gen:bindings
+          echo GENERATED_BINDINGS_BASE64_BEGIN
+          base64 < src/bindings.ts
+          echo GENERATED_BINDINGS_BASE64_END
+          git hash-object src/bindings.ts
+      - uses: actions/upload-artifact@v6
+        with:
+          name: generated-typescript-bindings
+          path: src/bindings.ts
+          if-no-files-found: error
+          retention-days: 14
   macos:
+    needs: bindings
     name: macOS (${{ matrix.arch }})
     runs-on: macos-latest
     timeout-minutes: 90
@@ -41,16 +73,16 @@ jobs:
           key: compile-macos-${{ matrix.arch }}
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
-      - name: Rust checks and tests
-        if: matrix.arch == 'arm64'
+      - uses: actions/download-artifact@v7
+        with:
+          name: generated-typescript-bindings
+          path: src
+      - name: Verify bindings against the generator
         run: |
           mkdir -p dist
-          cargo fmt --all --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace --no-fail-fast -- --test-threads=1
-      - name: Verify generated bindings
-        if: matrix.arch == 'arm64'
-        run: git diff --exit-code src/bindings.ts
+          cp src/bindings.ts /tmp/expected-bindings.ts
+          pnpm gen:bindings
+          cmp src/bindings.ts /tmp/expected-bindings.ts
       - name: Compile app and DMG without publishing or signing
         run: pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - name: Archive app with executable permissions
