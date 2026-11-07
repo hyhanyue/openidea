@@ -52,22 +52,37 @@ export function joinPaths(base: string, path: string): string {
 }
 
 /** Map-typed parameters collect all entries: nothing to generate. */
-const isMap = (type: string) => /^(java\.util\.)?(Map|MultiValueMap|HttpHeaders|LinkedMultiValueMap|HashMap)\b/.test(type);
+const isMap = (type: string) =>
+  /^(java\.util\.)?(Map|MultiValueMap|HttpHeaders|LinkedMultiValueMap|HashMap)\b/.test(type);
 
 function endpoint(controller: MappedController, mapped: MappedMethod): Endpoint {
-  const cls = controller.owner.cls, method = mapped.method;
-  const base = controller.mapping, own = mapped.mapping;
+  const cls = controller.owner.cls,
+    method = mapped.method;
+  const base = controller.mapping,
+    own = mapped.mapping;
   const paths: string[] = [];
-  for (const b of base?.paths.length ? base.paths : [""]) for (const p of own.paths.length ? own.paths : [""]) paths.push(joinPaths(b, p));
+  for (const b of base?.paths.length ? base.paths : [""])
+    for (const p of own.paths.length ? own.paths : [""]) {
+      if (paths.length >= 1024) break;
+      paths.push(joinPaths(b, p));
+    }
   const httpMethods = [...new Set([...(base?.methods ?? []), ...own.methods])];
-  const query: QueryParam[] = [], headers: { name: string; value: string }[] = [];
+  const query: QueryParam[] = [],
+    headers: { name: string; value: string }[] = [];
   let bodyType: string | null = null;
   for (const p of mapped.params) {
-    const annotation = (name: string) => p.annotations.find((a) => a.name === name &&
-      (!a.qualifiedName.includes(".") || a.qualifiedName === `org.springframework.web.bind.annotation.${name}`));
-    const rp = annotation("RequestParam"), rh = annotation("RequestHeader");
-    const value = (a: Annotation, key: string) => (p.annotationOwners.get(a) ?? p.owner).constants.string(a.args.get(key));
-    if (rp && !isMap(p.type)) query.push({ name: value(rp, "value") || value(rp, "name") || p.name, value: value(rp, "defaultValue") });
+    const annotation = (name: string) =>
+      p.annotations.find(
+        (a) =>
+          a.name === name &&
+          (!a.qualifiedName.includes(".") || a.qualifiedName === `org.springframework.web.bind.annotation.${name}`),
+      );
+    const rp = annotation("RequestParam"),
+      rh = annotation("RequestHeader");
+    const value = (a: Annotation, key: string) =>
+      (p.annotationOwners.get(a) ?? p.owner).constants.string(a.args.get(key));
+    if (rp && !isMap(p.type))
+      query.push({ name: value(rp, "value") || value(rp, "name") || p.name, value: value(rp, "defaultValue") });
     else if (rh && !isMap(p.type)) {
       const name = value(rh, "value") || value(rh, "name") || p.name;
       headers.push({ name, value: value(rh, "defaultValue") ?? `{{${name}}}` });
@@ -75,7 +90,8 @@ function endpoint(controller: MappedController, mapped: MappedMethod): Endpoint 
   }
   for (const condition of [...(base?.params ?? []), ...own.params]) {
     if (condition.startsWith("!") || condition.includes("!=")) continue;
-    const eq = condition.indexOf("="), name = (eq < 0 ? condition : condition.slice(0, eq)).trim();
+    const eq = condition.indexOf("="),
+      name = (eq < 0 ? condition : condition.slice(0, eq)).trim();
     const value = eq < 0 ? null : condition.slice(eq + 1).trim();
     const existing = query.find((q) => q.name === name);
     if (name && existing && value !== null) existing.value = value;
@@ -84,28 +100,40 @@ function endpoint(controller: MappedController, mapped: MappedMethod): Endpoint 
   for (const condition of [...(base?.headers ?? []), ...own.headers]) {
     const eq = condition.indexOf("=");
     if (eq < 0 || condition.startsWith("!") || condition.includes("!=")) continue;
-    const name = condition.slice(0, eq).trim(), value = condition.slice(eq + 1).trim();
+    const name = condition.slice(0, eq).trim(),
+      value = condition.slice(eq + 1).trim();
     const existing = headers.find((h) => h.name.toLowerCase() === name.toLowerCase());
-    if (existing) existing.value = value; else if (name) headers.push({ name, value });
+    if (existing) existing.value = value;
+    else if (name) headers.push({ name, value });
   }
   const inherited = mapped.owner.cls !== cls;
   return {
-    className: cls.name, methodName: method.name,
+    className: cls.name,
+    methodName: method.name,
     offset: inherited ? cls.nameStart : method.nameStart,
     range: inherited ? { from: -1, to: -1 } : { from: method.start, to: method.end },
     ...(inherited ? { origin: { path: mapped.owner.source.path, offset: method.nameStart } } : {}),
     classOffset: cls.nameStart,
-    httpMethod: own.methods[0] ?? base?.methods[0] ?? "GET", httpMethods,
-    paths: [...new Set(paths)], query, headers,
+    httpMethod: own.methods[0] ?? base?.methods[0] ?? "GET",
+    httpMethods,
+    paths: [...new Set(paths)],
+    query,
+    headers,
     consumes: own.consumes[0] ?? base?.consumes[0] ?? null,
-    produces: own.produces[0] ?? base?.produces[0] ?? null, bodyType,
+    produces: own.produces[0] ?? base?.produces[0] ?? null,
+    bodyType,
   };
 }
 
 export function projectControllers(project: MappingProject, path: string, text?: string): Controller[] {
   return project.controllers(path, text).map((controller) => {
     const cls = controller.owner.cls;
-    return { name: cls.name, offset: cls.nameStart, range: { from: cls.start, to: cls.end }, endpoints: controller.methods.map((m) => endpoint(controller, m)) };
+    return {
+      name: cls.name,
+      offset: cls.nameStart,
+      range: { from: cls.start, to: cls.end },
+      endpoints: controller.methods.map((m) => endpoint(controller, m)),
+    };
   });
 }
 

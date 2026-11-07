@@ -15,17 +15,18 @@ import {
   type TextEditorHandle,
 } from "@/editor/api";
 import { tx } from "@/platform/i18n";
-import { call, commands, emitLocalIdeEvent, onIdeEvent, IpcError } from "@/platform/ipc";
+import { call, commands, emitLocalIdeEvent, IpcError } from "@/platform/ipc";
 import { ipcPath } from "@/platform/paths";
 import { useProject } from "@/platform/project";
 import { isVirtualUri } from "@/platform/virtualDocs";
 import { gutterIconMarkup, showContextMenu, type MenuItem } from "@/ui";
 import { editorService, notifications, type MenuGroupContext } from "@/workbench/contributions";
-import { springAt, springControllers, type Controller, type Endpoint } from "./endpoints";
+import { springAt, type Controller, type Endpoint } from "./endpoints";
 import { appendRequests, bodyLookup, findHost, renderRequest, skeleton, type SourceReader } from "./request";
 import { parseSource } from "./source";
-import { controllersForSource, isRouteSource, knownControllers } from "./routeIndex";
+import { controllersForSource, knownControllers, onRouteIndexChanged, updateRouteSource } from "./routeIndex";
 import styles from "../HttpClient.module.css";
+import markerStyles from "./editor.module.css";
 
 export const SPRING_LANGUAGES = new Set(["java", "kotlin"]);
 export const GENERATED_REQUESTS = "generated-requests.http";
@@ -90,20 +91,31 @@ export async function generateRequests(sourcePath: string, text: string, targets
   if (!targets.length) return;
   try {
     const root = useProject.getState().project?.root ?? null;
-    const [host, lookup] = await Promise.all([
+    const bodySources = new Map<string, Endpoint[]>();
+    for (const { endpoint } of targets)
+      if (endpoint.bodyType) {
+        const path = endpoint.origin?.path || sourcePath;
+        const group = bodySources.get(path) ?? [];
+        if (!group.includes(endpoint)) group.push(endpoint);
+        bodySources.set(path, group);
+      }
+    const [host, lookups] = await Promise.all([
       findHost(sourcePath, root, reader),
-      bodyLookup(
-        sourcePath,
-        parseSource(text),
-        targets.map((t) => t.endpoint),
-        reader,
+      Promise.all(
+        [...bodySources].map(async ([path, endpoints]) => {
+          const source = path === sourcePath ? text : ((await reader.read(path)) ?? "");
+          return [path, await bodyLookup(path, parseSource(source), endpoints, reader)] as const;
+        }),
       ),
     ]);
+    const lookup = new Map(lookups);
     const blocks = targets.map(({ endpoint, path, method }) =>
       renderRequest(method ? { ...endpoint, httpMethod: method } : endpoint, {
         host,
         path,
-        body: endpoint.bodyType ? skeleton(endpoint.bodyType, lookup) : undefined,
+        body: endpoint.bodyType
+          ? skeleton(endpoint.bodyType, lookup.get(endpoint.origin?.path || sourcePath) ?? (() => null))
+          : undefined,
       }),
     );
     const file = await scratchFile();
@@ -135,14 +147,24 @@ function endpointItems(sourcePath: string, text: string, e: Endpoint): MenuItem[
       ? {
           label: "Generate Request in HTTP Client",
           icon: "file-http",
-          submenu: targets.map((target) => ({ label: `${target.method} ${target.path}`, verbatim: true, run: () => void generateRequests(sourcePath, text, [target]) })),
+          submenu: targets.map((target) => ({
+            label: `${target.method} ${target.path}`,
+            verbatim: true,
+            run: () => void generateRequests(sourcePath, text, [target]),
+          })),
         }
-      : { label: "Generate Request in HTTP Client", icon: "file-http", run: () => void generateRequests(sourcePath, text, targets) },
+      : {
+          label: "Generate Request in HTTP Client",
+          icon: "file-http",
+          run: () => void generateRequests(sourcePath, text, targets),
+        },
   ];
 }
 
-function targetsOf(endpoint: Endpoint): Target[] {
-  return (endpoint.httpMethods.length ? endpoint.httpMethods : [endpoint.httpMethod]).flatMap((method) => endpoint.paths.map((path) => ({ endpoint, method, path })));
+export function targetsOf(endpoint: Endpoint): Target[] {
+  return (endpoint.httpMethods.length ? endpoint.httpMethods : [endpoint.httpMethod]).flatMap((method) =>
+    endpoint.paths.map((path) => ({ endpoint, method, path })),
+  );
 }
 
 function controllerItems(sourcePath: string, text: string, c: Controller): MenuItem[] {
@@ -151,12 +173,7 @@ function controllerItems(sourcePath: string, text: string, c: Controller): MenuI
         {
           label: "Generate Requests for Controller",
           icon: "file-http",
-          run: () =>
-            void generateRequests(
-              sourcePath,
-              text,
-              c.endpoints.flatMap(targetsOf),
-            ),
+          run: () => void generateRequests(sourcePath, text, c.endpoints.flatMap(targetsOf)),
         },
       ]
     : [];
@@ -164,7 +181,10 @@ function controllerItems(sourcePath: string, text: string, c: Controller): MenuI
 
 /** Editor context menu items for the caret at `offset`: the generate actions (a path choice for several paths). */
 export function springMenuItems(sourcePath: string, text: string, offset: number): MenuItem[] {
-  const { controller, endpoint } = springAt(knownControllers(useProject.getState().project?.root ?? null, sourcePath, text), offset);
+  const { controller, endpoint } = springAt(
+    knownControllers(useProject.getState().project?.root ?? null, sourcePath, text),
+    offset,
+  );
   const items: MenuItem[] = [];
   if (endpoint)
     items.push(
@@ -202,11 +222,7 @@ export async function generateAtCaret(scope: "endpoint" | "controller"): Promise
     });
     return;
   }
-  await generateRequests(
-    e.ctx.path,
-    text,
-    endpoints.flatMap(targetsOf),
-  );
+  await generateRequests(e.ctx.path, text, endpoints.flatMap(targetsOf));
 }
 
 // --- gutter ----------------------------------------------------------------------
@@ -255,18 +271,23 @@ function computeMarks(state: EditorState, controllers: Controller[]): Mark[] {
 }
 
 class SpringMarker extends GutterMarker {
-  constructor(readonly mark: Mark) {
+  constructor(
+    readonly mark: Mark,
+    readonly open: (el: HTMLElement) => void,
+  ) {
     super();
   }
   override eq(other: GutterMarker): boolean {
     return other instanceof SpringMarker && other.mark.key === this.mark.key && other.mark.title === this.mark.title;
   }
   override toDOM(): Node {
-    const el = document.createElement("div");
-    el.className = styles.runMarker ?? "";
-    el.title = this.mark.title;
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = `${styles.runMarker ?? ""} ${markerStyles.marker}`;
+    el.title = tx(this.mark.title);
     el.setAttribute("role", "button");
-    el.setAttribute("aria-label", this.mark.title);
+    el.setAttribute("aria-label", tx(this.mark.title));
+    el.onclick = () => this.open(el);
     el.innerHTML = gutterIconMarkup("file-http") ?? "";
     return el;
   }
@@ -283,20 +304,26 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
       revision = 0;
       unsubscribe: () => void;
       constructor(readonly view: EditorView) {
-        this.unsubscribe = onIdeEvent("fsChanged", (event) => {
-          if ([...event.created, ...event.modified, ...event.removed].some((p) => isRouteSource(String(p)))) this.schedule(0);
-        });
+        updateRouteSource(path, view.state.doc.toString());
+        this.unsubscribe = onRouteIndexChanged(() => this.schedule(DEBOUNCE));
         this.schedule(0);
       }
       update(u: ViewUpdate) {
-        if (u.docChanged) this.schedule(DEBOUNCE);
+        if (u.docChanged) {
+          updateRouteSource(path, u.state.doc.toString());
+          this.schedule(DEBOUNCE);
+        }
       }
       schedule(delay: number) {
         clearTimeout(this.timer);
         const revision = ++this.revision;
         this.timer = setTimeout(async () => {
           const state = this.view.state;
-          const controllers = await controllersForSource(useProject.getState().project?.root ?? null, path, state.doc.toString());
+          const controllers = await controllersForSource(
+            useProject.getState().project?.root ?? null,
+            path,
+            state.doc.toString(),
+          );
           if (this.revision !== revision || this.view.state.doc !== state.doc) return;
           const found = computeMarks(this.view.state, controllers);
           const cur = this.view.state.field(marksField);
@@ -316,7 +343,10 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
     // Only files that have mappings (the gutter found some) are parsed again here.
     if (!view.state.field(marksField, false)?.length) return [];
     const text = view.state.doc.toString();
-    const { controller, endpoint } = springAt(knownControllers(useProject.getState().project?.root ?? null, path, text), view.state.selection.main.head);
+    const { controller, endpoint } = springAt(
+      knownControllers(useProject.getState().project?.root ?? null, path, text),
+      view.state.selection.main.head,
+    );
     const out: ContributedIntention[] = [];
     if (endpoint)
       out.push({
@@ -330,12 +360,7 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
         id: GENERATE_CONTROLLER_REQUESTS,
         label: "Generate Requests for Controller",
         icon: "file-http",
-        run: () =>
-          generateRequests(
-            path,
-            text,
-            controller.endpoints.flatMap(targetsOf),
-          ),
+        run: () => generateRequests(path, text, controller.endpoints.flatMap(targetsOf)),
       });
     return out;
   };
@@ -347,20 +372,14 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
       class: `${styles.runGutter} cm-openidea-gutter-spring`,
       markers: (view) =>
         RangeSet.of(
-          view.state.field(marksField).map((m) => new SpringMarker(m).range(m.pos)),
+          view.state.field(marksField).map((m) =>
+            new SpringMarker(m, (el) => {
+              const rect = el.getBoundingClientRect();
+              showContextMenu({ x: rect.left, y: rect.bottom + 2 }, m.items(path, view.state.doc.toString()));
+            }).range(m.pos),
+          ),
           true,
         ),
-      domEventHandlers: {
-        mousedown: (view, block, event) => {
-          const mark = view.state.field(marksField).find((m) => m.pos === block.from);
-          if (!mark || (event as MouseEvent).button !== 0) return false;
-          const el = (event.target as HTMLElement).closest?.(`.${styles.runMarker}`) as HTMLElement | null;
-          const rect = (el ?? (event.target as HTMLElement)).getBoundingClientRect();
-          event.preventDefault();
-          showContextMenu({ x: rect.left, y: rect.bottom + 2 }, mark.items(path, view.state.doc.toString()));
-          return true;
-        },
-      },
     }),
   ];
 }

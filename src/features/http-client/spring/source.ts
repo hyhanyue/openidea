@@ -38,6 +38,7 @@ export interface Field {
   name: string;
   type: string;
   isStatic: boolean;
+  isConstant: boolean;
   init: Expr | null;
 }
 
@@ -51,6 +52,7 @@ export interface Method {
   start: number;
   end: number;
   defaultValue: Expr | null;
+  returnType: string;
 }
 
 export interface ClassDecl {
@@ -357,13 +359,20 @@ class Reader {
             name: name.text,
             type: colon >= 0 ? joined(header.slice(colon + 1)) : "",
             isStatic,
+            isConstant: ids.some((t) => t.text === "const"),
             init,
           });
       } else {
         const typeToks = header.filter((t) => !(t.kind === "id" && MODIFIERS.has(t.text)));
         const name = typeToks[typeToks.length - 1];
         if (name?.kind === "id" && typeToks.length >= 2)
-          into.fields.push({ name: name.text, type: joined(typeToks.slice(0, -1)), isStatic, init });
+          into.fields.push({
+            name: name.text,
+            type: joined(typeToks.slice(0, -1)),
+            isStatic,
+            isConstant: ids.some((t) => t.text === "final") || into.kind === "interface",
+            init,
+          });
       }
     };
     let i = from;
@@ -392,7 +401,7 @@ class Reader {
         const nameTok = companion ? t : this.toks[i + 1]!;
         const cls: ClassDecl = {
           name: companion ? "Companion" : nameTok.text,
-          kind: this.is(i - 1, "@") ? "annotation" : t.text as ClassDecl["kind"],
+          kind: this.is(i - 1, "@") ? "annotation" : (t.text as ClassDecl["kind"]),
           abstract: header.some((h) => h.text === "abstract"),
           typeParams: [],
           supers: [],
@@ -414,7 +423,9 @@ class Reader {
             if (this.is(j, "<")) depth++;
             else if (this.is(j, ">") && --depth === 0) break;
           }
-          cls.typeParams = this.split(start, j).map((p) => p.find((t) => t.kind === "id")?.text ?? "").filter(Boolean);
+          cls.typeParams = this.split(start, j)
+            .map((p) => p.find((t) => t.kind === "id")?.text ?? "")
+            .filter(Boolean);
           j++;
         }
         // Kotlin `class A @Inject constructor(…)`.
@@ -436,8 +447,18 @@ class Reader {
         const parents = this.toks.slice(hierarchy, j);
         const splitAt = parents.findIndex((t) => ["extends", "implements", ":"].includes(t.text));
         if (splitAt >= 0) {
-          const parts = new Reader(parents.slice(splitAt + 1).map((t) => t.text === "implements" ? { ...t, kind: "p" as const, text: "," } : t));
-          cls.supers = parts.split(0, parts.toks.length).map((p) => joined(p.slice(0, p.findIndex((t) => t.text === "(") < 0 ? undefined : p.findIndex((t) => t.text === "("))));
+          const parts = new Reader(
+            parents
+              .slice(splitAt + 1)
+              .map((t) => (t.text === "implements" ? { ...t, kind: "p" as const, text: "," } : t)),
+          );
+          cls.supers = parts
+            .split(0, parts.toks.length)
+            .map((p) =>
+              joined(
+                p.slice(0, p.findIndex((t) => t.text === "(") < 0 ? undefined : p.findIndex((t) => t.text === "(")),
+              ),
+            );
         }
         if (this.is(j, "{")) {
           const close = Math.min(this.match[j]!, to);
@@ -481,7 +502,16 @@ class Reader {
           if (this.toks[j]!.kind === "p" && OPEN[this.toks[j]!.text]) j = this.match[j]!;
         }
         const end = this.toks[Math.min(j, this.toks.length) - 1]?.end ?? t.end;
-        into.methods.push({ name: t.text, annotations, params, nameStart: t.start, start: declStart, end, defaultValue });
+        into.methods.push({
+          returnType: joined(header.filter((t) => !MODIFIERS.has(t.text))),
+          name: t.text,
+          annotations,
+          params,
+          nameStart: t.start,
+          start: declStart,
+          end,
+          defaultValue,
+        });
         reset();
         i = j;
         continue;

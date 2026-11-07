@@ -1,0 +1,225 @@
+[ {
+  "stack" : "mvc",
+  "controller" : "AnyMethod",
+  "methodName" : "any",
+  "paths" : [ "/any" ],
+  "methods" : [ ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "AnyMethod",
+  "methodName" : "any",
+  "paths" : [ "/any" ],
+  "methods" : [ ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "Catalog",
+  "methodName" : "alias",
+  "paths" : [ "/api/alias" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "Catalog",
+  "methodName" : "alias",
+  "paths" : [ "/api/alias" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "Catalog",
+  "methodName" : "defaultPath",
+  "paths" : [ "/api/default" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "Catalog",
+  "methodName" : "defaultPath",
+  "paths" : [ "/api/default" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "Catalog",
+  "methodName" : "fixed",
+  "paths" : [ "/api" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "Catalog",
+  "methodName" : "fixed",
+  "paths" : [ "/api" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "Catalog",
+  "methodName" : "list",
+  "paths" : [ "/api/items", "/api/products" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ "application/json" ]
+}, {
+  "controller" : "Catalog",
+  "methodName" : "list",
+  "paths" : [ "/api/items", "/api/products" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ "application/json" ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "Catalog",
+  "methodName" : "published",
+  "paths" : [ "/api/public" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ "application/json" ]
+}, {
+  "controller" : "Catalog",
+  "methodName" : "published",
+  "paths" : [ "/api/public" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ "application/json" ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "Catalog",
+  "methodName" : "staticFixed",
+  "paths" : [ "/api/fixed" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "Catalog",
+  "methodName" : "staticFixed",
+  "paths" : [ "/api/fixed" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "Child",
+  "methodName" : "send",
+  "paths" : [ "/base/send" ],
+  "methods" : [ "POST" ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "Child",
+  "methodName" : "send",
+  "paths" : [ "/base/send" ],
+  "methods" : [ "POST" ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "ContractController",
+  "methodName" : "search",
+  "paths" : [ "/contract/search" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "ContractController",
+  "methodName" : "search",
+  "paths" : [ "/contract/search" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "CrossController",
+  "methodName" : "save",
+  "paths" : [ "/cross/save", "/cross/write", "/v2/save", "/v2/write" ],
+  "methods" : [ "POST", "PUT" ],
+  "consumes" : [ "application/json" ],
+  "produces" : [ ]
+}, {
+  "controller" : "CrossController",
+  "methodName" : "save",
+  "paths" : [ "/cross/save", "/cross/write", "/v2/save", "/v2/write" ],
+  "methods" : [ "POST", "PUT" ],
+  "consumes" : [ "application/json" ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "InheritedController",
+  "methodName" : "send",
+  "paths" : [ "/parent/send" ],
+  "methods" : [ "POST" ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "InheritedController",
+  "methodName" : "send",
+  "paths" : [ "/parent/send" ],
+  "methods" : [ "POST" ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "SingleAliasController",
+  "methodName" : "single",
+  "paths" : [ "/single" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "SingleAliasController",
+  "methodName" : "single",
+  "paths" : [ "/single" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "TransitiveController",
+  "methodName" : "transitive",
+  "paths" : [ "/transitive" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ "application/json" ]
+}, {
+  "controller" : "TransitiveController",
+  "methodName" : "transitive",
+  "paths" : [ "/transitive" ],
+  "methods" : [ "GET" ],
+  "consumes" : [ ],
+  "produces" : [ "application/json" ],
+  "stack" : "webflux"
+}, {
+  "stack" : "mvc",
+  "controller" : "Verbs",
+  "methodName" : "union",
+  "paths" : [ "/verbs/union" ],
+  "methods" : [ "GET", "POST", "PUT" ],
+  "consumes" : [ ],
+  "produces" : [ ]
+}, {
+  "controller" : "Verbs",
+  "methodName" : "union",
+  "paths" : [ "/verbs/union" ],
+  "methods" : [ "GET", "POST", "PUT" ],
+  "consumes" : [ ],
+  "produces" : [ ],
+  "stack" : "webflux"
+} ]

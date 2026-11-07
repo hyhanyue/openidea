@@ -93,4 +93,39 @@ public class MappingSamples {
     @RestController public static class AnyMethod {
         @RequestMapping("/any") public String any() { return "ok"; }
     }
+
+    @Target({ElementType.METHOD, ElementType.ANNOTATION_TYPE}) @Retention(RetentionPolicy.RUNTIME)
+    @RequestMapping(method = RequestMethod.GET)
+    public @interface SingleAlias {
+        @AliasFor("path") String[] value() default {};
+        String[] path() default {};
+    }
+    @RestController public static class SingleAliasController {
+        @SingleAlias("/single") public String single() { return "single"; }
+    }
+    @Target(ElementType.METHOD) @Retention(RetentionPolicy.RUNTIME)
+    @RequestMapping(method = RequestMethod.GET)
+    public @interface BadDefaults {
+        @AliasFor("path") String[] value() default {"/a"};
+        @AliasFor("value") String[] path() default {"/b"};
+    }
+    @RestController public static class InvalidController {
+        @BadDefaults public String invalid() { return "invalid"; }
+    }
+    @RestController public static class ConflictingController {
+        @AliasRead(value = "/a", path = "/b") public String conflict() { return "conflict"; }
+    }
+
+    @Target(ElementType.METHOD) @Retention(RetentionPolicy.RUNTIME)
+    @JsonRead
+    public @interface TransitiveRead {
+        @AliasFor(annotation = JsonRead.class, attribute = "value") String[] first() default {};
+        @AliasFor(annotation = RequestMapping.class, attribute = "path") String[] second() default {};
+    }
+    @RestController public static class TransitiveController {
+        @TransitiveRead(second = "/transitive") public String transitive() { return "transitive"; }
+    }
+    @RestController public static class TransitiveConflictController {
+        @TransitiveRead(first = "/a", second = "/b") public String conflict() { return "conflict"; }
+    }
 }

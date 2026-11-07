@@ -239,7 +239,11 @@ export async function bodyLookup(
     return null;
   };
   const typeName = (t: string) => bareType(t).replace(/<.*$/, "");
-  const origin = { path: sourcePath.replace(/\\/g, "/"), file };
+  const qualifiedBodies = endpoints.flatMap((e) => e.bodyType?.match(/(?:[a-z_$][\w$]*\.)+[A-Z][\w$]*/g) ?? []);
+  const origin = {
+    path: sourcePath.replace(/\\/g, "/"),
+    file: { ...file, imports: [...new Set([...qualifiedBodies, ...file.imports])] },
+  };
   const names = new Set(endpoints.flatMap((e) => (e.bodyType ? [typeName(e.bodyType)] : [])));
   for (const n of names) {
     const from = (await load(n, origin)) ?? origin;

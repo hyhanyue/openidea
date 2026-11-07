@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// inside these, and the UI indexes them once.
 const MAX_FILES: usize = 1024;
 const MAX_BYTES: usize = 48 << 20;
-/// A single source bigger than this is not a controller.
+/// Bound reads even when generated sources are unexpectedly large.
 const MAX_FILE_BYTES: u64 = 4 << 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
@@ -29,13 +29,17 @@ fn declares_mappings(path: &Path) -> bool {
     matches!(path.extension().and_then(|e| e.to_str()), Some("java" | "kt" | "kts"))
 }
 
-/// Files under `root` whose text names a mapping: `ignore` rules and `excludes`
+/// Candidate source files under `root`: `ignore` rules and `excludes`
 /// decide what counts, and the UI ranks the matches itself.
 pub(crate) fn sources_in(root: &Path, excludes: &[String]) -> Vec<RouteSource> {
     let found: Mutex<Vec<RouteSource>> = Mutex::new(Vec::new());
     let bytes = AtomicUsize::new(0);
+    let count = AtomicUsize::new(0);
     ide_vfs::walk_files(root, excludes, |path| {
-        if !declares_mappings(path) || bytes.load(Ordering::Relaxed) >= MAX_BYTES {
+        if !declares_mappings(path)
+            || bytes.load(Ordering::Relaxed) >= MAX_BYTES
+            || count.load(Ordering::Relaxed) >= MAX_FILES
+        {
             return;
         }
         if std::fs::metadata(path).map_or(true, |m| m.len() > MAX_FILE_BYTES) {
@@ -47,10 +51,11 @@ pub(crate) fn sources_in(root: &Path, excludes: &[String]) -> Vec<RouteSource> {
             return;
         }
         let Ok(mut found) = found.lock() else { return };
-        if found.len() >= MAX_FILES {
+        if found.len() >= MAX_FILES || bytes.load(Ordering::Relaxed) + text.len() > MAX_BYTES {
             return;
         }
         bytes.fetch_add(text.len(), Ordering::Relaxed);
+        count.fetch_add(1, Ordering::Relaxed);
         found.push(RouteSource { path: path.to_path_buf().into(), text });
     });
     let mut files = found.into_inner().unwrap_or_default();
@@ -72,8 +77,18 @@ pub fn spring_route_sources(host: &Host, window: &str) -> IdeResult<Vec<RouteSou
     let project = host.project(window)?;
     let excludes = project.search_excludes();
     let mut out = Vec::new();
+    let mut bytes = 0;
     for root in scan_roots(&project.root, project.content_roots()) {
-        out.extend(sources_in(&root, &excludes));
+        if out.len() >= MAX_FILES || bytes >= MAX_BYTES {
+            break;
+        }
+        for source in sources_in(&root, &excludes) {
+            if out.len() >= MAX_FILES || bytes + source.text.len() > MAX_BYTES {
+                break;
+            }
+            bytes += source.text.len();
+            out.push(source);
+        }
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out.dedup_by(|a, b| a.path == b.path);

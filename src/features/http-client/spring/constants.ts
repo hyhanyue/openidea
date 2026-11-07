@@ -1,4 +1,4 @@
-import { allClasses, type Expr, type SourceFile } from "./source";
+import { type ClassDecl, type Expr, type SourceFile } from "./source";
 
 const MEDIA_TYPES: Record<string, string> = {
   ALL: "*/*",
@@ -27,16 +27,75 @@ const MEDIA_TYPES: Record<string, string> = {
   TEXT_XML: "text/xml",
 };
 
+interface ConstantEntry {
+  expression: Expr;
+  scope: string;
+}
+const indexes = new WeakMap<
+  SourceFile,
+  { fields: Map<string, ConstantEntry>; scopes: WeakMap<ClassDecl, string>; kotlin: boolean }
+>();
+
 /** Evaluates string-valued annotation arguments within one file. */
 export class Constants {
-  private readonly fields = new Map<string, Expr>();
-  constructor(file: SourceFile) {
-    for (const f of [...file.fields, ...allClasses(file).flatMap((c) => c.fields)])
-      if (f.init && !this.fields.has(f.name)) this.fields.set(f.name, f.init);
+  private readonly fields = new Map<string, ConstantEntry>();
+  private readonly scope: string;
+  private readonly kotlin: boolean;
+  constructor(file: SourceFile, owner?: ClassDecl) {
+    const prior = indexes.get(file);
+    if (prior) {
+      this.fields = prior.fields;
+      this.scope = owner ? (prior.scopes.get(owner) ?? "") : "";
+      this.kotlin = prior.kotlin;
+      return;
+    }
+    const scopes = new WeakMap<ClassDecl, string>();
+    this.kotlin =
+      file.fields.some((f) => f.isConstant) || file.classes.some((c) => c.classes.some((n) => n.name === "Companion"));
+    const add = (fields: SourceFile["fields"], scope: string) => {
+      for (const f of fields)
+        if (f.init && f.isConstant) {
+          const key = [scope, f.name].filter(Boolean).join(".");
+          this.fields.set(key, { expression: f.init, scope });
+        }
+    };
+    const walk = (classes: ClassDecl[], scope: string) => {
+      for (const c of classes) {
+        const name = [scope, c.name === "Companion" ? "" : c.name].filter(Boolean).join(".");
+        scopes.set(c, name);
+        add(c.fields, name);
+        walk(c.classes, name);
+      }
+    };
+    add(file.fields, "");
+    walk(file.classes, "");
+    this.scope = owner ? (scopes.get(owner) ?? "") : "";
+    // Fully-qualified same-file constants and explicit static imports resolve exactly.
+    for (const [key, entry] of [...this.fields])
+      if (file.packageName) this.fields.set(`${file.packageName}.${key}`, entry);
+    for (const imported of file.imports) {
+      const entry = this.fields.get(imported);
+      if (entry) this.fields.set(imported.slice(imported.lastIndexOf(".") + 1), entry);
+    }
+    indexes.set(file, { fields: this.fields, scopes, kotlin: this.kotlin });
+  }
+
+  private field(name: string, scope: string) {
+    for (;;) {
+      const field = this.fields.get([scope, name].filter(Boolean).join("."));
+      if (field) return field;
+      if (!scope) return undefined;
+      scope = scope.includes(".") ? scope.slice(0, scope.lastIndexOf(".")) : "";
+    }
   }
 
   /** Every element of an array (`{a, b}`, `[a, b]`, `arrayOf(a, b)`) or the single value; unresolvable ones dropped. */
   strings(expr: Expr | undefined, enums = false): string[] {
+    return this.resolvedStrings(expr, enums) ?? [];
+  }
+
+  /** null means at least one element is unknown; an empty array is resolved. */
+  resolvedStrings(expr: Expr | undefined, enums = false): string[] | null {
     if (!expr?.length) return [];
     const first = expr[0]!;
     let inner: Expr | null = null;
@@ -44,51 +103,53 @@ export class Constants {
     else if (first.kind === "id" && /^(arrayOf|listOf|setOf)$/.test(first.text) && expr[1]?.text === "(")
       inner = expr.slice(2, -1);
     if (!inner) {
-      const v = this.value(expr, enums, new Set());
-      return v === null ? [] : [v];
+      const v = this.value(expr, enums, new Set(), this.scope);
+      return v === null ? null : [v];
     }
-    return splitTop(inner)
-      .map((e) => this.value(e, enums, new Set()))
-      .filter((v): v is string => v !== null);
+    const values = splitTop(inner).map((e) => this.value(e, enums, new Set(), this.scope));
+    return values.some((v) => v === null) ? null : (values as string[]);
   }
 
   string(expr: Expr | undefined, enums = false): string | null {
     return this.strings(expr, enums)[0] ?? null;
   }
 
-  private value(expr: Expr, enums: boolean, seen: Set<string>): string | null {
+  private value(expr: Expr, enums: boolean, seen: Set<string>, scope: string): string | null {
     let out = "";
     for (const part of splitPlus(expr)) {
-      const v = this.part(part, enums, seen);
+      const v = this.part(part, enums, seen, scope);
       if (v === null) return null;
       out += v;
     }
     return out;
   }
 
-  private part(part: Expr, enums: boolean, seen: Set<string>): string | null {
+  private part(part: Expr, enums: boolean, seen: Set<string>, scope: string): string | null {
     // Kotlin templates of constants; other `${…}` are property placeholders, kept.
     if (part.length === 1 && part[0]!.kind === "str")
-      return (part[0]!.value ?? "").replace(
-        /\$\{(\w+)\}|\$([A-Za-z_]\w*)/g,
-        (m, a: string | undefined, b: string | undefined) => {
-          const name = (a ?? b)!;
-          const init = seen.has(name) ? undefined : this.fields.get(name);
-          return init ? (this.value(init, false, new Set([...seen, name])) ?? m) : m;
-        },
-      );
+      return !this.kotlin
+        ? (part[0]!.value ?? "")
+        : (part[0]!.value ?? "").replace(
+            /\$\{(\w+)\}|\$([A-Za-z_]\w*)/g,
+            (m, a: string | undefined, b: string | undefined) => {
+              const name = (a ?? b)!;
+              const init = seen.has(name) ? undefined : this.field(name, scope);
+              return init ? (this.value(init.expression, false, new Set([...seen, name]), init.scope) ?? m) : m;
+            },
+          );
     if (part.length === 1 && part[0]!.kind === "num") return part[0]!.text;
-    if (part[0]?.text === "(" && part[part.length - 1]?.text === ")") return this.value(part.slice(1, -1), enums, seen);
+    if (part[0]?.text === "(" && part[part.length - 1]?.text === ")")
+      return this.value(part.slice(1, -1), enums, seen, scope);
     // `NAME`, `Paths.NAME`, `MediaType.APPLICATION_JSON_VALUE`, `RequestMethod.GET`.
     if (!part.every((t, i) => (i % 2 ? t.kind === "p" && t.text === "." : t.kind === "id"))) return null;
     const names = part.filter((t) => t.kind === "id").map((t) => t.text);
     const last = names[names.length - 1]!;
     const qualifier = names[names.length - 2];
     if (qualifier === "MediaType") return MEDIA_TYPES[last.replace(/_VALUE$/, "")] ?? null;
-    const init = this.fields.get(last);
+    const init = this.field(names.join("."), scope);
     if (init && !seen.has(last)) {
       seen.add(last);
-      return this.value(init, enums, seen);
+      return this.value(init.expression, enums, seen, init.scope);
     }
     return enums ? last : null;
   }
@@ -125,4 +186,3 @@ function splitPlus(expr: Expr): Expr[] {
   parts.push(cur);
   return parts;
 }
-

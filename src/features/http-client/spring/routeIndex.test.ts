@@ -2,7 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { commands, emitLocalIdeEvent } from "@/platform/ipc";
 import { ipcPath } from "@/platform/paths";
 import { searchEndpoints } from "@/workbench/contributions";
-import { clearRouteIndex, isRouteSource, registerSpringEndpointProvider, routeIndex } from "./routeIndex";
+import {
+  clearRouteIndex,
+  controllersForSource,
+  isRouteSource,
+  knownControllers,
+  registerSpringEndpointProvider,
+  routeIndex,
+  updateRouteSource,
+} from "./routeIndex";
 
 const scanSources = vi.spyOn(commands, "springRouteSources");
 
@@ -91,5 +99,98 @@ describe("the Spring endpoint provider", () => {
     expect(scanSources).toHaveBeenCalledTimes(2);
     dispose();
     expect(await searchEndpoints("/p")).toEqual([]);
+  });
+});
+
+describe("shared model revisions and cancellation", () => {
+  const contract = (url: string) => ({
+    path: "/p/Api.java",
+    text: `interface Api { @RequestMapping(path={"${url}","/second"},method={RequestMethod.POST,RequestMethod.PUT}) String get(); }`,
+  });
+  const child = { path: "/p/C.java", text: "@RestController class C implements Api { public String get(){} }" };
+  it("shares concurrent scans and retries failures", async () => {
+    scanSources.mockRejectedValueOnce(new Error("temporary"));
+    await expect(routeIndex("/p")).rejects.toThrow("temporary");
+    scanSources.mockResolvedValue({ status: "ok", data: [source()] });
+    const [a, b] = await Promise.all([routeIndex("/p"), routeIndex("/p")]);
+    expect(a).toBe(b);
+    expect(scanSources).toHaveBeenCalledTimes(2);
+  });
+  it("does not install or return an obsolete result after filesystem changes or disposal", async () => {
+    dispose = registerSpringEndpointProvider();
+    let finish!: (value: { status: "ok"; data: ReturnType<typeof source>[] }) => void;
+    scanSources.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const old = routeIndex("/p");
+    emitLocalIdeEvent({ type: "fsChanged", created: [], modified: [ipcPath("/p/Api.java")], removed: [] });
+    scanSources.mockResolvedValue({ status: "ok", data: [source("newMethod", "/new")] });
+    expect((await routeIndex("/p"))[0]?.methodName).toBe("newMethod");
+    finish({ status: "ok", data: [source("oldMethod")] });
+    expect(await old).toEqual([]);
+    expect((await routeIndex("/p"))[0]?.methodName).toBe("newMethod");
+    clearRouteIndex();
+    scanSources.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = routeIndex("/p");
+    dispose();
+    finish({ status: "ok", data: [source()] });
+    expect(await pending).toEqual([]);
+  });
+  it("indexes every method/path and keeps unsaved dependencies consistent across consumers", async () => {
+    dispose = registerSpringEndpointProvider();
+    scanSources.mockResolvedValue({ status: "ok", data: [contract("/old"), child] });
+    expect((await routeIndex("/p")).map((r) => [r.method, r.url])).toEqual([
+      ["POST", "/old"],
+      ["POST", "/second"],
+      ["PUT", "/old"],
+      ["PUT", "/second"],
+    ]);
+    updateRouteSource("/p/Api.java", contract("/unsaved").text);
+    expect((await routeIndex("/p"))[0]?.url).toBe("/unsaved");
+    expect(knownControllers("/p", child.path, child.text)[0]?.endpoints[0]?.paths).toEqual(["/unsaved", "/second"]);
+    expect((await controllersForSource("/p", child.path, child.text))[0]?.endpoints[0]?.paths).toEqual([
+      "/unsaved",
+      "/second",
+    ]);
+    expect(scanSources).toHaveBeenCalledTimes(1);
+    scanSources.mockResolvedValue({ status: "ok", data: [contract("/diskChanged"), child] });
+    emitLocalIdeEvent({ type: "fsChanged", created: [], modified: [ipcPath("/p/Api.java")], removed: [] });
+    expect((await routeIndex("/p"))[0]?.url).toBe("/unsaved");
+    expect(scanSources).toHaveBeenCalledTimes(2);
+  });
+  it("navigates inherited methods to UTF16 definition columns", async () => {
+    const base = {
+      path: "/p/Base.java",
+      text: '@RequestMapping("/base") abstract class Base { /* 😀 */ @GetMapping("/x") public String get(){} }',
+    };
+    scanSources.mockResolvedValue({
+      status: "ok",
+      data: [base, { path: "/p/C.java", text: "@RestController class C extends Base {}" }],
+    });
+    expect(await routeIndex("/p")).toMatchObject([
+      { path: base.path, line: 0, col: base.text.indexOf("get()"), url: "/base/x" },
+    ]);
+  });
+
+  it("drops an oversized unsaved source instead of returning its old route", async () => {
+    dispose = registerSpringEndpointProvider();
+    scanSources.mockResolvedValue({ status: "ok", data: [source()] });
+    expect(await routeIndex("/p")).toHaveLength(1);
+    const oversized = source().text + " ".repeat(2 * 1024 * 1024);
+    updateRouteSource(source().path, oversized);
+    expect(await routeIndex("/p")).toEqual([]);
+    expect(knownControllers("/p", source().path, oversized)).toEqual([]);
+    expect(await controllersForSource("/p", source().path, oversized)).toEqual([]);
+    updateRouteSource(source().path, source("edited", "/edited").text);
+    expect((await routeIndex("/p"))[0]?.methodName).toBe("edited");
+    expect(scanSources).toHaveBeenCalledTimes(1);
   });
 });
