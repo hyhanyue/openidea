@@ -11,6 +11,8 @@ use openidea_plugin::{Error, Invocation, Location, Plugin, Position, Project, Ra
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+mod sql;
+
 /// How long the namespace → XML file index is trusted.
 const INDEX_TTL: Duration = Duration::from_secs(30);
 const MAX_XML: u32 = 5000;
@@ -185,6 +187,7 @@ fn project_of(path: &str) -> Option<Project> {
 pub struct Navigator {
     /// project root → (namespace → XML path), with when it was built.
     xml_index: BTreeMap<String, (Instant, BTreeMap<String, String>)>,
+    sql: sql::SchemaCache,
 }
 
 impl Navigator {
@@ -297,6 +300,12 @@ impl Providers for Navigator {
             return Vec::new();
         }
         let Some(cursor) = offset(&doc.text, at) else { return Vec::new() };
+        if let Some(context) = sql::Context::at(&doc.text, cursor)
+            && !context.in_parameter()
+        {
+            let project = sql::project_for(&doc.path);
+            return sql::complete(context, &doc.text, self.sql.schema(project.as_ref()));
+        }
         let before = &doc.text[..cursor];
         let xml = parse_xml(&doc.text);
         let Some(ns) = xml.namespace.clone() else { return Vec::new() };
