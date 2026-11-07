@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="dev.openidea.refactor.UserMapper">
+  <!-- <select id="find">This is a comment</select> -->
+  <select id="find" resultType="java.lang.Integer">SELECT #{id} + 6 AS find</select>
+  <resultMap id="holder" type="dev.openidea.refactor.Holder">
+    <association property="value" column="id" javaType="java.lang.Integer" select="find"/>
+  </resultMap>
+  <select id="nested" resultMap="holder">SELECT 1 AS id</select>
+  <sql id="find">unchanged SQL fragment</sql>
+</mapper>

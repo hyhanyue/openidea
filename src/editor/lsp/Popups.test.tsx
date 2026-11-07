@@ -2,6 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { Location } from "@/bindings";
 
+const readPreview = vi.hoisted(() => vi.fn(async () => ({ status: "ok", data: "one\ntwo\n😀abc:: port" })));
+vi.mock("@/platform/ipc", async (orig) => {
+  const actual = await orig<typeof import("@/platform/ipc")>();
+  return { ...actual, isTauri: () => true, commands: { ...actual.commands, fsReadText: readPreview } };
+});
+
 const openFile = vi.fn(async () => undefined);
 const show = vi.fn();
 vi.mock("@/workbench/contributions", async (orig) => {
@@ -27,6 +33,38 @@ const loc = (path: string, line: number): Location => ({
 afterEach(() => {
   act(() => closePopup());
   vi.clearAllMocks();
+});
+
+it("shows exact replacement coordinates and cancels a framework preview without applying", async () => {
+  const apply = vi.fn();
+  openPopup({
+    kind: "preview",
+    title: "Rename bean",
+    summary: {
+      files: 1,
+      occurrences: 1,
+      hasFileOperations: false,
+      entries: [
+        {
+          path: "/p/Use.java",
+          edits: 1,
+          changes: [{ range: { start: { line: 2, col: 8 }, end: { line: 2, col: 12 } }, new_text: "channel" }],
+        },
+      ],
+    },
+    confirmLabel: "Do Refactor",
+    onConfirm: apply,
+    warnings: ["Source scope only"],
+  });
+  render(<LspPopups />);
+  fireEvent.click(screen.getByText("Review replacements"));
+  expect(await screen.findByText("3:9–3:13")).toBeTruthy();
+  expect(screen.getByText("channel")).toBeTruthy();
+  expect(await screen.findByText("port", { selector: "del" })).toBeTruthy();
+  expect(readPreview).toHaveBeenCalledWith("/p/Use.java");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(apply).not.toHaveBeenCalled();
+  expect(useLspPopup.getState().popup).toBeNull();
 });
 
 describe("list popup", () => {

@@ -1,5 +1,10 @@
 /** React popups for LSP editor features, rendered as a workbench overlay. */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Text } from "@codemirror/state";
+import type { TextEdit } from "@/bindings";
+import { commands } from "@/platform/ipc";
+import { lspRequest } from "./lsp";
+import { rangeToOffsets } from "./positions";
 import clsx from "clsx";
 import {
   Checkbox,
@@ -527,6 +532,47 @@ function DefinitionPopup({ popup }: { popup: Extract<LspPopup, { kind: "definiti
   );
 }
 
+function ReplacementDetails({ path, changes }: { path: string; changes: TextEdit[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const [source, setSource] = useState<string | null>(null);
+  useEffect(() => {
+    if (!expanded) return;
+    let active = true;
+    // fsReadText prefers dirty buffers. Reading disk alone would show the wrong
+    // before-text for unsaved references. Apply still validates the preview guard.
+    void lspRequest(() => commands.fsReadText(path))
+      .then((text) => {
+        if (active) setSource(text);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [expanded, path]);
+  const doc = useMemo(() => (source === null ? null : Text.of(source.split("\n"))), [source]);
+  return (
+    <details className={styles.previewEdits} onToggle={(e) => setExpanded(e.currentTarget.open)}>
+      <summary>{tx("Review replacements")}</summary>
+      {expanded &&
+        changes.map((change, i) => {
+          const span = doc && rangeToOffsets(doc, change.range);
+          const before = span && doc?.sliceString(span.from, span.to);
+          return (
+            <div key={i} className={styles.previewReplacement}>
+              <span>
+                {change.range.start.line + 1}:{change.range.start.col + 1}–{change.range.end.line + 1}:
+                {change.range.end.col + 1}
+              </span>
+              <code>
+                {before && <del>{before}</del>} → <ins>{change.new_text || tx("Delete selected text")}</ins>
+              </code>
+            </div>
+          );
+        })}
+    </details>
+  );
+}
+
 function PreviewDialog({ popup }: { popup: Extract<LspPopup, { kind: "preview" }> }) {
   const root = useProject((s) => s.project?.root ?? "");
   const { summary } = popup;
@@ -578,18 +624,21 @@ function PreviewDialog({ popup }: { popup: Extract<LspPopup, { kind: "preview" }
       ) : (
         <ul className={styles.previewList} aria-label={tx("Changes")}>
           {summary.entries.map((e) => (
-            <li key={e.path} className={styles.previewRow}>
-              <Icon name={fileIconName(basename(e.path), e.path)} size={14} className={styles.itemIcon} />
-              <span className={styles.previewName}>{basename(e.path)}</span>
-              <span className={styles.previewPath}>{relativePath(root, e.path)}</span>
-              <span className={styles.spacer} />
-              {e.operation === "rename" && e.to && <span className={styles.previewOp}>→ {basename(e.to)}</span>}
-              {e.operation && e.operation !== "rename" && <span className={styles.previewOp}>{e.operation}</span>}
-              {e.edits > 0 && (
-                <span className={styles.previewCount}>
-                  {e.edits} {e.edits === 1 ? "occurrence" : "occurrences"}
-                </span>
-              )}
+            <li key={e.path}>
+              <div className={styles.previewRow}>
+                <Icon name={fileIconName(basename(e.path), e.path)} size={14} className={styles.itemIcon} />
+                <span className={styles.previewName}>{basename(e.path)}</span>
+                <span className={styles.previewPath}>{relativePath(root, e.path)}</span>
+                <span className={styles.spacer} />
+                {e.operation === "rename" && e.to && <span className={styles.previewOp}>→ {basename(e.to)}</span>}
+                {e.operation && e.operation !== "rename" && <span className={styles.previewOp}>{e.operation}</span>}
+                {e.edits > 0 && (
+                  <span className={styles.previewCount}>
+                    {e.edits} {e.edits === 1 ? "occurrence" : "occurrences"}
+                  </span>
+                )}
+              </div>
+              {!!e.changes?.length && <ReplacementDetails path={e.path} changes={e.changes} />}
             </li>
           ))}
         </ul>

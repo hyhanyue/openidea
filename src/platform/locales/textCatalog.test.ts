@@ -557,6 +557,7 @@ it("reads backend messages after quote character literals", () => {
 function scanBackend(literals: Set<string>) {
   const files = [
     ...walk(`${ROOT}crates`, (p) => p.endsWith(".rs")),
+    ...walk(`${ROOT}plugins/support/spring-refactor/src`, (p) => p.endsWith(".rs")),
     ...walk(`${ROOT}src-tauri/src`, (p) => p.endsWith(".rs")),
     ...walk(`${ROOT}languages`, (p) => p.endsWith(".toml")),
   ];

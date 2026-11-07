@@ -28,7 +28,7 @@ import { structure } from "@/editor/structure";
 import { docOf, incompleteNote, isUnavailable, lspRequest, reportLspError } from "./lsp";
 import { comparePos, offsetToPos, rangeToOffsets } from "./positions";
 import { showHint } from "./hint";
-import { caretAnchor, openPopup, type PreviewOccurrence } from "./popupStore";
+import { caretAnchor, closePopup, openPopup, useLspPopup, type LspPopup, type PreviewOccurrence } from "./popupStore";
 import { needsPreview, summarizeWorkspaceEdit } from "./workspaceEdit";
 import { endInplaceRename, inplaceSession, startInplaceRename, type Span } from "./inplaceRename";
 import { shortcutLabel } from "@/platform/keymap";
@@ -226,22 +226,52 @@ async function commitInplace(view: EditorView, doc: EditorDocContext, pos: Pos, 
 /** The rename waiting for the server's edit: a newer one replaces it. */
 let renameRequest: RequestId | null = null;
 
+function frameworkRenameNote(path: string, edit: WorkspaceEdit): string | null {
+  if (!/\.(java|xml|ya?ml|properties)$/i.test(path)) return null;
+  if (!edit.preconditions?.some((p) => /\/src\/(main|test)\/(java|resources)$/.test(p.path))) return null;
+  return tx(
+    "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, relaxed-binding spellings and string-based MyBatis calls are not resolved.",
+  );
+}
+
 async function finishRename(view: EditorView, doc: EditorDocContext, pos: Pos, oldName: string, newName: string) {
   if (!newName || newName === oldName) return;
   if (renameRequest !== null) void commands.cancelRequest(renameRequest).catch(() => {});
   const request = nextRequestId();
   renameRequest = request;
+  let cancelled = false;
+  let settled = false;
+  const pending: LspPopup = {
+    kind: "list",
+    anchor: caretAnchor(view, view.state.selection.main.head),
+    title: tx("Computing rename"),
+    items: [{ id: "cancel", label: tx("Cancel"), run: closePopup }],
+    onClose: () => {
+      if (settled) return;
+      cancelled = true;
+      void commands.cancelRequest(request).catch(() => {});
+    },
+  };
+  openPopup(pending);
   let renamed;
   try {
+    await whenAllSynced();
+    if (cancelled) return;
     renamed = await lspRequest(() => commands.lspRename(request, doc.doc, pos, newName));
   } catch (e) {
-    reportLspError(view, e, true);
+    if (!cancelled) reportLspError(view, e, true);
     return;
   } finally {
+    settled = true;
+    if (useLspPopup.getState().popup === pending) closePopup();
     if (renameRequest === request) renameRequest = null;
   }
+  // Closing/replacing the pending popup cancels even when a server races its
+  // response with cancellation. A late result must never reopen a preview.
+  if (cancelled) return;
   const { edit, incomplete } = renamed;
   const note = incomplete && incompleteNote(incomplete, oldName);
+  const scopeNote = frameworkRenameNote(doc.path, edit);
   const summary = summarizeWorkspaceEdit(edit);
   if (!summary.files) {
     if (await hasSyntaxErrors(doc.doc)) {
@@ -256,7 +286,7 @@ async function finishRename(view: EditorView, doc: EditorDocContext, pos: Pos, o
     return;
   }
   // An edit that may leave usages behind is never applied unseen.
-  if (!note && !needsPreview(summary)) {
+  if (!note && !scopeNote && !needsPreview(summary)) {
     await applyEdit(view, edit);
     return;
   }
@@ -264,7 +294,7 @@ async function finishRename(view: EditorView, doc: EditorDocContext, pos: Pos, o
     kind: "preview",
     title: tx`Rename '${oldName}' to '${newName}'`,
     summary,
-    ...(note ? { warnings: [note] } : {}),
+    warnings: [note, scopeNote].filter((s): s is string => !!s),
     confirmLabel: note ? "Rename Anyway" : "Do Refactor",
     onConfirm: () => void applyEdit(view, edit),
   });

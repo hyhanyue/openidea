@@ -12,6 +12,8 @@ export interface WorkspaceEditFileSummary {
   operation?: "create" | "rename" | "delete";
   /** Rename target, for `operation: "rename"`. */
   to?: string;
+  /** Exact UTF-16 ranges and replacements, retained for review before apply. */
+  changes?: TextEdit[];
 }
 
 export interface WorkspaceEditSummary {
@@ -36,7 +38,9 @@ export function summarizeWorkspaceEdit(edit: WorkspaceEdit): WorkspaceEditSummar
   for (const f of edit.files) {
     switch (f.kind) {
       case "edit": {
-        entry(f.path).edits += f.edits.length;
+        const e = entry(f.path);
+        e.edits += f.edits.length;
+        (e.changes ??= []).push(...f.edits);
         occurrences += f.edits.length;
         break;
       }

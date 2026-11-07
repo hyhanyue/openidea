@@ -342,6 +342,25 @@
 .previewName {
   color: var(--fg-emphasis);
 }
+.previewEdits {
+  margin: 0 14px 8px 36px;
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+}
+.previewEdits summary {
+  cursor: pointer;
+}
+.previewReplacement {
+  display: flex;
+  gap: 12px;
+  padding: 4px 0;
+  font-family: var(--font-mono);
+}
+.previewReplacement code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg-editor);
+}
 .previewPath {
   min-width: 0;
   overflow: hidden;

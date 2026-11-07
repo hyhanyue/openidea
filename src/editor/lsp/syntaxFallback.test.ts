@@ -463,6 +463,49 @@ describe("rename wiring", () => {
   });
 
   describe("Typo: Rename to (issue #42)", () => {
+    it("discards a late rename response after the pending popup is cancelled", async () => {
+      cmd.lspPrepareRename.mockReturnValueOnce(ok(r(0, 0, 3)));
+      let complete!: (value: unknown) => void;
+      cmd.lspRename.mockReturnValueOnce(
+        new Promise((resolve) => {
+          complete = resolve;
+        }) as never,
+      );
+      const view = editor("old", "java", 0, "/p/src/main/java/A.java");
+      const pending = renameNamePart(view, { from: 0, to: 3 }, "new");
+      await vi.waitFor(() => expect(cmd.lspRename).toHaveBeenCalledOnce());
+      const request = (cmd.lspRename.mock.calls[0] as unknown[])[0];
+      closePopup();
+      complete(
+        await ok({
+          edit: { files: [{ kind: "edit", path: "/p/A.java", edits: [{ range: r(0, 0, 3), new_text: "new" }] }] },
+          incomplete: null,
+        }),
+      );
+      await pending;
+      expect(cmd.cancelRequest).toHaveBeenCalledWith(request);
+      expect(cmd.applyWorkspaceEdit).not.toHaveBeenCalled();
+      expect(useLspPopup.getState().popup).toBeNull();
+    });
+
+    it("always previews a framework edit with its source-scope warning, even in one file", async () => {
+      cmd.lspPrepareRename.mockReturnValueOnce(ok(r(0, 0, 3)));
+      const edit = {
+        files: [{ kind: "edit", path: "/p/src/main/java/A.java", edits: [{ range: r(0, 0, 3), new_text: "new" }] }],
+        preconditions: [{ path: "/p/src/main/java", hash: "scope" }],
+      };
+      cmd.lspRename.mockReturnValueOnce(ok({ edit, incomplete: null }));
+      const view = editor("old", "java", 0, "/p/src/main/java/A.java");
+      await renameNamePart(view, { from: 0, to: 3 }, "new");
+      const popup = useLspPopup.getState().popup;
+      expect(popup?.kind).toBe("preview");
+      if (popup?.kind !== "preview") throw new Error("missing source preview");
+      expect(popup.warnings?.[0]).toContain("Only listed edits are included");
+      expect(popup.summary.entries[0]?.changes?.[0]).toEqual(edit.files[0]!.edits[0]);
+      closePopup();
+      expect(cmd.applyWorkspaceEdit).not.toHaveBeenCalled();
+    });
+
     it("renames the whole name through the server, references included", async () => {
       cmd.lspPrepareRename.mockReturnValueOnce(ok(r(0, 0, 12)));
       const edits = [r(0, 0, 12), r(1, 6, 18)].map((range) => ({ range, new_text: "message_count" }));

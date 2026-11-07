@@ -1,0 +1,18 @@
+[package]
+name = "spring-refactor-host-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+spring-refactor = { path = ".." }
+openidea-plugin = { path = "../../../../sdk/rust/openidea-plugin" }
+ide-core = { path = "../../../../crates/ide-core" }
+ide-workspace = { path = "../../../../crates/ide-workspace" }
+ignore = "0.4"
+tempfile = "3"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros"] }
+

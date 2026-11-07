@@ -29,6 +29,8 @@ pub mod run;
 pub mod sdk;
 pub mod search;
 pub mod spell;
+mod spring_refactor;
+mod spring_rename;
 pub mod syntax;
 pub mod term;
 pub mod tools;

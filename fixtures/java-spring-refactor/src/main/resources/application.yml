@@ -1,0 +1,5 @@
+sample:
+  label: ready
+service:
+  timeout: 11
+# sample service.timeout port find

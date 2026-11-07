@@ -622,7 +622,24 @@ async fn is_client_follow_up(
 }
 
 pub async fn lsp_prepare_rename(host: &Host, window: &str, doc: DocId, pos: Pos) -> IdeResult<Option<Range>> {
-    host.project(window)?.lsp.prepare_rename(doc, pos).await
+    let project = host.project(window)?;
+    let worker = project.clone();
+    let semantic = blocking(move || {
+        let path = ide_core::ipc_path::to_ipc(&worker.documents.snapshot(doc)?.path);
+        let scope = super::spring_refactor::Snapshot::load(&worker, doc, &ide_core::CancellationToken::new())?;
+        if let Some(scope) = scope
+            && scope.recognized(&path, pos)
+        {
+            let target = scope.target(&path, pos).ok_or_else(|| scope.refusal(&path, pos))?;
+            return Ok(Some(super::spring_refactor::range(target.range)));
+        }
+        Ok(None)
+    })
+    .await?;
+    if semantic.is_some() {
+        return Ok(semantic);
+    }
+    project.lsp.prepare_rename(doc, pos).await
 }
 
 /// Computes the rename edit without applying it, so the UI can preview conflicts.
@@ -685,23 +702,10 @@ pub async fn lsp_rename(
     new_name: String,
 ) -> IdeResult<Renamed> {
     let project = host.project(window)?;
-    let documents = project.documents.clone();
-    let version = blocking(move || documents.version(doc)).await?;
     let cancel = host.begin_request(request);
-    let result = project.lsp.rename(doc, pos, new_name, cancel).await;
+    let result = super::spring_rename::rename(project, doc, pos, new_name, cancel).await;
     host.end_request(request);
-    let mut renamed = result?;
-    blocking(move || {
-        if project.documents.version(doc)? != version {
-            return Err(ide_core::IdeError::new(
-                ide_core::error::ErrorKind::OutOfSync,
-                "document changed while computing rename; request it again",
-            ));
-        }
-        project.documents.prepare_workspace_edit(&mut renamed.edit)?;
-        Ok(renamed)
-    })
-    .await
+    result
 }
 
 pub async fn lsp_format(
