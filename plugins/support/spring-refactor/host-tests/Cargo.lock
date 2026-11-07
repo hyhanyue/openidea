@@ -1181,7 +1181,7 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
 name = "ide-core"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "dunce",
  "encoding_rs",
@@ -1197,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "ide-text"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "ide-core",
  "ropey",
@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "ide-vfs"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "chardetng",
  "dunce",
@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "ide-workspace"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "blake3",
  "dunce",
