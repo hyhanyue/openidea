@@ -47,3 +47,5 @@ pycharm-screenshots/
 # Generated fork release resources
 /src-tauri/resources/fork-defaults/*
 !/src-tauri/resources/fork-defaults/README.txt
+# Python build-script caches
+__pycache__/

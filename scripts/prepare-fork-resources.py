@@ -4,7 +4,9 @@ import argparse
 import hashlib
 import json
 import pathlib
+import re
 import shutil
+import subprocess
 import tempfile
 import urllib.request
 import zipfile
@@ -15,7 +17,25 @@ SHA256 = "8e555da123e5b4edb7449d3ef1f922a922503e64a86cd66cbe713638f94a9e50"
 URL = "https://open-vsx.org/api/VMware/vscode-spring-boot/2.3.0/file/VMware.vscode-spring-boot-2.3.0.vsix"
 
 
+def plugin_api():
+    wit = re.search(r"^package openidea:plugin@(\d+\.\d+)\.\d+;", (ROOT / "wit/plugin.wit").read_text(), re.MULTILINE)
+    sdk = re.search(r'pub const API_VERSION: &str = "(\d+\.\d+)";', (ROOT / "sdk/rust/openidea-plugin/src/lib.rs").read_text())
+    if not wit or not sdk or wit.group(1) != sdk.group(1):
+        raise ValueError("The WIT and SDK plugin API versions must agree before packaging")
+    return wit.group(1)
+
+
+def verify_component(source):
+    expected = subprocess.check_output([str(ROOT / "plugins/build.sh"), "--fingerprint", str(source)], cwd=ROOT, text=True).strip()
+    recorded = source / "dist/plugin.wasm.sources"
+    if not (source / "dist/plugin.wasm").is_file() or not recorded.is_file() or recorded.read_text().strip() != expected:
+        raise ValueError(f"Stale default plugin {source.name}; rebuild it with plugins/build.sh official/{source.name}")
+
+
 def prepare(vsix=None):
+    api = plugin_api()
+    for name in ["mybatis", "spring-beans"]:
+        verify_component(ROOT / "plugins/official" / name)
     destination = ROOT / "src-tauri/resources/fork-defaults"
     destination.mkdir(parents=True, exist_ok=True)
     spring = destination / "spring-tools/extension"
@@ -59,9 +79,9 @@ def prepare(vsix=None):
         lines = path.read_text().splitlines()
         lines = [f'id = "{plugin_id}"' if line.startswith("id = ") and i == 0 else
                  f'version = "{package_version}"' if line.startswith("version = ") else
-                 'engines.openidea = "^1.3"' if line.startswith("engines.openidea = ") else line for i, line in enumerate(lines)]
+                 f'engines.openidea = "^{api}"' if line.startswith("engines.openidea = ") else line for i, line in enumerate(lines)]
         path.write_text("\n".join(lines) + "\n")
-        packages[name] = {"id": plugin_id, "version": package_version}
+        packages[name] = {"id": plugin_id, "version": package_version, "api": api}
     launcher = destination / "bin/launch.py"
     launcher.parent.mkdir(exist_ok=True)
     shutil.copy2(ROOT / "scripts/java-services/launch.py", launcher)

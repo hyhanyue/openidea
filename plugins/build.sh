@@ -7,6 +7,7 @@
 #   plugins/build.sh official/csv-editor  # one plugin (a path under plugins/, or any path)
 #   plugins/build.sh --check [...]   # change nothing tracked; fail if a checked-in
 #                                    # component is stale or a plugin doesn't build (CI)
+#   plugins/build.sh --fingerprint <plugin>  # source hash only; no Rust build or downloads
 #
 # Output: <plugin>/dist/plugin.wasm (referenced by `wasm = ...` in plugin.toml)
 # and <plugin>/dist/plugin.wasm.sources, a fingerprint of the sources it was
@@ -21,12 +22,18 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
-rustup target list --installed | grep -qx wasm32-wasip2 || rustup target add wasm32-wasip2
-
 check=0
+fingerprint_only=0
 if [ "${1:-}" = "--check" ]; then
   check=1
   shift
+elif [ "${1:-}" = "--fingerprint" ]; then
+  fingerprint_only=1
+  shift
+fi
+
+if [ "$fingerprint_only" = 0 ]; then
+  rustup target list --installed | grep -qx wasm32-wasip2 || rustup target add wasm32-wasip2
 fi
 
 sha256() { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; }
@@ -91,6 +98,7 @@ build_web() {
 failed=0
 build() {
   local dir="$1"
+  if [ "$fingerprint_only" = 1 ]; then fingerprint "$dir"; return; fi
   if [ -f "$dir/web-src/package.json" ]; then build_web "$dir"; fi
   [ -f "$dir/Cargo.toml" ] || return 0
   local name target out

@@ -6,6 +6,12 @@ managed plugin store at startup, without links to a development checkout. Their
 package version includes the app version so future releases update their code.
 After the first setup, a user's disabled choice is retained.
 
+Resource preparation derives the plugins' minimum API from the current WIT and
+SDK versions and refuses mismatches or stale component source fingerprints. It
+uses `plugins/build.sh --fingerprint` without compiling or downloading tools.
+Run `python3 -m unittest discover -s scripts -p test_fork_resources.py` for these
+packaging gates before preparing release resources.
+
 The first setup migrates the earlier `*-local` development links. Personal
 Spring icon overrides from that local plugin are saved in app data and applied
 to the installed copy. Those assets are never part of the public package.
