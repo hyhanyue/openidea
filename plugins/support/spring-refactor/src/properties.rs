@@ -112,6 +112,13 @@ fn plain(member: &Member) -> bool {
     !member.modifiers.iter().any(|m| m == "static")
 }
 
+fn type_names(ty: &java::TypeRef, names: &mut BTreeSet<String>) {
+    names.insert(ty.name.clone());
+    for arg in &ty.args {
+        type_names(arg, names);
+    }
+}
+
 fn scalar(file: &java::JavaFile, member: &Member, declared: &BTreeSet<String>) -> bool {
     member.ty.as_ref().is_some_and(|t| {
         !t.array
@@ -201,6 +208,9 @@ impl Index {
                     if let Some(annotation) =
                         method.annotations.iter().find(|a| annotation_is(file, text, a, ANNOTATION))
                     {
+                        if let Some(ty) = &method.ty {
+                            type_names(ty, &mut out.inherited);
+                        }
                         let names = annotation.strings(&["prefix", "value"]);
                         let literal = annotation.arg("prefix").or_else(|| annotation.arg("value"));
                         if names.len() == 1
@@ -252,6 +262,11 @@ impl Index {
                     out.inherited.extend(t.supers().map(|t| t.name.clone()));
                 }
                 for field in t.fields().filter(|f| plain(f)) {
+                    if !scalar(file, field, &declared)
+                        && let Some(ty) = &field.ty
+                    {
+                        type_names(ty, &mut out.inherited);
+                    }
                     let key = normalized_path(&format!("{prefix}.{}", field.name));
                     *out.keys.entry(key).or_default() += 1;
                     if !mutable
@@ -312,6 +327,11 @@ impl Index {
                 for t in &file.types {
                     if out.inherited.contains(&t.name) {
                         out.inherited.extend(t.supers().map(|ty| ty.name.clone()));
+                        for field in t.fields() {
+                            if let Some(ty) = &field.ty {
+                                type_names(ty, &mut out.inherited);
+                            }
+                        }
                     }
                 }
             }

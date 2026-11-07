@@ -442,3 +442,20 @@ fn other_imported_annotations_are_not_configuration_properties_or_implicit_beans
     assert!(target(&s, "Config.java", pos).is_none());
     assert!(!recognized(&s, "Config.java", pos));
 }
+
+#[test]
+fn nested_configuration_dto_declarations_refuse_config_unaware_java_rename() {
+    let s = source(&[
+        (
+            "Settings.java",
+            "import org.springframework.boot.context.properties.ConfigurationProperties; @ConfigurationProperties(\"sample\") class Settings { private Nested nested; public Nested getNested() { return nested; } public void setNested(Nested v) { nested = v; } }",
+        ),
+        (
+            "Nested.java",
+            "class Nested { private String title; public String getTitle() { return title; } public void setTitle(String v) { title = v; } }",
+        ),
+    ]);
+    let pos = position(&s["Nested.java"], s["Nested.java"].find("title;").unwrap());
+    assert!(recognized(&s, "Nested.java", pos));
+    assert!(target(&s, "Nested.java", pos).is_none());
+}
