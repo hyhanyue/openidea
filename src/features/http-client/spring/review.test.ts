@@ -71,4 +71,9 @@ describe("reviewed unresolved and alias boundaries", () => {
       )[0]?.endpoints,
     ).toEqual([]);
   });
+  it("treats an explicitly written alias default as the default, not a conflict", () => {
+    const source =
+      '@RequestMapping(method=RequestMethod.GET) @interface Read { @AliasFor(annotation=RequestMapping.class,attribute="path") String[] value() default {}; @AliasFor(annotation=RequestMapping.class,attribute="path") String[] path() default {}; } @RestController class C { @Read(value="/x",path={}) void read(){} }';
+    expect(springControllers(source)[0]?.endpoints[0]?.paths).toEqual(["/x"]);
+  });
 });

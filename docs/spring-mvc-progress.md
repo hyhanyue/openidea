@@ -23,7 +23,7 @@
 
 ## Final audit checkpoint
 
-The reviewed mapping/model implementation is committed as `be7c77ec` after the imported WIP. A subsequent small audit fixes constant reuse across concatenation branches (reproduced as a failing test first), refreshes gutter choices before opening them, abandons request generation if its document/project changed during the scan, and releases overlays on project switches. The final HTTP suite has 64 passing tests, including the new generation race and project-switch cases. Full-suite validation began on the reviewed checkpoint; the final changed modules were re-run separately afterward.
+The reviewed mapping/model implementation is committed as `be7c77ec` after the imported WIP. A subsequent small audit fixes constant reuse across concatenation branches (reproduced as a failing test first), refreshes gutter choices before opening them, abandons request generation if its document/project changed during the scan, and releases overlays on project switches. The final HTTP suite has 65 passing tests, including the new generation race and project-switch cases. A final real-framework fixture also checks that explicitly writing an empty alias default does not conflict with a non-default peer; the framework output is byte-identical to the previous ground truth. The parser normalizes defaults before alias conflict checks. Full-suite validation began on the reviewed checkpoint; the final changed modules were re-run separately afterward.
 
 ## Evidence and reproduction
 
@@ -33,7 +33,7 @@ The initial five new review regressions all failed against the imported WIP befo
 
 ## Validation completed
 
-- `node_modules/.bin/vitest run src/features/http-client`: 8 files, 64 tests passed.
+- `node_modules/.bin/vitest run src/features/http-client`: 8 files, 65 tests passed.
 - Real JDK8 Maven fixture: 10 tests passed, 0 failures/errors. Ground-truth evidence regenerated after the final fixture extension.
 - `node_modules/.bin/tsrs --noEmit` and tsconfig.node/perf/scripts/smoke projects: passed.
 - `node_modules/.bin/tsc --noEmit && node_modules/.bin/vite build`: passed; existing chunk-size/dynamic-import warnings.
@@ -44,6 +44,10 @@ The initial five new review regressions all failed against the imported WIP befo
 - Full frontend suite: running (two workers to limit contention); final result will be appended.
 
 Dependency setup: offline pnpm lacked cached tarballs, so this session copied the installed node_modules into its own checkout and invoked local binaries. Public Maven dependencies were downloaded into this session's isolated cache. No shared target or dependency installation was mutated.
+
+## Full-suite environment check
+
+The sandboxed full run reported three timeouts in unchanged `scripts/dev-session.test.ts`; these tests listen on localhost ports. Re-running that entire file with localhost access passed all 5 tests in 717 ms. This confirms the port sandbox restriction rather than a change to the launcher. The full sandboxed suite is still running; final aggregate counts will be appended.
 
 ## Required unified Mac/native acceptance (not performed here)
 

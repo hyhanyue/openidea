@@ -59,7 +59,7 @@ public class MappingSamples {
         @JsonRead({"/items", "/products"})
         public java.lang.String list(@RequestParam("q") String query) { return query; }
         @PublicRead(route = "/public") public String published() { return "public"; }
-        @AliasRead(value = "/alias") public String alias() { return "alias"; }
+        @AliasRead(value = "/alias", path = {}) public String alias() { return "alias"; }
         @FixedRead public String fixed() { return "fixed"; }
         @StaticRead public String staticFixed() { return "static"; }
         @DefaultRead public String defaultPath() { return "default"; }

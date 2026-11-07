@@ -121,10 +121,9 @@ function argumentsOf(type: string): string[] {
   return out;
 }
 function valuesEqual(a: Value, b: Value): boolean {
-  return (
-    JSON.stringify(a.owner.constants.strings(a.expression, true)) ===
-    JSON.stringify(b.owner.constants.strings(b.expression, true))
-  );
+  const left = a.owner.constants.resolvedStrings(a.expression, true),
+    right = b.owner.constants.resolvedStrings(b.expression, true);
+  return left !== null && right !== null && JSON.stringify(left) === JSON.stringify(right);
 }
 
 /** A source-scoped Spring annotation and Java hierarchy model; never loads classes. */
@@ -284,6 +283,17 @@ export class MappingProject {
       if (method.defaultValue)
         values.set(method.name, { expression: method.defaultValue, owner: declaration, explicit: false });
     for (const [key, value] of this.attributes(ann, owner, overrides.get(name))) values.set(key, value);
+    for (const method of declaration.cls.methods) {
+      const value = values.get(method.name);
+      if (
+        value &&
+        value.priority === undefined &&
+        method.defaultValue &&
+        valuesEqual(value, { expression: method.defaultValue, owner: declaration, explicit: false })
+      ) {
+        values.set(method.name, { ...value, explicit: false });
+      }
+    }
     const forwarded: Overrides = new Map([...overrides].map(([key, value]) => [key, new Map(value)]));
     const aliases = declaration.cls.methods.map((method) => {
       const alias = method.annotations.find(
