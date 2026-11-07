@@ -139,8 +139,8 @@ async fn java_evaluation_project(host: &Host, window: &str, config: &mut LaunchC
     };
     let Some(module) = extra.remove("__javaModule") else { return };
     let selected = module.as_str();
-    if !extra.contains_key("projectName")
-        && (selected.is_some() || module.is_null())
+    // The frontend name is a fallback; JDT LS knows the actual imported project name.
+    if (selected.is_some() || module.is_null())
         && let Ok(project) = host.project(window)
         && let Some(name) =
             project.lsp.java_debug_project(project.root.join(selected.unwrap_or_default()), selected.is_some()).await

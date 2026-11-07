@@ -211,17 +211,19 @@ function isStrokeOf(e: KeyboardEvent, actionId: string): boolean {
   return !!stroke && bindingsFor(actionId).some((b) => normalizeBinding(b) === stroke);
 }
 
-// The revealed difference focuses its pane; a tab focus request can steal that focus.
-const openDiffPreview = (data: DiffData) => openDiff(data, { preview: true, focus: false });
-
 export function DiffEditor({
   input,
   toolbarActions,
-  onNavigate = openDiffPreview,
+  onNeighbour,
 }: {
   input: EditorInput;
   toolbarActions?: ReactNode;
-  onNavigate?: (data: DiffData) => void | Promise<void>;
+  /**
+   * Called to show another file of the chain instead of `openDiff` (which opens an
+   * editor tab): embedded hosts such as the Commit dialog's diff window swap their
+   * own content, as a modal dialog hides the editor area.
+   */
+  onNeighbour?: (data: DiffData) => void;
 }) {
   const data = input.data as DiffData;
   const { path, left, right } = data;
@@ -606,12 +608,15 @@ export function DiffEditor({
       navigation.current = request;
       try {
         const neighbour = await changedChainNeighbour(data, dir, opts.ignore);
-        if (navigation.current === request && neighbour) await onNavigate(neighbour);
+        if (navigation.current !== request || !neighbour) return;
+        if (onNeighbour) onNeighbour(neighbour);
+        // The revealed difference focuses its pane; do not steal focus back to the tab.
+        else await openDiff(neighbour, { preview: true, focus: false });
       } finally {
         if (navigation.current === request) navigation.current = null;
       }
     },
-    [data, opts.ignore, onNavigate],
+    [data, opts.ignore, onNeighbour],
   );
   useEffect(() => {
     if (!navHint) return;
