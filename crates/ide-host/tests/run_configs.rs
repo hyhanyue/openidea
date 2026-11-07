@@ -297,6 +297,7 @@ esac
     }
 }
 
+#[cfg(unix)]
 async fn reports_after_run(host: &Host, config: ide_run::RunConfig) -> Vec<ide_run::junit::TestCaseReport> {
     let run = ops::run::start(host, "main", config, Arc::new(|_| {})).await.unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(60), async {
