@@ -61,9 +61,12 @@ function groupRange(m: RegExpMatchArray, g: number): [number, number] {
 const PATH = String.raw`(?:[A-Za-z]:[\\/]|~?\/|\.{1,2}\/)?(?:[\w.@+\-]+[\\/])*[\w@+\-][\w.@+\-]*\.[A-Za-z][\w]{0,9}`;
 
 const PATTERNS: Pattern[] = [
-  // Maven prints the absolute source path unquoted, including any spaces.
+  // Maven prints source locations unquoted, including spaces in absolute Java paths.
   {
-    re: /^\[(?:ERROR|WARNING)\][ \t]+((?:\/(?!\/)|[A-Za-z]:[\\/])[^\r\n]*?\.java):\[([1-9]\d*),([1-9]\d*)\](?=\s|$)/dg,
+    re: new RegExp(
+      String.raw`^\[(?:ERROR|WARNING)\][ \t]+((?:\/(?!\/)|[A-Za-z]:[\\/])[^\r\n]*?\.java|${PATH}):\[([1-9]\d*),([1-9]\d*)\](?=\s|$)`,
+      "dg",
+    ),
     build: (m) => {
       const [start] = groupRange(m, 1);
       const end = m.index! + m[0].length;
@@ -100,10 +103,9 @@ const PATTERNS: Pattern[] = [
       };
     },
   },
-  // Generic `path:line` (Go `file.go:12`, Rust `--> src/main.rs:10`, gcc, eslint…),
-  // `path(line,col)` (tsc) and Maven's `path:[line,col]` (`[ERROR] /p/A.java:[12,5] msg`).
+  // Generic `path:line` (Go `file.go:12`, Rust `--> src/main.rs:10`, gcc, eslint…) and `path(line,col)` (tsc).
   {
-    re: new RegExp(String.raw`(${PATH})(?::\[?(\d+)(?::(\d+)|,(\d+)\])?|\((\d+)(?:,(\d+))?\))`, "dg"),
+    re: new RegExp(String.raw`(${PATH})(?::(\d+)(?::(\d+))?|\((\d+)(?:,(\d+))?\))`, "dg"),
     build: (m) => {
       if (m.index! > 0 && /[\w/.~-]/.test(m.input![m.index! - 1]!)) return null;
       const [start, end] = [m.index!, m.index! + m[0].length];
@@ -111,7 +113,7 @@ const PATTERNS: Pattern[] = [
         kind: "file",
         start,
         end,
-        target: { path: m[1]!, line: num(m[2] ?? m[5]), col: num(m[3] ?? m[4] ?? m[6]), resolve: "path" },
+        target: { path: m[1]!, line: num(m[2] ?? m[4]), col: num(m[3] ?? m[5]), resolve: "path" },
       };
     },
   },
