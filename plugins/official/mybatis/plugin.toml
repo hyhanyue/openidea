@@ -6,13 +6,17 @@ authors = ["OpenIDEA contributors"]
 license = "Apache-2.0"
 change-notes = "0.2.0-dev.1 — local development build: generate missing statements in existing mapper XML; SQL keyword, table and column completion from project SQL files. No live database connection."
 categories = ["frameworks"]
-engines.openidea = "^1.0"
+engines.openidea = "^1.2"
 wasm = "dist/plugin.wasm"
 activation = ["on-command:*"]
 
 [capabilities]
-required = ["project.read", "editor.write"]
+required = ["project.read"]
 
 [[contributes.providers]]
-kinds = ["definition", "line-markers", "completion", "code-actions"]
+kinds = ["definition", "line-markers", "completion"]
 languages = ["java", "xml"]
+
+[[contributes.providers]]
+kinds = ["code-actions"]
+languages = ["java"]
