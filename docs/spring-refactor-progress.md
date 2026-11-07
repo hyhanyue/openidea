@@ -1,35 +1,115 @@
-# Spring/MyBatis semantic refactor progress
+# Spring/MyBatis 跨文件语义重构交付报告
 
-Baseline: `57653df63a91789a3544436109ee288b7cfb0ba6`. Independent clone and branch `spring-semantic-refactor`; no source checkout modifications, no publish/install actions.
+状态：源码、针对性测试、真实 Java8/Boot/MyBatis 验证完成；完整原生 host/app 构建及 Mac UI 操作验收留待主会话统一集成，未冒充 UI 实测完成。
 
-## Audit / reproduction
+## 独立交付与提交
 
-- `src/editor/lsp/rename.ts` calls JDT/XML/YAML rename, previews multi-file edits, then calls `applyWorkspaceEdit`. It does not query the Spring/MyBatis plugins.
-- `spring-beans` and `mybatis` providers expose navigation, completion and actions, but no rename provider. Bean string identifiers, configuration paths and mapper XML statement identities are absent from this rename path.
-- Existing plugin edits are prepared by the host; `Documents::prepare_workspace_edit` captures disk/dirty-buffer fingerprints. Apply preflights all operations, rejects versions/external writes, rolls back failures and records grouped undo/redo. This transaction layer must remain the only writer.
-- Current preview lists file/count only. Source semantic rename needs visible replacement ranges plus an explicit scope warning, including single-file edits.
+- clone：`/Users/hyl/Documents/Codex/2026-11-07/openidea-spring-semantic-refactor/work/openidea`
+- 分支：`spring-semantic-refactor`
+- 基线：`57653df63a91789a3544436109ee288b7cfb0ba6`，未复制其他会话未提交内容。
+- `5f14980277018fd032ec5eec40a94b53f9b7e1ab`：现有 rename、插件、事务层审计。
+- `9ce75f10dd652827cb73d1aa2e116f34b1d0fabf`：修复 macOS 撤销恢复源码时的旧 mtime，避免增量编译继续使用重构后的 class。
+- `5b5f3032172634a50f74966c419cfc3200ed0f44`：源码范围内 Spring/MyBatis 语义重命名、预览/取消、快照冲突检测、独立测试和 Java8 fixture。
+- `d2fbe32ca208f2899595343c463f72eac7b53e9c`：ConfigurationProperties 前缀必须满足小写 canonical 格式，增加反例。
 
-## Design boundary
+未推送、未发布、未替换已安装应用；原 demo 和主会话 checkout 未修改；没有占用 18088；没有向其他聊天发送消息。禁止修改的 MVC、`ops/routes.rs`、`commands/nav.rs` 均未修改。
 
-Reuse `spring-text` Java/XML/config scanners in an independently testable, pure planner. Keep Bean names, configuration paths and mapper namespace/statement identities distinct. Only explicit source evidence is editable; ordinary strings/comments, custom annotations, SQL fragments and other modules are excluded. Java symbol changes are delegated to the existing LSP and merged before one transaction. No text-based Java call-site replacement.
+## 审计结论与复用机制
 
-Official sources reviewed:
-- https://docs.spring.io/spring-framework/docs/5.3.31/reference/html/core.html (bean naming/qualifiers)
-- https://docs.spring.io/spring-boot/docs/2.7.18/reference/html/features.html (external config/relaxed binding)
-- https://mybatis.org/mybatis-3/sqlmap-xml.html (statement namespace/id and nested select references)
+原链路 `src/editor/lsp/rename.ts → lsp_prepare_rename/lsp_rename → applyWorkspaceEdit` 只使用语言服务结果。Spring/MyBatis 插件没有 rename provider，已有导航结果不会自动进入 rename。原预览只列文件和计数，无法逐项检查替换内容。
 
-Native Mac app/UI verification is deliberately pending unified integration per the six-session build constraint. No screenshots or claims of UI execution yet.
+继续由现有 `Documents` 事务层唯一负责写入：`prepare_workspace_edit` 的磁盘/dirty buffer 指纹、文档版本校验、私有副本 preflight、失败回滚、整组 undo/redo 和现有 workspace history 均复用。没有增加另一套写文件/撤销实现，没有修改 IPC 类型或手写生成的 bindings。
 
-## Implementation status (in progress)
+新 planner 位于 `plugins/support/spring-refactor`，复用 `spring-text` 的 Java/XML/config scanner，只有纯计算 API。`ops/spring_refactor.rs` 负责独立源码快照，`ops/spring_rename.rs` 负责 Java LSP 与框架计划合并。所有范围在 IPC 上使用 UTF-16。
 
-- Added independent `plugins/support/spring-refactor` planner using existing spring-text parsers, and thin `ops/spring_refactor.rs` / `ops/spring_rename.rs` adapters. No new IPC types or generated bindings.
-- Bean names: explicit @Bean/stereotypes, @Qualifier and @Resource literals, Spring XML references; implicit bean Java names use JDT plus decapitalized source references. Declaration qualifier tags and ambiguous bean names refuse.
-- Config: application/bootstrap properties/YAML and @Value placeholders; ConfigurationProperties prefix + descendants. Moving YAML parent mappings or JavaBean leaf/accessor changes refuses; dynamic/relaxed-binding aliases remain explicitly outside preview scope.
-- MyBatis: unique namespace+statement+Java method; nested-select XML references; overloaded methods/duplicate statements refuse. SQL fragments, identifiers, comments and unrelated namespaces stay unchanged.
-- Preview: exact UTF-16 ranges, replacements and lazy before-text from dirty-buffer-aware fsReadText; explicit source scope; cancellable computation and discarded late responses.
-- Host adapter compiles/exercises actual adapter and orchestration source in a lightweight independent harness (fake LSP only for orchestration failure tests). 8 planner tests and 8 adapter tests passing. 100 frontend tests passing, 6 existing localization skips.
-- Found a real macOS transaction undo bug: fs::copy preserved original source mtime, so Maven incrementally reused renamed class files after undo (config fell back to 99 instead of 11). Refresh copied snapshot mtimes on macOS. All 8 workspace rollback/recovery unit tests passed after the fix. Dedicated mtime regression added.
-- Real installed JDT LS 1.63 requires Java 25; Java 21 startup failed with an OSGi JavaSE=25 requirement. Reused installed Temurin 25 runtime read-only, with independent config/workspace and JavaSE-1.8 project runtime. Captured real JDT method rename edits for the declaration and Java caller; no Java source string replacement.
-- Java8/Boot2.7.18/H2 fixture baseline, Bean apply+undo, config-key apply+undo, config-prefix apply+undo passed actual Maven compile/start/query. Final mapper combined transaction validation is underway. The initial XML test intentionally hit a comment and was correctly refused; test selector corrected to the actual statement.
+## 三类标识符的实际覆盖
 
-No native app build/launch performed. UI/native integration remains pending unified Mac acceptance. No other chat messages sent.
+| 类型                    | 已实现                                                                                                                                                          | 明确边界                                                                                                                                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bean 名                 | 显式 `@Bean`/常用 stereotype 字符串、导入有据的 `@Qualifier`/`@Resource(name)`、Spring namespace XML 的声明和引用                                               | Qualifier 标签与 Bean 名分离；声明重名/Qualifier 标签冲突时拒绝；动态常量、SpEL、getBean 字符串及按名称自动注入不解析                                                                                |
+| 隐式 Bean               | 从 Java 类/工厂方法发起时让 JDT 改 Java 符号，并按 Spring decapitalize 改已识别 Bean 引用；从 Qualifier 发起时显式写入新 Bean 名，保留 Java 类/方法名及原有注释 | 不通过修改普通 Java 字符串猜测 Java 符号引用；不声称能处理运行时注册或库中的引用                                                                                                                     |
+| 配置 key                | application/bootstrap 的 properties/YAML key、Java `@Value` placeholder、这些配置值中的 placeholder；保留默认值、普通值和注释                                   | key 只能保留在原父 mapping 内；不移动 YAML 子树；不处理任意导入文件、XML placeholder、环境变量或 relaxed-binding 的其他拼写                                                                          |
+| ConfigurationProperties | prefix 本身及同一前缀下的配置/placeholder；YAML 父 key 只改一次；检查 canonical 小写前缀                                                                        | **JavaBean 叶子字段/getter/setter 重构暂不支持，明确拒绝**；不只改配置却留下失效的 Java 属性绑定                                                                                                     |
+| Mapper statement        | 唯一 Java 方法 + namespace/statement id；XML association/collection/constructor 等 nested select 引用，含跨 namespace 的完整引用                                | JDT 必须确实返回声明修改；无 Java 方法、重载、重复 statement/databaseId 变体拒绝；SQL 标识符、sql fragment、resultMap、普通文本和无关 namespace 不改；SqlSession 字符串、注解 nested-select 等不解析 |
+
+所有 Java 类、方法及调用处由 JDT 重命名；Bean 名、配置 key 和 SQL/statement 标识符没有混用。实现中没有全局字符串替换。
+
+## 预览、取消和一致性
+
+- 在最近 Maven/Gradle 模块的 `src/main/java`、`src/main/resources`、`src/test/java`、`src/test/resources` 内读取源码；排除兄弟模块、构建产物和 symlink 遍历。每个支持文件上限 2 MiB，总计 32 MiB/1500 个文件，超限拒绝。
+- open/未保存文档覆盖磁盘内容，包含未保存新文件。扫描前后校验整个源码目录指纹和已打开文档版本。
+- 将整个已扫描目录作为预览 precondition 保留，因此后来新增的同名定义、原本不需要修改的引用变化也使预览失效。JDT 的其他编辑路径也捕获自己的 precondition。
+- 语义重构即使单文件也必须显示预览。预览明确说明仅覆盖列出的源码修改；普通 Java LSP 结果落在该扫描范围内时也保留范围提示，不宣称完整安全重命名。
+- 逐文件展开 UTF-16 行列范围、替换前后的文本；前文本通过现有 `fsReadText` 读取，优先未保存 buffer。
+- 计算中可取消，替换/关闭 pending popup 会取消 RequestId；晚到结果不会重新打开预览或写入。预览取消也不写入。
+- Java 声明和框架编辑冲突则整组拒绝。框架范围与 JDT 原文件文本修改合并后再移动文件；资源操作之后又出现文本修改的混合顺序保守拒绝。
+- 应用和整组撤销均复用现有事务历史。真实写入中途故障的回滚由原事务测试覆盖。
+- 全部新增用户文字同步 en/zh，CSS 只使用 tokens。
+
+## 真实发现并修复的撤销缺陷
+
+macOS `fs::copy` 会保留旧 mtime。原事务撤销恢复 `.java` 后，Maven 增量编译认为源码早于上次 class，继续使用重命名后的 `@Value("${service.delay:99}")` class，但配置已经恢复为 `service.timeout`。实际 Boot 测试从预期 11 变成默认值 99。
+
+在 macOS 复制事务快照时刷新目标文件 mtime。修复后，**撤销之后直接执行增量 `mvn test`** 也能重新编译、启动并通过查询。没有通过每次 clean 掩盖问题；仅初始基线 clean，后续十次 apply/undo 验证使用增量构建。
+
+## 已完成验证
+
+| 检查                        | 结果                                                                                                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| planner 独立 Cargo tests    | 10 通过：普通同名文本、注释、自定义注解、Qualifier 标签、隐式命名、YAML/properties、默认值、UTF-16、namespace、重载/重名、绑定叶子拒绝及 canonical prefix 反例                  |
+| 独立 host harness           | 9 通过：直接编译并执行生产 adapter/orchestrator 源码，覆盖 dirty source、外部写入、新增定义、取消、缺失 JDT 声明、兄弟模块/生成目录排除、整组 undo/redo、文件移动前合并和 mtime |
+| workspace 事务单元测试      | 8 通过，含中途写入失败回滚、dirty buffer 恢复、失败回滚保留 recovery、崩溃清理等                                                                                                |
+| workspace integration tests | 原 22 通过 + 新 mtime 回归 1 通过                                                                                                                                               |
+| frontend targeted tests     | 100 通过，6 个原有 localization 条件跳过；含 pending 取消/晚到结果、单文件范围预览、UTF-16 替换前文本、预览取消、workspace undo                                                 |
+| clippy                      | planner、host harness、`ide-workspace --all-targets` 均 `-D warnings` 通过                                                                                                      |
+| formatting/lint             | root + 独立 crate 的 cargo fmt check、相关前端 oxfmt/oxlint、git diff check 通过                                                                                                |
+| typecheck/build             | `tsrs --noEmit`、Vite production build 通过；Vite 仍有原有大 chunk / ineffective dynamic import 提示                                                                            |
+| 真实 Java8 fixture          | Boot 2.7.18、MyBatis starter 2.3.2、H2，5 场景各 apply + grouped undo 全通过；初始 clean + 后续 10 次增量编译、启动、注入/绑定和查询                                            |
+
+host harness 的常规编排单元测试使用明确标识的 FakeLsp。**Mapper Java 编辑不是伪造的**：`scripts/spring-refactor-jdt.mjs` 以独立 config/workspace 启动已安装 JDT LS 1.63，只捕获 prepareRename/rename，不让服务写源码，真实返回 Mapper 声明及 RuntimeTest Java caller 两个文件的 edits，然后与 XML 计划通过真实 Documents 事务一起应用、撤销并运行 Maven。
+
+已安装 JDT LS 1.63 的 Eclipse bundle 要求 JavaSE 25。首次用 Java21 启动因 OSGi JavaSE=25 失败；随后只读复用了已安装 Temurin 25 LS runtime，并把项目 runtime 明确指定为 JavaSE-1.8。Java 测试断言实际 JVM 为 1.8，日志为 1.8.0_421。
+
+全 workspace 的 `cargo metadata --offline` 曾因缓存缺少 Android-only `android_system_properties 0.1.6` 失败，非本次 Mac 编译失败。锁文件已由 Cargo 为新路径依赖更新；Mac 模块测试和 clippy 正常完成。
+
+### 复现命令
+
+在本 clone 中使用独立 targets；下面是实际执行的针对性命令：
+
+```sh
+cargo test --manifest-path plugins/support/spring-refactor/Cargo.toml --offline
+cargo test --manifest-path plugins/support/spring-refactor/host-tests/Cargo.toml --offline
+cargo test -p ide-workspace --lib workspace_edit --offline
+cargo test -p ide-workspace --test workspace_edit_mtime --test workspace_edits --offline
+cargo clippy -p ide-workspace --all-targets --offline -- -D warnings
+cargo clippy --manifest-path plugins/support/spring-refactor/Cargo.toml --all-targets --offline -- -D warnings
+cargo clippy --manifest-path plugins/support/spring-refactor/host-tests/Cargo.toml --all-targets --offline -- -D warnings
+node node_modules/vitest/vitest.mjs run src/editor/lsp/syntaxFallback.test.ts src/editor/lsp/workspaceEdit.test.ts src/editor/lsp/Popups.test.tsx src/editor/core/model/workspaceHistory.test.ts src/platform/locales/textCatalog.test.ts
+node_modules/.bin/tsrs --noEmit
+node_modules/.bin/vite build
+```
+
+真实 fixture 验证：先复制 `fixtures/java-spring-refactor` 到独立目录，禁止操作原 demo；`node scripts/spring-refactor-jdt.mjs <fixture-copy> <jdtls-install> <ls-jdk-runtime> <jdk8-home> <independent-scratch> <java-edits.json>`。然后设置 `JAVA_HOME=<jdk8-home>`、`OPENIDEA_FIXTURE=<fixture-copy>`、`OPENIDEA_JAVA_EDITS=<java-edits.json>`、`OPENIDEA_MAVEN=<maven-bin>`，执行：
+
+```sh
+cargo test --manifest-path plugins/support/spring-refactor/host-tests/Cargo.toml --offline java8_boot_mybatis_apply_and_grouped_undo -- --ignored --nocapture
+```
+
+当前 fixture copy 为本会话 `work/fixture-runtime`；真实 JDT response 为本会话 `work/jdt-rename.json`。Maven 验证日志已从 target 留存到本会话 `outputs/validation/`，生成的 Rust targets 将清理以释放磁盘。
+
+## 主会话集成点与待验收
+
+1. 按上述提交顺序集成。薄接入仅有 `ide-host/Cargo.toml`、`ops/mod.rs` 与 `ops/lsp.rs` 两个 rename 入口；没有修改 nav/routes。若其他会话也修改 lsp.rs，保留原 prepare/code-action 等逻辑，只合并 rename 两处。
+2. `spring-refactor::Sources` 为路径到源码文本的 BTreeMap；`target/recognized/refusal/plan` 为纯 API，输出 UTF-16 TextEdit 和可选 JavaRename。以后可由会话 1 的 source context/配置来源或会话 3 的依赖索引替换 Snapshot 数据供应，而不改变事务/预览接口。当前没有读取它们的未提交实现，也没有推断库 Bean/条件是否激活。
+3. `WorkspaceEditSummary.changes` 是前端内存字段，原 IPC WorkspaceEdit 和 preconditions 不变，无需生成 bindings。目录 preconditions 同时用于显示明确的源码范围提示。
+4. **完整 ide-host / native app 编译、app 内菜单/快捷键、截图和 e2e 未做**。遵守六会话避免同时重型构建的要求，主会话统一构建后按下列项目做 Mac 验收，不应把模块测试当成 app UI 验收。
+
+Mac 验收清单：复制 fixture，选择 Java8，等待 JDT 导入；分别在 Bean 字符串、Qualifier(counter)、@Value key、ConfigurationProperties prefix、Mapper Java 方法及 XML id 上 Shift+F6。检查逐项预览和取消；应用后 Cmd+Z 在任一受影响文件应整组撤销。带 emoji 的未保存 Consumer 内容必须保留；预览期间外部修改文件/新增同名定义应整体拒绝；计算时 Escape 取消后晚到结果不得重开预览。Mapper 的 OtherMapper.find、sql fragment find、SQL alias、普通文本和 XML 注释必须保持不变。
+
+主会话仍需根据上面的明确边界决定是否继续扩展 JavaBean 叶子/accessor、非标准/跨模块配置来源及动态字符串引用；本次没有把这些缺口包装成“安全完整重命名”。
+
+## 官方依据
+
+- [Spring Framework 5.3.31 Core Technologies](https://docs.spring.io/spring-framework/docs/5.3.31/reference/html/core.html)：Bean 命名、aliases 与 qualifier 的不同语义。
+- [Spring Boot 2.7.18 Core Features](https://docs.spring.io/spring-boot/docs/2.7.18/reference/html/features.html)：外部配置、ConfigurationProperties、canonical prefix 与 relaxed binding。
+- [MyBatis Mapper XML](https://mybatis.org/mybatis-3/sqlmap-xml.html)：namespace/statement id、nested select 引用及 SQL fragment 分离。
