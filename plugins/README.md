@@ -229,7 +229,7 @@ machine. Users can revoke optional capabilities in Settings › Plugins.
 
 | Capability          | Risk   | Unlocks today                                                                       |
 | ------------------- | ------ | ----------------------------------------------------------------------------------- |
-| `project.read`      | low    | `Project::root`, `read_file`, `find_files`, `host::projects`, `publish_diagnostics` |
+| `project.read`      | low    | `Project::root`, `read_file`, `find_files`, `spring_beans`, `host::projects`, `publish_diagnostics` |
 | `editor.read`       | low    | `TextEditor::document`, `selections`                                                |
 | `editor.write`      | medium | `TextEditor::apply_edits`                                                           |
 | `vcs.read`          | low    | `Project::vcs_status` (branch, upstream, ahead/behind, changes), `vcs_remotes`      |
@@ -362,6 +362,7 @@ then run `openidea-plugin check`.
 | `host::confirm(title, body)`                                             | `ui.confirm`                     | OK / Cancel; `true` on OK. Same rules as `pick`.                                                                                                                                                                     |
 | `host::log(level, msg)`                                                  | `log`                            | IDE log, tagged with the plugin id. `eprintln!` output is logged too and shown when the plugin crashes.                                                                                                              |
 | `Project::find_files(glob, limit)`                                       | `workspace.project.find-files`   | Project-relative glob (`**/*Mapper.xml`); honours `.gitignore`; at most `limit` paths.                                                                                                                               |
+| `Project::spring_beans(path, context)` | `workspace.project.spring-beans` (API 1.4) | Trusted open projects only. Returns a cached static JDT Spring model as JSON, or `none` while a cancellable background refresh runs. Reads only resolved build dependencies; does not expose archive/filesystem access. |
 | `host::publish_diagnostics(path, items)`                                 | `diagnostics.publish`            | Replaces this plugin's problems for the file (editor squiggles and the Problems view); an empty list clears them.                                                                                                    |
 | `host::fetch(request)` → `{status, headers, body}`                       | `net.fetch`                      | See _Network_.                                                                                                                                                                                                       |
 | `Project::run_process(program, args, stdin)` → `{code, stdout, stderr}`  | `process.run`                    | Only the pinned program of a `process:` grant; runs in the project root of a trusted project; 4 MiB of output; killed when the call is cancelled or times out.                                                       |

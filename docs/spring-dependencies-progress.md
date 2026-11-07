@@ -64,7 +64,7 @@ include Bean names so different factories never collapse into one node.
 
 ## Bounds and lifecycle
 
-- Up to 4,000 source units, 16,000 types and 12,000 registrations/injection records.
+- Up to 4,000 source units / 16 Mi UTF-16 source characters, 16,000 types and 12,000 registrations/injection records.
 - Metadata/class entries: 1 MiB; archive: 256 MiB / 100,000 entries; metadata archives: 512.
 - Requested binary content: 64 MiB aggregate; class nesting 24 / path depth 32.
 - Annotation expansion: depth 8 / 128 annotations; hierarchy expansion: depth 24 / 256 types.
@@ -80,30 +80,49 @@ WIT and SDK copies move from released 1.3 to **1.4**. `ENGINE_VERSION` and both
 component compatibility assertions remain intact; the main session should rebuild
 all packaged components at final integration, because the existing
 `shipped_components_are_built_for_this_api` check requires current API binaries.
-Only the Spring plugin needs the new model method; its source manifest now requires `^1.4`. The fork resource rewrite must preserve that floor (the main session owns `prepare-fork-resources.py`). Rebuild the misbehave fixture
-and all plugins with `plugins/build.sh` after merging the concurrent runtime
+Only the Spring plugin needs the new model method; its source manifest now requires `^1.4`. The fork resource rewrite must preserve that floor (the main session owns `prepare-fork-resources.py`). Rebuild the current-API fixtures (`hello`, `indexer`, `semantic-tokens`, `misbehave`)
+and all official plugins with `plugins/build.sh` after merging the concurrent runtime
 context API changes. The final released snapshot belongs to `release-prepare`.
 
-The JDT bundle advances from 1.9.0 to 1.10.0, including its installed filename, so
+Every official plugin and each current-API fixture is fingerprinted against the
+whole SDK source and WIT tree, so all those `.wasm.sources` files become stale,
+including plugins whose own Rust sources did not change. Only Spring was rebuilt
+here; do not run full `plugins/build.sh --check` until the unified rebuild. The
+main session's new `--fingerprint` option can inspect hashes without installing
+targets. **Preserve** `sdk/rust/openidea-plugin/tests/api/released/` as released
+1.3 until final release preparation, and preserve the explicit
+`openidea:plugin/ui@1.3.0` component in
+`released_13_component_calls_an_existing_interface_on_14`: it is an inline WAT
+fixture, intentionally independent of the current SDK and never rewritten to
+1.4 by a bulk version replacement. It proves a real old-interface function call
+on a 1.4 linker even after every current-API fixture is rebuilt. The initial
+compatibility run also linked the pre-rebuild 1.3 hello component against the actual 1.4 host.
+
+The JDT bundle advances from 1.9.0 to 1.10.0 (SHA-256 `c3af47b7db933ce8c1e26f1a67caf07a86f52058921f87b37b32cbfad8401d63`), including its installed filename, so
 OSGi cannot keep an old cached command implementation. Other sessions modifying
 this same bundle should combine sources and choose one final bundle version, then
 rebuild it once. No installed bundle has been replaced here.
 
 ## Validation (updated as checks finish)
 
+- Offline Java 8 Maven reactor package: passed using an isolated dependency cache.
 - Java 8 container oracle: passed, Spring Boot 2.7.18 / Framework 5.3.31; no web application.
 - Real m2e parent + two-module import: passed; cross-module `Port`, `Token`,
   `ModuleValue`, dependency factory alias, scanned binary component and both
-  metadata formats resolved. 48 registrations/candidates, explicitly incomplete
+  metadata formats resolved. 51 registrations/candidates, explicitly incomplete
   because real Boot includes dynamic and unresolved conditions.
 - Java static initializer tripwire: passed; JDT process uses `-Dopenidea.model.only=true`.
 - JDT binary/decompiler navigation and attached source-JAR range: passed.
 - Unsaved import edits and restoration: passed.
-- Bean plugin: 199 tests passed before the final binary graph identity case.
+- Bean plugin: 202 tests passed, including binary graph identity, primary selection and unresolved generic qualifier cases.
 - SDK: 10 unit + 3 frozen API + 2 WIT coverage tests passed; released snapshot unchanged.
-- Frontend: gutter/catalog targeted tests passed (24 passed, 6 existing skips); TypeScript passed.
-- `cargo check -p ide-lsp --lib --offline -j 2`: passed before final lifecycle/refresh changes.
-- WIT native compatibility/runtime tests and final reruns: in progress.
+- Frontend: gutter/catalog targeted tests passed (25 passed, 6 existing skips); TypeScript passed. The async-model refresh test uses the fork plugin ID.
+- `cargo check -p ide-lsp --lib --offline -j 2`: passed with lifecycle/refresh changes.
+- LSP cache close/cancellation test: passed; ide-lsp and ide-plugin Clippy passed with warnings denied.
+- WIT native compatibility/runtime tests: 9 passed, 1 deliberately filtered check requiring all packaged WASMs to be rebuilt. The existing strict shipped-component assertion is unchanged.
+- Source and ID-rewritten Spring manifests both require `^1.4`; the Spring WASM is validated as API 1.4. The complete fork staging script is owned by the main session and its final generated package remains an integration check.
+- JDT invalidation includes changed ZIP metadata at the same classpath path and a 1 MiB metadata-limit regression; plain `@EnableAutoConfiguration` is also covered.
+- UTF-16 ranges are checked against a source line containing an astral character. The real container includes two unrelated `Token` classes, inherited factories and `@Primary`.
 
 Evidence stays under this chat's `work/java8-oracle` (container log, model JSON,
 source-attached model, JSON-RPC transcript). Full native app build, live macOS UI,
@@ -113,3 +132,60 @@ oracle Maven parent, inspect App injection targets and JAR factory names in both
 Spring views, toggle imports, then close the project while discovery is pending.
 
 No changes were made to MVC routes, `ops/routes.rs` or `commands/nav.rs`.
+
+
+Out-of-scope findings: the existing generic PluginView `setValue(initial)` effect
+triggers `react/set-state-in-effect` when linting that normally ignored directory.
+No unrelated UI behavior was changed to silence it; targeted lint passes with
+that one pre-existing rule excluded. Native `ide-host` glue and the fork staging
+package still need the main session's unified compile/packaging/UI acceptance.
+No FactoryBean runtime product type or dynamic registration is inferred.
+
+
+Local commits:
+
+1. `2796c44f13b041eba10f13bdbd53cad2dee94ebf` — JDT dependency model and Java 8 oracle.
+2. `9cb4a8f38175890268e9d15bc9b4a911bc290a5f` — WIT 1.4/native/SDK/provider integration and extended regressions.
+3. The documentation handoff commit follows these two commits.
+
+No main push, release or installed-app replacement was performed.
+
+The main session announced a companion change deriving fork-package API floors
+from WIT/SDK and checking both default WASM source fingerprints. That companion
+must accompany this branch: this independent clone intentionally retains the old
+resource preparer. Both source-package IDs are covered by the manifest and UI
+adapter checks, while the final **staged fork package** is still a main-session
+integration acceptance item.
+
+Source-context integration point: `dependencies::Snapshot::load` currently reads
+`springBeans.applicationClass`, and `World::new` picks that source root (or the
+only discovered Boot root). After merging the other session's launch-context API,
+feed the same selected application FQCN into both places and into
+`Project::spring_beans(path, context)`. No permission/API signature change is
+needed. Do not mark binary property/profile conditions active merely because a
+source launch is selected; they deliberately remain unknown until structured
+condition facts are joined to that shared evaluator.
+
+Reproducible check commands (run from this clone, with the documented Rust cache,
+Java 25 and JDT installation on PATH):
+
+```sh
+python3 fixtures/java-spring-dependencies/verify.py ../java8-oracle
+python3 java/java-usages/build.py /path/to/jdtls
+python3 java/java-usages/tests/spring-beans.py /path/to/jdtls ../java8-oracle
+cargo test --manifest-path plugins/official/spring-beans/Cargo.toml --offline
+cargo test --manifest-path sdk/rust/openidea-plugin/Cargo.toml --offline
+cargo test -p ide-lsp --lib jdtls::spring_beans::tests --offline -j 2
+cargo test -p ide-plugin --test api_compat --offline -j 2 -- --skip shipped_components_are_built_for_this_api
+cargo clippy -p ide-lsp --lib --offline -j 2 -- -D warnings
+cargo clippy -p ide-plugin --all-targets --offline -j 2 -- -D warnings
+plugins/build.sh official/spring-beans
+node node_modules/vitest/vitest.mjs run src/features/plugins/lineMarkerGutter.test.ts src/platform/locales/textCatalog.test.ts
+node node_modules/typescript/bin/tsc --noEmit
+```
+
+Full `plugins/build.sh --check`, strict shipped-component API checking, native
+`ide-host`/desktop integration and live macOS screenshots belong to the unified
+rebuild. The individual module Clippy checks, frozen API tests and Spring WASM
+build passed here. The final Java bundle hash above was stable across repeated
+builds. No second heavy app/native build was started in parallel.
