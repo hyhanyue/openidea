@@ -1,0 +1,68 @@
+name: Compile merged OpenIDEA for macOS
+on:
+  push:
+    branches: [codex/build-openidea-20261107]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compile-openidea-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: macos-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, target: aarch64-apple-darwin }
+          - { arch: x64, target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with: { version: 11 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with: { key: "compile-macos-${{ matrix.arch }}" }
+      - run: pnpm install --frozen-lockfile
+      - name: Rust checks and tests
+        if: matrix.arch == 'arm64'
+        run: |
+          mkdir -p dist
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --no-fail-fast
+      - name: Verify generated bindings
+        if: matrix.arch == 'arm64'
+        run: git diff --exit-code src/bindings.ts
+      - name: Compile app and DMG without publishing or signing
+        run: pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Archive app with executable permissions
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent target/${{ matrix.target }}/release/bundle/macos/OpenIDEA.app OpenIDEA-0.1.39-macos-${{ matrix.arch }}.app.zip
+          shasum -a 256 OpenIDEA-0.1.39-macos-${{ matrix.arch }}.app.zip target/${{ matrix.target }}/release/bundle/dmg/*.dmg > SHA256SUMS-macos-${{ matrix.arch }}.txt
+      - name: Upload compiled app and installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: OpenIDEA-0.1.39-macos-${{ matrix.arch }}
+          path: |
+            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            OpenIDEA-0.1.39-macos-${{ matrix.arch }}.app.zip
+            SHA256SUMS-macos-${{ matrix.arch }}.txt
+          if-no-files-found: error
+          retention-days: 14
