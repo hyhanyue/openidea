@@ -315,6 +315,7 @@ function registerView(pluginId: string, decl: ViewDecl, icon: string): () => voi
     icon,
     anchor: decl.location,
     order: 900,
+    stripe: "onUse",
     component: () =>
       decl.web ? (
         <WebView pluginId={pluginId} view={decl.id} label={decl.title} />

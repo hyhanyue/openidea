@@ -68,7 +68,17 @@ fn profile_list(value: &str) -> Vec<String> {
     value.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect()
 }
 pub(super) fn local(root: &str, base: &str, path: &str) -> Option<String> {
-    let value = if path.starts_with('/') { path.to_owned() } else { format!("{base}/{path}") };
+    let drive_absolute = path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes().get(2) == Some(&b'/');
+    let value = if path.starts_with('/') || drive_absolute { path.to_owned() } else { format!("{base}/{path}") };
+    let prefix = if value.starts_with("//") {
+        "//"
+    } else if value.starts_with('/') {
+        "/"
+    } else {
+        ""
+    };
     let mut parts = vec![];
     for part in value.split('/') {
         match part {
@@ -79,7 +89,7 @@ pub(super) fn local(root: &str, base: &str, path: &str) -> Option<String> {
             _ => parts.push(part),
         }
     }
-    let path = format!("/{}", parts.join("/"));
+    let path = format!("{prefix}{}", parts.join("/"));
     (path == root || path.starts_with(&format!("{root}/"))).then_some(path)
 }
 fn entries() -> Vec<(String, Option<String>)> {
@@ -976,6 +986,17 @@ fn documents(path: &str, text: &str) -> Vec<(usize, usize)> {
 mod tests {
     use super::*;
     use openidea_plugin::mock::MockHost;
+    #[test]
+    fn local_paths_preserve_native_ipc_roots_and_reject_escape() {
+        for root in ["/project", "C:/workspace/project", "//server/share/project"] {
+            let config = format!("{root}/config");
+            assert_eq!(local(root, root, ".").as_deref(), Some(root));
+            assert_eq!(local(root, root, "src/../config").as_deref(), Some(config.as_str()));
+            assert_eq!(local(root, root, &config).as_deref(), Some(config.as_str()));
+            assert!(local(root, root, "../outside").is_none());
+            assert!(local(root, root, "C:/other/config").is_none());
+        }
+    }
     fn envelope() -> Option<Value> {
         host::setting("springBeans.launchContext").and_then(|s| serde_json::from_str(&s).ok())
     }

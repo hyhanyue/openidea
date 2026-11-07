@@ -1,7 +1,7 @@
 # Spring integration: Mac / Java 8 acceptance
 
-Locally installed candidate: 0.1.41, plugin API 1.4. Publishing remains pending
-the user's review of the installed application.
+Mac acceptance baseline: locally installed 0.1.41, plugin API 1.4. The user
+accepted this build and authorized publication; the release follow-up is 0.1.42.
 
 ## Combined native application checks
 
@@ -90,6 +90,28 @@ forced during editing. Actual attach/output acceptance above was performed in
 the isolated native preview.
 
 All task-owned test JVMs, the native preview and Vite session were stopped.
-The final installed application remains open for user review. Source changes
-and the release have not been pushed or published; that step remains conditional
-on the user's acceptance of the installed build.
+The installed application remains available to the user. Source 0.1.41 was
+pushed after acceptance; its unpublished release build was stopped for the CI
+follow-ups below. The local 0.1.41 installation can test the subsequent 0.1.42
+automatic update.
+
+## 0.1.42 release follow-ups
+
+- Declare the existing MIT license for `spring-text` and the repository's
+  Apache-2.0 license for the new `spring-refactor` crate.
+- Preserve Windows drive and UNC prefixes in bounded configuration paths;
+  retain the authorized-root containment check. The Windows native guest
+  regression exposed the extra leading slash in the previous normalization.
+- Poll for the hard-deadline outcome within the existing bounded test wait
+  instead of assuming its report arrives exactly 450 ms later under CI load.
+- Default plugin tool windows to the existing `onUse` stripe policy. They stay
+  in More Tool Windows until opened; existing pin/hide choices still apply.
+  In the running installed app, the user's sidebar was set to icons only and
+  the algorithm project's Spring views moved into More. The menu was checked
+  to confirm all three Spring views remain available; the screenshot was
+  inspected inline. No source code in the user's project was edited.
+
+Focused validation: 237 Spring plugin tests, both native deadline/real-WASM
+regressions, 166 plugin/tool-window frontend tests, five release preparation
+tests and four resource tests pass. Spring plugin clippy with warnings denied
+and frontend typecheck pass. The guest was rebuilt after its source changes.
