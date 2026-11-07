@@ -125,6 +125,38 @@ checks an approved IntelliJ launch specification, completion and definition. Its
 `--start-trial` switch must only be used with explicit user authorization. Neither
 probe edits source files. Imports may create IDE metadata or populate tool caches.
 
+## Spring Bean injection milestone
+
+The personal fork vendors the MIT Spring Beans Navigator and its `spring-text`
+source helpers (fixed upstream commit in `plugins/official/spring-beans/UPSTREAM.md`).
+It adds conservative Java project-local missing/ambiguous injection warnings,
+recognizes MyBatis `@Mapper` beans, filters qualifiers before selecting primary
+beans, and does not navigate to an arbitrary first bean when candidates conflict.
+A single candidate has a Spring injection gutter target; Go to Definition can
+list multiple candidates. Optional, provider and collection injection, library
+types, and profile/condition-dependent cases are excluded from these warnings.
+`springBeans.checkInjectionResolution` controls this new check.
+
+This source scanner is not a complete Spring context evaluator: generic type
+arguments, component-scan boundaries, programmatic registration and conditional
+auto-configuration need further work. It reports project-index warnings, not
+proof that a runtime application will fail.
+
+The Mac setup keeps IntelliJ for Java and JDT for run/debug plus Spring's Java
+model bridge. The Spring profile's JDT bundles and `spring-boot` section may be
+merged into that setup while retaining IntelliJ's Java profile; do not overwrite
+its existing Java SDK, Maven or JDT feature settings. Disable the replaced
+community Spring Boot configuration provider to avoid mixed metadata versions.
+
+The Java 8 demo includes isolated `src/test/java/dev/openidea/beanchecks` examples
+for missing beans, ambiguous injection and primary/qualifier navigation. They
+are outside the running application's component scan. Three real-context tests
+check these outcomes, alongside its two existing application/MyBatis tests.
+
+The source includes independent Spring gutter assets. The user's local preview
+uses original Spring icons from their installed IDEA; those commercial resources
+remain outside this source tree and are not included in its license.
+
 ## Remaining acceptance work, in order
 
 1. Package the native bridge and verify editor completion acceptance, definition,

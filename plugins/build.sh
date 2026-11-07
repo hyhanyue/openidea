@@ -46,7 +46,9 @@ list() {
 
 # Prints the fingerprint of everything plugin $1's component is built from.
 fingerprint() {
-  { list "$1" .; list "$repo" sdk/rust/openidea-plugin/Cargo.toml sdk/rust/openidea-plugin/src sdk/rust/openidea-plugin/wit wit; } |
+  { list "$1" .; list "$repo" sdk/rust/openidea-plugin/Cargo.toml sdk/rust/openidea-plugin/src sdk/rust/openidea-plugin/wit wit;
+    if grep -q '^spring-text = ' "$1/Cargo.toml"; then list "$repo" plugins/support/spring-text; fi;
+  } |
     sha256 | cut -d' ' -f1
 }
 
