@@ -905,6 +905,10 @@ fn copy_snapshot(from: &Path, to: &Path) -> IdeResult<()> {
         fs::set_permissions(to, metadata.permissions())?;
     } else if metadata.is_file() {
         fs::copy(from, to)?;
+        // macOS copyfile preserves old mtimes. Restored Java sources must
+        // invalidate incremental compiler output built after the refactoring.
+        #[cfg(target_os = "macos")]
+        fs::File::open(to)?.set_modified(SystemTime::now())?;
     } else {
         return Err(IdeError::invalid("cannot snapshot a special file"));
     }
