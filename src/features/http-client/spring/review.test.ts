@@ -61,4 +61,14 @@ describe("reviewed unresolved and alias boundaries", () => {
   it("does not guess that external wildcard annotations are Spring", () => {
     expect(springControllers('import foreign.*; @RestController class C { @GetMapping("/x") void x(){} }')).toEqual([]);
   });
+  it("reuses constants across concatenation branches without confusing them with a cycle", () => {
+    const source =
+      'class A { static final String BASE="/a"; } class B { static final String BASE="/b"; } @RestController class C { static final String BASE="/c"; @GetMapping(BASE+BASE) void repeated(){} @GetMapping(A.BASE+B.BASE) void qualified(){} }';
+    expect(springControllers(source)[0]?.endpoints.map((e) => e.paths)).toEqual([["/c/c"], ["/a/b"]]);
+    expect(
+      springControllers(
+        "@RestController class C { static final String A=B; static final String B=A; @GetMapping(A) void cycle(){} }",
+      )[0]?.endpoints,
+    ).toEqual([]);
+  });
 });

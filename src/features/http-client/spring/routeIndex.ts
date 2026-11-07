@@ -1,6 +1,7 @@
 /** Source-scoped Spring model shared by search, editor menus and request generation. */
 import { onEditorEvent } from "@/editor/api";
 import { call, commands, onIdeEvent } from "@/platform/ipc";
+import { useProject } from "@/platform/project";
 import { ipcPath, isSameOrInside } from "@/platform/paths";
 import { registerEndpointProvider, type EndpointEntry } from "@/workbench/contributions";
 import { projectControllers, springControllers, type Controller } from "./endpoints";
@@ -54,6 +55,12 @@ export function registerSpringEndpointProvider(): () => void {
   const unsubscribe = onIdeEvent("fsChanged", (e) => {
     if ([...e.created, ...e.modified, ...e.removed].some((p) => isRouteSource(String(p)))) clearRouteIndex();
   });
+  const unproject = useProject.subscribe((state, prior) => {
+    if (state.project?.root !== prior.project?.root) {
+      overlays.clear();
+      clearRouteIndex();
+    }
+  });
   const uneditor = onEditorEvent((e) => {
     if ((e.type === "docClosed" || e.type === "docSaved") && isRouteSource(e.path)) {
       overlays.delete(ipcPath(e.path));
@@ -62,6 +69,7 @@ export function registerSpringEndpointProvider(): () => void {
   });
   return () => {
     unsubscribe();
+    unproject();
     uneditor();
     unregister();
     overlays.clear();

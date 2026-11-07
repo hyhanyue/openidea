@@ -21,6 +21,10 @@
 - Use native gutter buttons with keyboard activation and existing translated labels. New CSS resets use transparent/inherited colors and existing layout tokens. No new user-visible catalog keys were introduced.
 - Generate all method/path variants or the selected menu variant. Request-body lookup uses inherited declaration imports and qualified concrete generic DTO types.
 
+## Final audit checkpoint
+
+The reviewed mapping/model implementation is committed as `be7c77ec` after the imported WIP. A subsequent small audit fixes constant reuse across concatenation branches (reproduced as a failing test first), refreshes gutter choices before opening them, abandons request generation if its document/project changed during the scan, and releases overlays on project switches. The final HTTP suite has 64 passing tests, including the new generation race and project-switch cases. Full-suite validation began on the reviewed checkpoint; the final changed modules were re-run separately afterward.
+
 ## Evidence and reproduction
 
 `fixtures/java-spring-mappings/README.md` documents regeneration. `ground-truth.json` is emitted by real MVC and WebFlux RequestMappingHandlerMapping instances using Boot 2.7.18 / Spring 5.3.31 on JDK8. Maven runs only inside this clone, uses a private dependency cache at `../maven-repo`, and opens no network listener. Ten Java tests cover MockMvc dispatch, multilevel aliases, defaults, conflicts, custom stereotypes, cross-file generic interfaces and parents, overloads, foreign annotation names and unrestricted/union methods. The TypeScript ground-truth test compares every static handler against both framework registries.
@@ -29,12 +33,12 @@ The initial five new review regressions all failed against the imported WIP befo
 
 ## Validation completed
 
-- `node_modules/.bin/vitest run src/features/http-client`: 8 files, 61 tests passed.
+- `node_modules/.bin/vitest run src/features/http-client`: 8 files, 64 tests passed.
 - Real JDK8 Maven fixture: 10 tests passed, 0 failures/errors. Ground-truth evidence regenerated after the final fixture extension.
 - `node_modules/.bin/tsrs --noEmit` and tsconfig.node/perf/scripts/smoke projects: passed.
 - `node_modules/.bin/tsc --noEmit && node_modules/.bin/vite build`: passed; existing chunk-size/dynamic-import warnings.
 - `node_modules/.bin/oxlint`: passed, existing warnings in unrelated BuildView/VCS/logcat/List/notebook modules. Targeted Spring lint is clean.
-- `node_modules/.bin/oxfmt --check`: all 2102 matched files passed before the last regression additions; targeted Spring formatting and `git diff --check` passed afterward.
+- `node_modules/.bin/oxfmt --check`: all 2102 matched files passed after the final regression additions; `git diff --check` passed.
 - `node_modules/.bin/knip`: passed with one existing ignore-pattern configuration hint.
 - Shared toolchain `rustfmt --edition 2024` on the two owned Rust files: passed.
 - Full frontend suite: running (two workers to limit contention); final result will be appended.

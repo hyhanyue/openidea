@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { commands, emitLocalIdeEvent } from "@/platform/ipc";
+import { useProject } from "@/platform/project";
 import { ipcPath } from "@/platform/paths";
 import { searchEndpoints } from "@/workbench/contributions";
 import {
@@ -192,5 +193,17 @@ describe("shared model revisions and cancellation", () => {
     updateRouteSource(source().path, source("edited", "/edited").text);
     expect((await routeIndex("/p"))[0]?.methodName).toBe("edited");
     expect(scanSources).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases unsaved overlays and pending scans when the project switches", async () => {
+    dispose = registerSpringEndpointProvider();
+    scanSources.mockResolvedValue({ status: "ok", data: [source()] });
+    updateRouteSource(source().path, source("unsaved", "/unsaved").text);
+    expect((await routeIndex("/p"))[0]?.methodName).toBe("unsaved");
+    useProject.setState({ project: { root: "/other" } as never });
+    expect(await routeIndex("/other")).toEqual([]);
+    useProject.setState({ project: { root: "/p" } as never });
+    expect((await routeIndex("/p"))[0]?.methodName).toBe("searchMenus");
+    useProject.setState({ project: null });
   });
 });

@@ -89,7 +89,7 @@ export class Constants {
     }
   }
 
-  /** Every element of an array (`{a, b}`, `[a, b]`, `arrayOf(a, b)`) or the single value; unresolvable ones dropped. */
+  /** Every element of an array (`{a, b}`, `[a, b]`, `arrayOf(a, b)`) or the single value; unknown expressions return no values. */
   strings(expr: Expr | undefined, enums = false): string[] {
     return this.resolvedStrings(expr, enums) ?? [];
   }
@@ -133,8 +133,11 @@ export class Constants {
             /\$\{(\w+)\}|\$([A-Za-z_]\w*)/g,
             (m, a: string | undefined, b: string | undefined) => {
               const name = (a ?? b)!;
-              const init = seen.has(name) ? undefined : this.field(name, scope);
-              return init ? (this.value(init.expression, false, new Set([...seen, name]), init.scope) ?? m) : m;
+              const init = this.field(name, scope),
+                key = `${init?.scope}.${name}`;
+              return init && !seen.has(key) && seen.size < 64
+                ? (this.value(init.expression, false, new Set([...seen, key]), init.scope) ?? m)
+                : m;
             },
           );
     if (part.length === 1 && part[0]!.kind === "num") return part[0]!.text;
@@ -147,9 +150,11 @@ export class Constants {
     const qualifier = names[names.length - 2];
     if (qualifier === "MediaType") return MEDIA_TYPES[last.replace(/_VALUE$/, "")] ?? null;
     const init = this.field(names.join("."), scope);
-    if (init && !seen.has(last)) {
-      seen.add(last);
-      return this.value(init.expression, enums, seen, init.scope);
+    if (init) {
+      const key = `${init.scope}.${last}`;
+      return seen.has(key) || seen.size >= 64
+        ? null
+        : this.value(init.expression, enums, new Set([...seen, key]), init.scope);
     }
     return enums ? last : null;
   }

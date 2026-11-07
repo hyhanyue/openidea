@@ -210,9 +210,14 @@ export function menuGroupItems(ctx: MenuGroupContext): MenuItem[] {
 export async function generateAtCaret(scope: "endpoint" | "controller"): Promise<void> {
   const e = activeEditor();
   if (!e || !SPRING_LANGUAGES.has(e.ctx.language)) return;
-  const text = e.view.state.doc.toString();
-  const controllers = await controllersForSource(useProject.getState().project?.root ?? null, e.ctx.path, text);
-  const { controller, endpoint } = springAt(controllers, e.view.state.selection.main.head);
+  const doc = e.view.state.doc,
+    offset = e.view.state.selection.main.head;
+  const text = doc.toString(),
+    root = useProject.getState().project?.root ?? null;
+  const controllers = await controllersForSource(root, e.ctx.path, text);
+  if (activeEditor() !== e || e.view.state.doc !== doc || (useProject.getState().project?.root ?? null) !== root)
+    return;
+  const { controller, endpoint } = springAt(controllers, offset);
   const endpoints = scope === "endpoint" ? (endpoint ? [endpoint] : []) : (controller?.endpoints ?? []);
   if (!endpoints.length) {
     notifications().notify({
@@ -374,8 +379,21 @@ export function springEditorExtension(ctx: EditorDocContext): Extension {
         RangeSet.of(
           view.state.field(marksField).map((m) =>
             new SpringMarker(m, (el) => {
-              const rect = el.getBoundingClientRect();
-              showContextMenu({ x: rect.left, y: rect.bottom + 2 }, m.items(path, view.state.doc.toString()));
+              const doc = view.state.doc,
+                text = doc.toString(),
+                root = useProject.getState().project?.root ?? null;
+              void controllersForSource(root, path, text).then((controllers) => {
+                if (
+                  !view.dom.isConnected ||
+                  view.state.doc !== doc ||
+                  (useProject.getState().project?.root ?? null) !== root
+                )
+                  return;
+                const current = computeMarks(view.state, controllers).find((mark) => mark.pos === m.pos);
+                if (!current) return;
+                const rect = el.getBoundingClientRect();
+                showContextMenu({ x: rect.left, y: rect.bottom + 2 }, current.items(path, text));
+              });
             }).range(m.pos),
           ),
           true,

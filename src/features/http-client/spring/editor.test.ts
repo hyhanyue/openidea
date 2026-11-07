@@ -1,11 +1,12 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { _addEditor, _removeEditor, _setActiveEditor, type TextEditorHandle } from "@/editor/api";
 import { commands, emitLocalIdeEvent } from "@/platform/ipc";
 import { ipcPath } from "@/platform/paths";
 import { useProject } from "@/platform/project";
 import { showContextMenu, type MenuItem } from "@/ui";
-import { springEditorExtension, springMenuItems } from "./editor";
+import { generateAtCaret, springEditorExtension, springMenuItems } from "./editor";
 import { registerSpringEndpointProvider, routeIndex } from "./routeIndex";
 
 vi.mock("@/ui", async (original) => ({ ...(await original<typeof import("@/ui")>()), showContextMenu: vi.fn() }));
@@ -53,7 +54,7 @@ describe("editor consumers of the shared Spring model", () => {
     const choice = springMenuItems(source.path, source.text, source.text.indexOf("get()"))[0]!;
     expect(choices(choice)).toEqual(["POST /old", "POST /second", "PUT /old", "PUT /second"]);
     (parent.querySelectorAll(".cm-openidea-gutter-spring button")[1] as HTMLButtonElement).click();
-    expect(choices(vi.mocked(showContextMenu).mock.calls[0]?.[1][0])).toEqual(choices(choice));
+    await expect.poll(() => choices(vi.mocked(showContextMenu).mock.calls[0]?.[1][0])).toEqual(choices(choice));
     const dependency = editor("/p/Api.java", api("/old").text);
     dependency.view.dispatch({
       changes: { from: 0, to: dependency.view.state.doc.length, insert: api("/unsaved").text },
@@ -90,5 +91,42 @@ describe("editor consumers of the shared Spring model", () => {
     finish({ status: "ok", data: [source, api("/late")] });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("abandons request generation when the document changes during a pending project scan", async () => {
+    useProject.setState({ project: { root: "/p" } as never });
+    dispose = registerSpringEndpointProvider();
+    let finish!: (value: { status: "ok"; data: (typeof source)[] }) => void;
+    scan.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({ doc: source.text, selection: { anchor: source.text.indexOf("get()") } }),
+    });
+    views.push(view);
+    const handle = {
+      view,
+      ctx: { path: source.path, language: "java", doc: 1, uiMode: null, readOnly: false },
+    } as TextEditorHandle;
+    _addEditor(handle);
+    _setActiveEditor(handle);
+    const create = vi.spyOn(commands, "fsCreateFile");
+    try {
+      const pending = generateAtCaret("endpoint");
+      view.dispatch({ changes: { from: 0, insert: "// edited\n" } });
+      finish({ status: "ok", data: [source, api("/old")] });
+      await pending;
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      _removeEditor(handle);
+      _setActiveEditor(null);
+      create.mockRestore();
+    }
   });
 });
