@@ -1910,13 +1910,19 @@ fn coordinates(e: &Element, props: &HashMap<String, String>) -> Option<(String, 
 /// `<pluginManagement>` entry that provides its version (a parent POM, followed into
 /// the local repository when it is not in the project). `None` when there is no
 /// resolvable declaration here.
-pub fn goto_declaration(text: &str, path: &Path, pos: Pos, local_repo: Option<PathBuf>) -> Option<PomGoto> {
+pub fn goto_declaration(
+    workspace_root: &Path,
+    text: &str,
+    path: &Path,
+    pos: Pos,
+    local_repo: Option<PathBuf>,
+) -> Option<PomGoto> {
     let root = xml::parse(text).filter(|e| e.name == "project")?;
     let at = offset_at(text, pos);
     if let Some((name, _, _)) = property_ref_at(text, at)
         && !name.is_empty()
     {
-        return property_target(text, path, name, local_repo);
+        return property_target(workspace_root, text, path, name, local_repo);
     }
     // A `<dependency>` / `<plugin>` in a declaration position: its version may come
     // from a management entry of this POM or an ancestor's.
@@ -1929,13 +1935,13 @@ pub fn goto_declaration(text: &str, path: &Path, pos: Pos, local_repo: Option<Pa
         "dependency" => PomGotoKind::ManagedDependency,
         _ => PomGotoKind::ManagedPlugin,
     };
-    managed_target(text, path, e, kind, local_repo)
+    managed_target(workspace_root, text, path, e, kind, local_repo)
 }
 
 /// The parent POMs of the POM in `text` at `path`, child-first (its `<parent>` refs,
 /// via `relativePath` in the project or the local repository), with their texts.
-fn parent_chain(path: &Path, text: &str, local_repo: Option<PathBuf>) -> Vec<(PathBuf, String)> {
-    let mut resolver = Resolver::new(path.parent().unwrap_or(Path::new("")), local_repo, &[]);
+fn parent_chain(workspace_root: &Path, path: &Path, text: &str, local_repo: Option<PathBuf>) -> Vec<(PathBuf, String)> {
+    let mut resolver = Resolver::new(workspace_root, local_repo, &[]);
     let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut chain = vec![(path.clone(), text.to_owned())];
     let mut dir = path.parent().unwrap_or(Path::new("")).to_path_buf();
@@ -1969,10 +1975,16 @@ fn properties_at(resolver: &mut Resolver, chain: &[(PathBuf, String)], i: usize)
 /// coordinate elements, the rest to the first `<properties>` entry along the parent
 /// chain declaring it (a child's definition wins over a parent's; an active
 /// profile's counts as the POM's own). The winner's path, element range and name.
-fn property_target(text: &str, path: &Path, name: &str, local_repo: Option<PathBuf>) -> Option<PomGoto> {
+fn property_target(
+    workspace_root: &Path,
+    text: &str,
+    path: &Path,
+    name: &str,
+    local_repo: Option<PathBuf>,
+) -> Option<PomGoto> {
     let name = name.strip_prefix("pom.").map(|n| format!("project.{n}")).unwrap_or_else(|| name.to_owned());
-    let resolver = Resolver::new(path.parent().unwrap_or(Path::new("")), local_repo.clone(), &[]);
-    let chain = parent_chain(path, text, local_repo);
+    let resolver = Resolver::new(workspace_root, local_repo.clone(), &[]);
+    let chain = parent_chain(workspace_root, path, text, local_repo);
     // `project.parent.*` (and the legacy `parent.*` spellings) are declared by the
     // clicked POM's own `<parent>` section.
     let parent_key = match name.as_str() {
@@ -2051,14 +2063,15 @@ fn property_target(text: &str, path: &Path, name: &str, local_repo: Option<PathB
 /// parent chain, child-first (the nearest declaration wins). Coordinates are matched
 /// after interpolation with each POM's effective properties.
 fn managed_target(
+    workspace_root: &Path,
     text: &str,
     path: &Path,
     e: &Element,
     kind: PomGotoKind,
     local_repo: Option<PathBuf>,
 ) -> Option<PomGoto> {
-    let mut resolver = Resolver::new(path.parent().unwrap_or(Path::new("")), local_repo.clone(), &[]);
-    let chain = parent_chain(path, text, local_repo);
+    let mut resolver = Resolver::new(workspace_root, local_repo.clone(), &[]);
+    let chain = parent_chain(workspace_root, path, text, local_repo);
     let key = coordinates(e, &properties_at(&mut resolver, &chain, 0))?;
     let (section, item) = match kind {
         PomGotoKind::ManagedDependency => ("dependencyManagement/dependencies", "dependency"),
@@ -2973,7 +2986,8 @@ mod tests {
 </project>"#
         );
         let path = Path::new("/tmp/pom.xml");
-        let goto = goto_declaration(&text, path, at(&text, "${example.version}"), None).unwrap();
+        let goto =
+            goto_declaration(path.parent().unwrap(), &text, path, at(&text, "${example.version}"), None).unwrap();
         assert_eq!(goto.kind, PomGotoKind::Property);
         assert_eq!(goto.label, "example.version");
         assert_eq!(goto.path, path);
@@ -3004,11 +3018,74 @@ mod tests {
         write_parent_child(tmp.path(), &parent, &child);
         let path = tmp.path().join("app/pom.xml");
         let text = std::fs::read_to_string(&path).unwrap();
-        let goto = goto_declaration(&text, &path, at(&text, "${example.version}"), None).unwrap();
+        let goto = goto_declaration(tmp.path(), &text, &path, at(&text, "${example.version}"), None).unwrap();
         assert_eq!(goto.kind, PomGotoKind::Property);
         assert_eq!(goto.path, canon(&tmp.path().join("pom.xml")));
         let from = parent.find("<example.version>").unwrap();
         assert_eq!(goto.range.start, pos_at(&parent, from));
+    }
+
+    #[test]
+    fn navigation_infers_parent_coordinates_within_the_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = format!(
+            r#"{PARENT_HEADER}<packaging>pom</packaging>
+  <properties><library.group>com.example</library.group></properties>
+  <dependencyManagement><dependencies><dependency>
+    <groupId>${{library.group}}</groupId><artifactId>lib</artifactId><version>1.0</version>
+  </dependency></dependencies></dependencyManagement></project>"#
+        );
+        let child = r#"<project><modelVersion>4.1.0</modelVersion><parent/><artifactId>app</artifactId>
+  <dependencies><dependency><groupId>${library.group}</groupId><artifactId>lib</artifactId>
+  </dependency></dependencies></project>"#;
+        write_parent_child(tmp.path(), &parent, child);
+        let path = tmp.path().join("app/pom.xml");
+        let property = goto_declaration(tmp.path(), child, &path, at(child, "${library.group}"), None).unwrap();
+        assert_eq!(property.kind, PomGotoKind::Property);
+        assert_eq!(property.path, canon(&tmp.path().join("pom.xml")));
+        assert_eq!(property.range.start, pos_at(&parent, parent.find("<library.group>").unwrap()));
+        let managed = goto_declaration(tmp.path(), child, &path, at(child, "<artifactId>lib"), None).unwrap();
+        assert_eq!(managed.kind, PomGotoKind::ManagedDependency);
+        assert_eq!(managed.path, property.path);
+        assert_eq!(managed.label, "com.example:lib");
+    }
+
+    #[test]
+    fn navigation_does_not_infer_parents_outside_workspace_or_nested_maven_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = format!(
+            r#"{PARENT_HEADER}<packaging>pom</packaging>
+  <properties><example.version>1.0</example.version></properties></project>"#
+        );
+        let child = r#"<project><parent/><artifactId>app</artifactId><name>${example.version}</name></project>"#;
+        write_parent_child(tmp.path(), &parent, child);
+        let path = tmp.path().join("app/pom.xml");
+        assert_eq!(goto_declaration(path.parent().unwrap(), child, &path, at(child, "${example.version}"), None), None);
+        std::fs::create_dir_all(tmp.path().join("app/.mvn")).unwrap();
+        assert_eq!(goto_declaration(tmp.path(), child, &path, at(child, "${example.version}"), None), None);
+    }
+
+    #[test]
+    fn navigation_parent_chain_stops_at_a_repeated_pom() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (name, parent) in [("a", "b"), ("b", "a")] {
+            write(
+                tmp.path(),
+                &format!("{name}/pom.xml"),
+                &format!(
+                    r#"<project><parent><groupId>com.example</groupId><artifactId>{parent}</artifactId>
+  <version>1.0</version><relativePath>../{parent}/pom.xml</relativePath></parent>
+  <groupId>com.example</groupId><artifactId>{name}</artifactId><version>1.0</version></project>"#
+                ),
+            );
+        }
+        let path = tmp.path().join("a/pom.xml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let chain = parent_chain(tmp.path(), &path, &text, None);
+        assert_eq!(
+            chain.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(),
+            [canon(&path), canon(&tmp.path().join("b/pom.xml"))]
+        );
     }
 
     #[test]
@@ -3036,7 +3113,7 @@ mod tests {
         write_parent_child(tmp.path(), &parent, &child);
         let path = tmp.path().join("app/pom.xml");
         let text = std::fs::read_to_string(&path).unwrap();
-        let goto = goto_declaration(&text, &path, at(&text, "${example.version}"), None).unwrap();
+        let goto = goto_declaration(tmp.path(), &text, &path, at(&text, "${example.version}"), None).unwrap();
         assert_eq!(goto.path, canon(&path), "the child's own definition");
         let from = text.find("<example.version>").unwrap();
         let to = text.find("</example.version>").unwrap() + "</example.version>".len();
@@ -3074,7 +3151,7 @@ mod tests {
         write_parent_child(tmp.path(), &parent, &child);
         let path = tmp.path().join("app/pom.xml");
         let text = std::fs::read_to_string(&path).unwrap();
-        let goto = goto_declaration(&text, &path, at(&text, "<artifactId>example-lib"), None).unwrap();
+        let goto = goto_declaration(tmp.path(), &text, &path, at(&text, "<artifactId>example-lib"), None).unwrap();
         assert_eq!(goto.kind, PomGotoKind::ManagedDependency);
         assert_eq!(goto.label, "com.example:example-lib");
         assert_eq!(goto.path, canon(&tmp.path().join("pom.xml")));
@@ -3113,7 +3190,8 @@ mod tests {
         write_parent_child(tmp.path(), &parent, &child);
         let path = tmp.path().join("app/pom.xml");
         let text = std::fs::read_to_string(&path).unwrap();
-        let goto = goto_declaration(&text, &path, at(&text, "<artifactId>maven-compiler-plugin"), None).unwrap();
+        let goto =
+            goto_declaration(tmp.path(), &text, &path, at(&text, "<artifactId>maven-compiler-plugin"), None).unwrap();
         assert_eq!(goto.kind, PomGotoKind::ManagedPlugin);
         assert_eq!(goto.label, "org.apache.maven.plugins:maven-compiler-plugin");
         assert_eq!(goto.path, canon(&tmp.path().join("pom.xml")));
@@ -3146,7 +3224,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("app")).unwrap();
         std::fs::write(&path, &child).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        let goto = goto_declaration(&text, &path, at(&text, "${example.version}"), Some(repo)).unwrap();
+        let goto = goto_declaration(tmp.path(), &text, &path, at(&text, "${example.version}"), Some(repo)).unwrap();
         assert_eq!(goto.kind, PomGotoKind::Property);
         assert_eq!(goto.path, canon(&parent_dir.join("parent-1.0.pom")));
         assert_eq!(goto.range.start, pos_at(&parent, parent.find("<example.version>").unwrap()));
@@ -3169,7 +3247,7 @@ mod tests {
         write_parent_child(tmp.path(), &parent, &child);
         let path = tmp.path().join("app/pom.xml");
         let text = std::fs::read_to_string(&path).unwrap();
-        let goto = goto_declaration(&text, &path, at(&text, "${project.version}"), None).unwrap();
+        let goto = goto_declaration(tmp.path(), &text, &path, at(&text, "${project.version}"), None).unwrap();
         assert_eq!(goto.path, canon(&tmp.path().join("pom.xml")), "the child has no own <version>");
         assert_eq!(goto.range.start, pos_at(&parent, parent.find("<version>").unwrap()));
     }
@@ -3208,19 +3286,19 @@ mod tests {
         let path = tmp.path().join("app/pom.xml");
         let text = std::fs::read_to_string(&path).unwrap();
         // The property is declared nowhere along the chain.
-        assert_eq!(goto_declaration(&text, &path, at(&text, "${missing.key}"), None), None);
+        assert_eq!(goto_declaration(tmp.path(), &text, &path, at(&text, "${missing.key}"), None), None);
         // The dependency names its own version: it is the declaration.
-        assert_eq!(goto_declaration(&text, &path, at(&text, "<artifactId>other-lib"), None), None);
+        assert_eq!(goto_declaration(tmp.path(), &text, &path, at(&text, "<artifactId>other-lib"), None), None);
         // A management entry is a declaration itself, not a reference.
         let parent_path = tmp.path().join("pom.xml");
         let parent_text = std::fs::read_to_string(&parent_path).unwrap();
         assert_eq!(
-            goto_declaration(&parent_text, &parent_path, at(&parent_text, "<artifactId>managed-lib"), None),
+            goto_declaration(tmp.path(), &parent_text, &parent_path, at(&parent_text, "<artifactId>managed-lib"), None),
             None
         );
         // Offsets beyond the document, and non-POM documents, find nothing.
-        assert_eq!(goto_declaration(&text, &path, Pos::new(999, 0), None), None);
-        assert_eq!(goto_declaration("<project></project>", &path, Pos::new(0, 3), None), None);
+        assert_eq!(goto_declaration(tmp.path(), &text, &path, Pos::new(999, 0), None), None);
+        assert_eq!(goto_declaration(tmp.path(), "<project></project>", &path, Pos::new(0, 3), None), None);
     }
 
     #[test]
@@ -3241,7 +3319,8 @@ mod tests {
 </project>"#
         );
         let path = Path::new("/tmp/pom.xml");
-        let goto = goto_declaration(&text, path, at(&text, "${example.version}"), None).unwrap();
+        let goto =
+            goto_declaration(path.parent().unwrap(), &text, path, at(&text, "${example.version}"), None).unwrap();
         assert_eq!(goto.kind, PomGotoKind::Property);
         assert_eq!(goto.path, path);
     }

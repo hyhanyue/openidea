@@ -677,7 +677,7 @@ pub async fn maven_goto_declaration(host: &Host, window: &str, pom: String, pos:
         let settings = project.settings.effective();
         let repo = ide_sdk::apply::maven_local_repository(&project.root, &settings)
             .or_else(ide_build::maven::default_local_repo);
-        Ok(ide_build::maven::goto_declaration(&text, &path, pos, repo))
+        Ok(ide_build::maven::goto_declaration(&project.root, &text, &path, pos, repo))
     })
     .await
     .map_err(join_err)?
