@@ -218,6 +218,11 @@ test("gear › Theme previews the theme under the pointer and keeps the one chos
 
 test("Settings › Appearance › Theme previews the highlighted theme until Cancel", async ({ workbench: page }) => {
   const html = page.locator("html");
+  // Browser mode has no persisted settings; choose the theme Cancel must restore.
+  await page.getByRole("button", { name: "IDE and Project Settings", exact: true }).click();
+  await page.getByText("Theme", { exact: true }).click();
+  await page.getByText("Islands Dark", { exact: true }).click();
+  await expect(html).toHaveAttribute("data-theme", "dark");
   const dialog = await settings(page);
   await expect(html).toHaveAttribute("data-theme", "dark");
   await page.getByRole("button", { name: "Theme", exact: true }).click();

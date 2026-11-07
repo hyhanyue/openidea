@@ -21,6 +21,10 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Verify theme cancellation regression
+        run: pnpm exec playwright test e2e/themes.spec.ts -g 'Settings › Appearance › Theme previews the highlighted theme until Cancel'
+        env:
+          HOME: /root
       - run: pnpm e2e
         env:
           HOME: /root
