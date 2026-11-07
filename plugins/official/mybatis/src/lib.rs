@@ -3,7 +3,9 @@
 //! other: gutter arrows and Go to Definition on methods and statement ids,
 //! completion of statement ids and `#{parameters}`.
 
-use openidea_plugin::providers::{CompletionItem, CompletionKind, Document, LineMarker, Providers};
+mod generate;
+
+use openidea_plugin::providers::{CodeAction, CompletionItem, CompletionKind, Document, LineMarker, Providers};
 use openidea_plugin::text::{offset, position};
 use openidea_plugin::{Error, Invocation, Location, Plugin, Position, Project, Range, host, register_plugin};
 use std::collections::BTreeMap;
@@ -265,6 +267,14 @@ fn contains(r: Range, p: Position) -> bool {
 }
 
 impl Providers for Navigator {
+    fn code_actions(&mut self, doc: &Document, selection: Range) -> Vec<CodeAction> {
+        generate::actions(doc, selection)
+    }
+
+    fn resolve_code_action(&mut self, doc: &Document, action: CodeAction) -> Result<CodeAction, Error> {
+        generate::resolve(doc, action)
+    }
+
     fn line_markers(&mut self, doc: &Document) -> Vec<LineMarker> {
         let icon = if doc.language == "xml" { "implementing" } else { "implemented" };
         self.links(doc)
