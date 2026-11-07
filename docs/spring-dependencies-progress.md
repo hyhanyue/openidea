@@ -133,14 +133,12 @@ Spring views, toggle imports, then close the project while discovery is pending.
 
 No changes were made to MVC routes, `ops/routes.rs` or `commands/nav.rs`.
 
-
 Out-of-scope findings: the existing generic PluginView `setValue(initial)` effect
 triggers `react/set-state-in-effect` when linting that normally ignored directory.
 No unrelated UI behavior was changed to silence it; targeted lint passes with
 that one pre-existing rule excluded. Native `ide-host` glue and the fork staging
 package still need the main session's unified compile/packaging/UI acceptance.
 No FactoryBean runtime product type or dynamic registration is inferred.
-
 
 Local commits:
 
@@ -189,3 +187,20 @@ Full `plugins/build.sh --check`, strict shipped-component API checking, native
 rebuild. The individual module Clippy checks, frozen API tests and Spring WASM
 build passed here. The final Java bundle hash above was stable across repeated
 builds. No second heavy app/native build was started in parallel.
+
+## Integrated launch selection
+
+The integrating checkout now passes `environment::Snapshot.application` directly
+into dependency discovery and selects that application's source file to identify
+its Maven module. It no longer independently reads the persistent setting or
+falls back to the first source module. A conflicting or unavailable application
+selection leaves dependency discovery pending instead of borrowing another
+module's model. The source-only missing-Bean unit fixtures explicitly include a
+selected Boot application and a ready dependency model.
+
+The combined regression first failed with `(first/App.java, "")` while the
+second module was selected. It now checks the selected second module, a manual
+analysis override selecting the first module, and clearing conflicting window
+selection without issuing another discovery request. The SDK mock records
+project/path/application requests only for tests; production launch values are
+not added to this metadata.

@@ -83,6 +83,7 @@ struct State {
     terminals: Vec<MockTerminal>,
     locations: Vec<(String, u32, u32)>,
     settings: BTreeMap<String, String>,
+    spring_requests: Vec<(String, String, String)>,
 }
 
 /// A terminal the plugin opened.
@@ -286,6 +287,11 @@ impl MockHost {
     /// The value of one of the plugin's settings, as JSON (`true`, `"text"`).
     pub fn set_setting(&self, key: &str, json: &str) {
         self.state.borrow_mut().settings.insert(key.into(), json.into());
+    }
+
+    /// Project root, source path and selected application passed to the Spring model.
+    pub fn spring_requests(&self) -> Vec<(String, String, String)> {
+        self.state.borrow().spring_requests.clone()
     }
 
     /// A secret the user stored.
@@ -505,9 +511,10 @@ pub mod current {
         })
     }
 
-    pub fn project_spring_beans(_p: &ProjectRes, _path: &str, _context: &str) -> Result<Option<String>, Error> {
+    pub fn project_spring_beans(p: &ProjectRes, path: &str, context: &str) -> Result<Option<String>, Error> {
         with(|s| {
             require(s, "project.read")?;
+            s.spring_requests.push((p.root.clone(), path.into(), context.into()));
             Ok(Some(
                 s.settings
                     .get("__spring_model")

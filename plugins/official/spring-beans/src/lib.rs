@@ -74,14 +74,9 @@ impl<'a> World<'a> {
             generics: generics::Index::new(index.files().values()),
             context: context::Index::new(index.files()),
             dependencies: {
-                let selected = host::setting_string("springBeans.applicationClass").unwrap_or_default();
-                let root = index
-                    .files()
-                    .iter()
-                    .find(|(_, m)| m.types.iter().any(|t| t.qualified == selected))
-                    .or_else(|| index.files().iter().find(|(_, m)| m.auto_configuration))
-                    .or_else(|| index.files().iter().find(|(p, _)| p.ends_with(".java")));
-                dependencies::Snapshot::load(root.map(|(p, _)| p.as_str()), index.files())
+                let selected = environment::snapshot(index.files(), None).application;
+                let root = index.files().iter().find(|(_, m)| m.types.iter().any(|t| t.qualified == selected));
+                dependencies::Snapshot::load(root.map(|(p, _)| p.as_str()), &selected, index.files())
             },
             supers,
             injection_paths: index

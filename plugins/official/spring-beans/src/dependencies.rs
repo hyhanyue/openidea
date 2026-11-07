@@ -1,6 +1,6 @@
 //! The only bridge to dependency binaries: cached JDT symbols from an authorized build path.
 use crate::{Bean, Injection, context};
-use openidea_plugin::{Position, Range, host};
+use openidea_plugin::{Position, Range};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,11 +32,10 @@ fn strings(v: &Value) -> Vec<String> {
     v.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect()
 }
 impl Snapshot {
-    pub fn load(path: Option<&str>, files: &BTreeMap<String, crate::FileModel>) -> Self {
+    pub fn load(path: Option<&str>, selected: &str, files: &BTreeMap<String, crate::FileModel>) -> Self {
         let Some(path) = path else { return Self::default() };
         let Some(project) = spring_text::index::project_of(path) else { return Self::default() };
-        let selected = host::setting_string("springBeans.applicationClass").unwrap_or_default();
-        let Some(json) = project.spring_beans(path, &selected).ok().flatten() else { return Self::default() };
+        let Some(json) = project.spring_beans(path, selected).ok().flatten() else { return Self::default() };
         Self::parse(&json, files)
     }
     pub fn parse(json: &str, files: &BTreeMap<String, crate::FileModel>) -> Self {

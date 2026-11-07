@@ -136,6 +136,7 @@ fn setup() -> MockHost {
 #[test]
 fn project_injection_missing_conflict_qualifier_and_primary() {
     let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/App.java", "package com.acme; @SpringBootApplication class App {}");
     host.add_file("src/main/java/com/acme/Port.java", "package com.acme; public interface Port {}");
     let text = "package com.acme; @Service class Client { Client(Port port) {} }";
     let mut n = Navigator::default();
@@ -235,6 +236,7 @@ fn mybatis_mapper_is_a_bean_but_mapstruct_mapper_is_not() {
 #[test]
 fn resolution_diagnostics_clear_after_fix_and_can_be_disabled() {
     let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/App.java", "@SpringBootApplication class App {}");
     host.add_file("src/main/java/com/acme/Port.java", "interface Port {}");
     let mut n = Navigator::default();
     let broken = "@Service class Client { Client(Port port) {} }";
@@ -2646,6 +2648,7 @@ fn generic_arguments_substitute_through_nested_multilevel_hierarchy() {
 #[test]
 fn concrete_generic_missing_and_ambiguous_injections_are_reported() {
     let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/App.java", "package com.acme; @SpringBootApplication class App {}");
     host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
     host.add_file(
         "src/main/java/com/acme/One.java",
@@ -2737,6 +2740,7 @@ fn generic_array_arguments_and_parameter_order_are_preserved() {
 #[test]
 fn generic_array_dimensions_do_not_turn_single_injection_into_collection() {
     let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/App.java", "package com.acme; @SpringBootApplication class App {}");
     host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
     host.add_file(
         "src/main/java/com/acme/One.java",
@@ -2829,6 +2833,7 @@ fn selected_source_context_filters_profiles_scans_and_imported_factories() {
 #[test]
 fn property_conditions_and_unknown_environment_keep_candidates_consistent() {
     let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/App.java", "package com.acme; @SpringBootApplication class App {}");
     host.add_file("src/main/java/com/acme/Port.java", "package com.acme; interface Port {}");
     host.add_file("src/main/java/com/acme/On.java","package com.acme; @Service @ConditionalOnProperty(prefix=\"feature\",name=\"enabled\",havingValue=\"true\") class On implements Port {}");
     let text = "package com.acme; @Service class Client { Client(Port port) {} }";
@@ -2891,6 +2896,7 @@ fn real_java8_context_fixture_has_the_same_profile_candidates() {
 }
 
 fn dependency_model(host: &MockHost, text: &str, state: &str, qualified: &str) {
+    host.add_file("src/main/java/com/acme/App.java", "package com.acme; @SpringBootApplication class App {}");
     let inj = model::parse(&format!("{ROOT}/Client.java"), text).unwrap().injections[0].range;
     let pos = |p: Position| serde_json::json!({"line":p.line,"character":p.character});
     host.set_setting("__spring_model", &serde_json::json!({
@@ -3169,4 +3175,46 @@ fn real_java8_configuration_fixture_matches_sources_bindings_and_navigation() {
     assert!(items.iter().any(|i| i.label == "demo-dev.openidea.configuration.DemoProperties"));
     assert!(items.iter().any(|i| i.label == "dev.openidea.configuration.Plain"));
     assert!(items.iter().any(|i| i.label == "enabled-profile-dev.openidea.configuration.EnabledProfileProperties"));
+}
+
+#[test]
+fn dependency_model_follows_effective_launch_application_and_its_maven_module() {
+    let host = MockHost::install();
+    for (module, package) in [("first", "a"), ("second", "b")] {
+        host.add_file(
+            &format!("{module}/src/main/java/{package}/App.java"),
+            &format!("package {package}; @SpringBootApplication class App {{}}"),
+        );
+    }
+    host.set_setting(
+        "springBeans.launchContext",
+        &serde_json::json!({"version":1,"launch":{
+            "name":"Selected module", "mainClass":"b.App", "module":"second", "cwd":".", "inheritEnvironment":false,
+            "commandLineProperties":{},"systemProperties":{},"environment":{},"envFiles":[],"unresolvedSources":[]
+        }})
+        .to_string(),
+    );
+    let mut n = Navigator::default();
+    n.render(BEANS_VIEW, None, &host.invocation()).unwrap();
+    let requests = host.spring_requests();
+    assert!(!requests.is_empty());
+    assert!(
+        requests.iter().all(|(root, path, application)| root == "/project"
+            && path == "/project/second/src/main/java/b/App.java"
+            && application == "b.App"),
+        "{requests:?}"
+    );
+    host.set_setting("springBeans.applicationClass", "\"a.App\"");
+    n.render(BEANS_VIEW, None, &host.invocation()).unwrap();
+    assert_eq!(host.spring_requests().last().unwrap().1, "/project/first/src/main/java/a/App.java");
+    assert_eq!(host.spring_requests().last().unwrap().2, "a.App");
+    host.set_setting("springBeans.applicationClass", "\"\"");
+    host.set_setting("springBeans.launchContext", r#"{"version":1,"launch":null}"#);
+    let before = host.spring_requests().len();
+    n.render(BEANS_VIEW, None, &host.invocation()).unwrap();
+    assert_eq!(
+        host.spring_requests().len(),
+        before,
+        "conflicting window selections must not choose an arbitrary module"
+    );
 }
