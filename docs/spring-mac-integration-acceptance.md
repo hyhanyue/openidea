@@ -45,10 +45,25 @@ Detailed scope and limits remain in the six domain progress reports. Static
 source analysis cannot prove every runtime condition; the explicit runtime panel
 provides observed application data when Actuator is available.
 
+## Debug follow-up verification
+
+The two issues exposed by native acceptance have been integrated as `5965626c`
+and `a4fb798d`: adapter preflight / failed-attach cleanup, and the owned-process
+Debug Console bridge. The final native test attached Java 8 successfully and
+showed both the JDWP startup prefix and complete Spring Boot startup output in
+Debug Console. A subsequent request caused DispatcherServlet initialization
+logs to appear in the same console and returned HTTP 200 with the MyBatis data.
+Stop terminated that exact test JVM with exit code 130.
+
+The full frontend run passed 7,347 tests with six existing skips and exposed two
+Services display regressions plus three sandbox loopback binding failures.
+The three port tests passed when rerun with loopback access. After the Services
+fix, the affected Run/Debugger/Services/catalog suite passed all 95 files and
+1,147 tests with six existing skips. The independent run/debug chat also reports
+97 files and 1,163 passing tests with six skips. These counts describe separate
+runs, not a summed total.
+
 ## Remaining acceptance gates
 
-The native check exposed two owned-debug lifecycle issues: missing adapter
-preflight / failed-attach cleanup, and absent owned-process stdout in Debug
-Console. Their focused follow-ups are tracked in the existing run/debug chat.
-Final checks, package replacement and user review follow their integration.
+Final package replacement and user review follow the release build.
 Publishing remains conditional on the user's acceptance of the installed build.
