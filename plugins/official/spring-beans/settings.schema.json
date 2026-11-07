@@ -77,11 +77,11 @@
     },
     "springBeans.applicationClass": {
       "type": "string",
-      "title": "Spring source context: application class (fully qualified; empty selects the only Boot application)"
+      "title": "Spring source context: application class (fully qualified; blank follows the launch or unique Boot application)"
     },
     "springBeans.activeProfiles": {
       "type": "string",
-      "title": "Spring source context: active profiles (comma separated; empty means default; unset means unknown)"
+      "title": "Spring source context: active profiles override (comma separated; blank follows launch/configuration; use default for the default profile)"
     },
     "springBeans.propertyOverrides": {
       "type": "string",

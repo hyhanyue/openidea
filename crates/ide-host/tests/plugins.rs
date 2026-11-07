@@ -3050,3 +3050,68 @@ fn fork_defaults_migrate_personal_spring_icons_and_remove_old_link() {
     let installed = f.host.info_of("hyhanyue.spring-beans").unwrap().path;
     assert_eq!(std::fs::read_to_string(installed.join("icons/spring-bean.svg")).unwrap(), icon);
 }
+
+#[test]
+fn fork_spring_wasm_consumes_launch_context_without_persisting_it() {
+    const ID: &str = "hyhanyue.spring-beans";
+    let f = fixture(Limits::default());
+    let pkg = f._tmp.path().join("spring-source");
+    copy_dir(&repo().join("plugins/official/spring-beans"), &pkg);
+    let manifest = pkg.join("plugin.toml");
+    std::fs::write(&manifest, std::fs::read_to_string(&manifest).unwrap().replace("aritti.spring-beans", ID)).unwrap();
+    let sources = f.project.join("src/main/java/example");
+    std::fs::create_dir_all(&sources).unwrap();
+    for (file, text) in [
+        ("App.java", "package example; @SpringBootApplication class App {}"),
+        ("Dev.java", "package example; @Service @Profile(\"dev\") class Dev {}"),
+        ("Prod.java", "package example; @Service @Profile(\"prod\") class Prod {}"),
+    ] {
+        std::fs::write(sources.join(file), text).unwrap();
+    }
+    let persistent =
+        serde_json::Map::from_iter([("springBeans.propertyOverrides".into(), serde_json::json!("manual.flag=true"))]);
+    f.workspace.settings.lock().insert(ID.into(), persistent.clone());
+    assert_eq!(f.install(&pkg).status, PluginStatus::Inactive);
+    let select =
+        |client: &str, profile: Option<&str>| {
+            let mut inv = f.inv();
+            inv.client = Some(client.into());
+            let context = profile.map(|profile| serde_json::json!({"version":1,"launch":{
+            "configId":format!("user:{profile}"),"name":profile,"kind":"spring-boot","persisted":false,
+            "mainClass":"example.App","module":"","cwd":".",
+            "profiles":{"state":"known","values":[profile],"source":"commandLine"},
+            "commandLineProperties":{"spring.profiles.active":{"state":"known","value":profile}},
+            "systemProperties":{},"environment":{},"inheritEnvironment":false,"envFiles":[],"unresolvedSources":[]
+        }}));
+            let request = serde_json::json!({"projectRoot":to_ipc(&f.project),"context":context});
+            f.host.run_command(ID, "openidea.setLaunchContext", Some(&request.to_string()), inv).unwrap();
+        };
+    let beans = |client: Option<&str>| {
+        let mut inv = f.inv();
+        inv.client = client.map(str::to_owned);
+        match f.host.render_view(ID, "beans", None, inv).unwrap().body {
+            ide_plugin::ViewBody::Tree(items) => items.into_iter().map(|i| i.label).collect::<Vec<_>>(),
+            body => panic!("{body:?}"),
+        }
+    };
+    select("main", Some("dev"));
+    assert!(
+        eventually(|| {
+            let names = beans(Some("main"));
+            names.contains(&"dev".into()) && !names.contains(&"prod".into())
+        }),
+        "beans={:?}; configuration={:?}",
+        beans(Some("main")),
+        f.host.render_view(ID, "configuration-sources", None, f.inv()).unwrap()
+    );
+    select("main", Some("prod"));
+    let names = beans(Some("main"));
+    assert!(names.contains(&"prod".into()) && !names.contains(&"dev".into()), "{names:?}");
+    select("other", Some("dev"));
+    let names = beans(None);
+    assert!(names.contains(&"prod".into()) && names.contains(&"dev".into()), "{names:?}");
+    select("main", None);
+    let names = beans(Some("main"));
+    assert!(names.contains(&"prod".into()) && names.contains(&"dev".into()), "{names:?}");
+    assert_eq!(f.workspace.settings.lock().get(ID), Some(&persistent));
+}

@@ -741,7 +741,7 @@ impl Snapshot {
         if !self.warnings.is_empty() {
             return None;
         }
-        let explicit = host::setting_string("springBeans.activeProfiles");
+        let explicit = host::setting_string("springBeans.activeProfiles").filter(|value| !value.trim().is_empty());
         let mut active = match explicit {
             Some(value) => profile_list(&value),
             None => match self.list_from("spring.profiles.active", None) {

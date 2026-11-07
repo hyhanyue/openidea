@@ -234,3 +234,14 @@ These limits produce visible uncertainty/truncation instead of silent certainty.
 
 The original demo, port 18088, installed app, primary checkout, main, tags and
 release state remain untouched. No pushes or releases were made.
+
+## Integrated native schema-default regression
+
+The real `hyhanyue.spring-beans` WASM, installed through the production PluginHost,
+initially ignored Run's dev/prod selection: unset native string settings are
+materialized as blank strings, whereas the consumer unit mock omitted them.
+The active-profile override now treats blank as automatic and `default` as an
+explicit default-profile request. Native WASM regression verifies dev → prod,
+conflicting windows, deselection, and unchanged persistent property settings.
+It passed after rebuilding the component; this is native host/guest proof,
+not a claim of Mac UI acceptance.

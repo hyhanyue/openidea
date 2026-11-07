@@ -65,8 +65,8 @@ methods in auto-configurations back off. Unknown environment values, dynamic
 scan/import logic and unsupported condition ordering remain labeled uncertain.
 The source view never claims to be the runtime application context.
 
-Profile settings are comma-separated; an empty value means `default`, while an
-unset value means unknown. Property overrides are `key=value` lines, with `!key`
+Profile settings are comma-separated; blank follows the selected launch/configuration,
+and `default` requests the default profile explicitly. Property overrides are `key=value` lines, with `!key`
 for a property known to be absent. Only mark the environment complete for a fully
 specified development launch with no inherited or external values. Native editor
 providers now read the owning project's settings, matching the tool windows.
@@ -127,3 +127,8 @@ registration names use Boot's prefix-and-qualified-name convention. Explicit
 `@EnableConfigurationProperties` registrations follow their enabling configuration's
 eligibility; the property class's own `@Profile` does not filter this registrar.
 Dynamic selectors/registrars remain uncertain.
+
+A blank active-profile analysis override follows the selected launch and config data.
+Set it to `default` to request the default profile explicitly. The native settings
+schema supplies blank strings for unset string settings, so blank must not erase
+the selected run configuration's profiles.
