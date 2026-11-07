@@ -188,6 +188,7 @@ fn configuration_prefix_and_leaf_safety() {
     assert_eq!(p.files["application.yml"].len(), 1);
     assert!(plan(&s, &at(&s, "application-dev.properties", "demo.label"), "demo.title").is_err());
     assert!(plan(&s, &at(&s, "Settings.java", "demo"), "other.app").is_err());
+    assert!(plan(&s, &at(&s, "Settings.java", "demo"), "App").is_err());
 }
 
 #[test]

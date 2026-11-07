@@ -417,6 +417,16 @@ pub fn plan(sources: &Sources, target: &Target, replacement: &str) -> Result<Pla
                 return Err("Configuration key must stay in the same parent mapping");
             }
             let prefixes: Vec<_> = all.iter().filter(|s| s.kind == Kind::Prefix).collect();
+            if prefixes.iter().filter(|p| p.name == *old || p.name.starts_with(&format!("{old}."))).any(|p| {
+                let renamed = format!("{replacement}{}", &p.name[old.len()..]);
+                renamed.split('.').any(|segment| {
+                    !segment.starts_with(|c: char| c.is_ascii_lowercase())
+                        || segment.ends_with('-')
+                        || !segment.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                })
+            }) {
+                return Err("Invalid configuration key");
+            }
             if prefixes.iter().any(|p| old.starts_with(&format!("{}.", p.name))) {
                 return Err(
                     "JavaBean property rename requires Java accessor refactoring; rename the configuration prefix instead",
