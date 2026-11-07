@@ -28,7 +28,6 @@ const appCheckUpdate = vi.fn(() => check.promise);
 const appRestart = vi.fn(async () => null);
 const cancelRequest = vi.fn(async () => null);
 const appBuildInfo = vi.fn(async () => ({ version: "0.1.21" }));
-const settingsSet = vi.fn(async () => ({ status: "ok", data: { general: {}, appearance: {} } }));
 
 vi.mock("@/platform/ipc", async (orig) => {
   const actual = await orig<typeof import("@/platform/ipc")>();
@@ -42,21 +41,12 @@ vi.mock("@/platform/ipc", async (orig) => {
       appRestart,
       cancelRequest,
       appBuildInfo,
-      settingsSet,
     },
   };
 });
 
-const {
-  checkForUpdates,
-  installUpdate,
-  notifyUpdate,
-  progressText,
-  updateSource,
-  CHECK_TASK_ID,
-  INSTALL_TASK_ID,
-  UPDATE_KEY,
-} = await import("../updates");
+const { checkForUpdates, installUpdate, notifyUpdate, progressText, CHECK_TASK_ID, INSTALL_TASK_ID, UPDATE_KEY } =
+  await import("../updates");
 const { provideNotificationService } = await import("@/workbench/contributions");
 const { useProject } = await import("@/platform/project");
 const { useTasks } = await import("@/workbench/tasks");
@@ -152,23 +142,19 @@ describe("Install and Restart", () => {
     expect(appRestart).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["a failed", "unavailable", "github", "CNB", "cnb"],
-    ["a failed", "unavailable", "cnb", "GitHub", "github"],
-    ["a cancelled (likely slow)", "cancelled", "cnb", "GitHub", "github"],
-  ])("offers %s download from %s again from the other source", async (_case, kind, from, label, to) => {
-    useProject.setState({ settings: { general: { updateSource: from }, appearance: {} } as unknown as Settings });
+  it.each(["unavailable", "cancelled"])("retries a %s download from the fork", async (kind) => {
+    useProject.setState({
+      settings: { general: { updateSource: "cnb" }, appearance: { locale: "zh" } } as unknown as Settings,
+    });
     const first = installUpdate("0.1.22");
     install.resolve({ status: "error", error: { kind, message: kind } });
     await first;
-    const action = notes.at(-1)!.actions!.at(-1)!;
-    expect(action.label).toBe(`Retry with ${label}`);
+    const action = notes.at(-1)!.actions![0]!;
+    expect(action.label).toBe("Retry");
 
     install = deferred();
     action.run();
-    await tick();
-    expect(settingsSet).toHaveBeenCalledWith("global", "general.updateSource", JSON.stringify(to));
-    expect(appInstallUpdate.mock.calls.at(-1)![0]).toBe(to);
+    expect(appInstallUpdate.mock.calls.map(([source]) => source)).toEqual(["github", "github"]);
     install.resolve(ok(null));
     await tick();
   });
@@ -219,36 +205,6 @@ describe("Check for Updates", () => {
     check.resolve(ok({ enabled: true, update: null }));
     await done;
     expect(notes.at(-1)?.title).toBe("OpenIDEA 0.1.21 is up to date");
-  });
-});
-
-describe("updateSource", () => {
-  const withSettings = (updateSource: string | undefined, locale: string | undefined) =>
-    useProject.setState({ settings: { general: { updateSource }, appearance: { locale } } as unknown as Settings });
-
-  it.each([
-    ["auto", "zh", "cnb"],
-    ["auto", "zh-CN", "cnb"],
-    ["auto", "en", "github"],
-    ["auto", "ko", "github"],
-    [undefined, "zh", "cnb"],
-    ["github", "zh", "github"],
-    ["cnb", "en", "cnb"],
-    ["bogus", "en", "github"],
-  ])("%s with the %s UI uses %s", (setting, locale, expected) => {
-    withSettings(setting, locale);
-    expect(updateSource()).toBe(expected);
-  });
-
-  it("is passed to the check and the install", async () => {
-    withSettings("cnb", "en");
-    void checkForUpdates();
-    expect(appCheckUpdate).toHaveBeenCalledWith("cnb");
-    check.resolve(ok({ enabled: true, update: null }));
-    void installUpdate("0.1.22");
-    expect(appInstallUpdate.mock.calls.at(-1)![0]).toBe("cnb");
-    install.resolve(ok(null));
-    await tick();
   });
 });
 

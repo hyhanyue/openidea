@@ -21,7 +21,7 @@
         "minHeight": 500,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "backgroundColor": "#E9EAEE",
+        "backgroundColor": "#26282C",
         "dragDropEnabled": true
       }
     ],
@@ -47,8 +47,8 @@
   "mainBinaryName": "openidea",
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFCOUU0MUFFOUY4NzZCNkQKUldSdGE0ZWZya0dlRzNnRFJUR2loUVdNZ1BmamxkNzFoaWNPUTBsRmI0cjhxZFRqQURybkMwakEK",
-      "endpoints": ["https://github.com/l0ng-ai/openidea/releases/latest/download/latest.json"]
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBQkMxNDRBRjY2MTI4QkMKUldTOEtHSDJTaFM4S29rd1Fqcmo0MHI3dVRCUkNoazFxM3JCWUNxakREODFaWUU1MUI5QjQ3b3gK",
+      "endpoints": ["https://github.com/hyhanyue/openidea/releases/latest/download/latest.json"]
     }
   }
 }

@@ -120,7 +120,7 @@ describe("settings staging", () => {
   });
 
   it("keeps failed and unsent edits staged and reports the error", async () => {
-    stage("appearance", "global", "appearance.theme", "dark");
+    stage("appearance", "global", "appearance.theme", "light");
     stage("editor.general", "global", "editor.showWhitespace", true);
     const { deps, set } = fakeBackend("editor.showWhitespace");
     expect(await applySettings(deps)).toBe(false);
@@ -128,7 +128,7 @@ describe("settings staging", () => {
     const s = useSettingsDialog.getState();
     expect(s.error).toMatch(/editor\.showWhitespace: invalid value/);
     expect(Object.values(s.staged).map((c) => c.key)).toEqual(["editor.showWhitespace"]);
-    expect(s.base.appearance.theme).toBe("dark");
+    expect(s.base.appearance.theme).toBe("light");
   });
 
   it("Reset discards one page's edits", () => {
@@ -275,7 +275,7 @@ describe("validateSettings", () => {
       keymapOverrides: { "file.save": ["Ctrl+S", 1], bad: "Meta+S" },
       general: null,
     });
-    expect(v.appearance).toMatchObject({ theme: "light", accent: "#3871e1", uiFontSize: 18, locale: "en", zoom: 100 });
+    expect(v.appearance).toMatchObject({ theme: "dark", accent: "#3871e1", uiFontSize: 18, locale: "en", zoom: 100 });
     expect(v.editor).toMatchObject({
       fontSize: 13,
       tabSize: 3,

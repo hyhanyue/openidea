@@ -30,6 +30,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { ref: "${{ env.TAG }}" }
+      - name: Require fork update signing key
+        if: github.repository == 'hyhanyue/openidea'
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error::Set the TAURI_SIGNING_PRIVATE_KEY repository secret before publishing updates."
+            exit 1
+          fi
       - name: Tag matches app version
         run: |
           app="v$(jq -r .version src-tauri/tauri.conf.json)"
@@ -355,10 +364,3 @@ jobs:
             await github.rest.repos.updateRelease({
               ...context.repo, release_id: Number(process.env.RELEASE_ID), draft: false,
             });
-
-  # The China mirror the updater's CNB source reads; a failure here leaves the GitHub release as is.
-  cnb-mirror:
-    needs: publish
-    uses: ./.github/workflows/cnb-mirror.yml
-    with: { tag: "${{ github.event.inputs.tag || github.ref_name }}" }
-    secrets: inherit

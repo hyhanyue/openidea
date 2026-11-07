@@ -176,6 +176,6 @@ describe("plugin themes", () => {
     expect(parsePluginThemeRef(ref)).toEqual({ pluginId: "acme.night", themeId: "night" });
     for (const bad of ["plugin:", "plugin:/night", "plugin:acme/", "acme/night", 3])
       expect(parsePluginThemeRef(bad)).toBeNull();
-    expect(validateSettings({ appearance: { theme: "plugin:/x" } }).appearance.theme).toBe("light");
+    expect(validateSettings({ appearance: { theme: "plugin:/x" } }).appearance.theme).toBe("dark");
   });
 });

@@ -1,6 +1,6 @@
 /* global document, localStorage, window */
 // Runs before the app's CSS loads: restores the last theme (theme.ts stores it)
-// so a new window starts in it instead of flashing the light default.
+// so a new window starts in it instead of flashing the default theme.
 // An external file because the CSP forbids inline scripts.
 try {
   const root = document.documentElement;

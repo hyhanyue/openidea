@@ -336,18 +336,16 @@ pub fn updates_configured<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
     !config_endpoints(app).is_empty() || update_endpoint_env().is_some()
 }
 
-/// Where updates are downloaded from (System Settings › Updates).
+/// Accepted for compatibility with clients that still send an update source.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum UpdateSource {
     /// The GitHub releases named in tauri.conf.json.
     #[default]
     Github,
-    /// The CNB mirror of the same releases, for networks where GitHub is slow.
+    /// The old mirror preference. This build uses the configured endpoint.
     Cnb,
 }
-
-const CNB_ENDPOINT: &str = "https://cnb.cool/l0ng-ai/openidea/-/releases/latest/download/latest.json";
 
 fn config_endpoints<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<String> {
     app.config()
@@ -360,29 +358,12 @@ fn config_endpoints<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The endpoints tried in order: `source` first, the other source when it fails or has
-/// no manifest. Bundles are signed, so either source's manifest and downloads verify.
-/// No official endpoint (a build without updates) means no mirror either.
-fn source_endpoints(official: Vec<String>, source: UpdateSource) -> Vec<String> {
-    if official.is_empty() {
-        return official;
-    }
-    let mirror = vec![CNB_ENDPOINT.to_string()];
-    match source {
-        UpdateSource::Github => [official, mirror].concat(),
-        UpdateSource::Cnb => [mirror, official].concat(),
-    }
-}
-
-fn updater(app: &AppHandle, source: UpdateSource) -> IdeResult<Option<tauri_plugin_updater::Updater>> {
+fn updater(app: &AppHandle) -> IdeResult<Option<tauri_plugin_updater::Updater>> {
     use tauri_plugin_updater::UpdaterExt;
     if !updates_configured(app) {
         return Ok(None);
     }
-    let endpoints = match update_endpoint_env() {
-        Some(url) => vec![url],
-        None => source_endpoints(config_endpoints(app), source),
-    };
+    let endpoints = update_endpoint_env().map(|url| vec![url]).unwrap_or_else(|| config_endpoints(app));
     let endpoints = endpoints
         .iter()
         .map(|u| u.parse().map_err(|e| IdeError::invalid(format!("update endpoint {u}: {e}"))))
@@ -400,7 +381,8 @@ fn updater(app: &AppHandle, source: UpdateSource) -> IdeResult<Option<tauri_plug
 #[tauri::command]
 #[specta::specta]
 pub async fn app_check_update(app: AppHandle, source: UpdateSource) -> IdeResult<UpdateCheck> {
-    let Some(updater) = updater(&app, source)? else {
+    let _ = source;
+    let Some(updater) = updater(&app)? else {
         return Ok(UpdateCheck { enabled: false, update: None });
     };
     let update = updater.check().await.map_err(|e| IdeError::unavailable(e.to_string()))?;
@@ -497,11 +479,12 @@ pub async fn app_install_update(
     request: RequestId,
     on_progress: Channel<UpdateProgress>,
 ) -> IdeResult<()> {
+    let _ = source;
     let _guard =
         InstallingGuard::acquire().ok_or_else(|| IdeError::unavailable("an update is already being installed"))?;
     let token = state.host.begin_request(request);
     let result = async {
-        let updater = updater(&app, source)?.ok_or_else(|| IdeError::unavailable("updates are not configured"))?;
+        let updater = updater(&app)?.ok_or_else(|| IdeError::unavailable("updates are not configured"))?;
         let update = tokio::select! {
             r = updater.check() => r.map_err(|e| IdeError::unavailable(e.to_string()))?,
             _ = token.cancelled() => return Err(IdeError::cancelled()),
@@ -565,12 +548,12 @@ mod tests {
     }
 
     #[test]
-    fn chosen_source_is_tried_first_and_the_other_after_it() {
-        let github = "https://github.com/l0ng-ai/openidea/releases/latest/download/latest.json".to_string();
-        assert_eq!(source_endpoints(vec![github.clone()], UpdateSource::Github), [github.clone(), CNB_ENDPOINT.into()]);
-        assert_eq!(source_endpoints(vec![github.clone()], UpdateSource::Cnb), [CNB_ENDPOINT.into(), github]);
-        // A build without an update endpoint stays without one.
-        assert!(source_endpoints(Vec::new(), UpdateSource::Cnb).is_empty());
+    fn packaged_updates_use_the_fork_release_feed() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        assert_eq!(
+            config["plugins"]["updater"]["endpoints"],
+            serde_json::json!(["https://github.com/hyhanyue/openidea/releases/latest/download/latest.json"])
+        );
     }
 
     #[test]

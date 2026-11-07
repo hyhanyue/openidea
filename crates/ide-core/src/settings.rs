@@ -420,7 +420,7 @@ pub struct MainToolbarSettings {
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
-            theme: "light".into(),
+            theme: "dark".into(),
             accent: "#3871e1".into(),
             ui_font_size: 13.0,
             locale: "en".into(),
