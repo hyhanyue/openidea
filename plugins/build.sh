@@ -8,6 +8,7 @@
 #   plugins/build.sh --check [...]   # change nothing tracked; fail if a checked-in
 #                                    # component is stale or a plugin doesn't build (CI)
 #   plugins/build.sh --fingerprint <plugin>  # source hash only; no Rust build or downloads
+#   plugins/build.sh --components-only [--check]  # WASM only, for SDK/API rebuilds
 #
 # Output: <plugin>/dist/plugin.wasm (referenced by `wasm = ...` in plugin.toml)
 # and <plugin>/dist/plugin.wasm.sources, a fingerprint of the sources it was
@@ -24,13 +25,16 @@ here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
 check=0
 fingerprint_only=0
-if [ "${1:-}" = "--check" ]; then
-  check=1
+components_only=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check) check=1 ;;
+    --fingerprint) fingerprint_only=1 ;;
+    --components-only) components_only=1 ;;
+    *) break ;;
+  esac
   shift
-elif [ "${1:-}" = "--fingerprint" ]; then
-  fingerprint_only=1
-  shift
-fi
+done
 
 if [ "$fingerprint_only" = 0 ]; then
   rustup target list --installed | grep -qx wasm32-wasip2 || rustup target add wasm32-wasip2
@@ -99,7 +103,7 @@ failed=0
 build() {
   local dir="$1"
   if [ "$fingerprint_only" = 1 ]; then fingerprint "$dir"; return; fi
-  if [ -f "$dir/web-src/package.json" ]; then build_web "$dir"; fi
+  if [ "$components_only" = 0 ] && [ -f "$dir/web-src/package.json" ]; then build_web "$dir"; fi
   [ -f "$dir/Cargo.toml" ] || return 0
   local name target out
   name="$(sed -n 's/^name *= *"\(.*\)"/\1/p' "$dir/Cargo.toml" | head -1)"

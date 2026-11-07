@@ -12,6 +12,11 @@ uses `plugins/build.sh --fingerprint` without compiling or downloading tools.
 Run `python3 -m unittest discover -s scripts -p test_fork_resources.py` for these
 packaging gates before preparing release resources.
 
+When only the SDK/API changes, `plugins/build.sh --components-only` rebuilds all
+Rust WASM plugins and current-API fixtures without reinstalling unrelated web
+editors. `--components-only --check` checks the same components; the normal full
+build and check still validate web resources too.
+
 The first setup migrates the earlier `*-local` development links. Personal
 Spring icon overrides from that local plugin are saved in app data and applied
 to the installed copy. Those assets are never part of the public package.
