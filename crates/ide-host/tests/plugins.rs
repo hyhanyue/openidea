@@ -2993,3 +2993,60 @@ fn invalid_plugin_icons_refuse_the_package() {
         assert!(err.contains(expected), "{id}: {err}");
     }
 }
+
+fn fork_resources(f: &Fixture) -> PathBuf {
+    let resources = f._tmp.path().join("fork-resources");
+    std::fs::create_dir_all(&resources).unwrap();
+    std::fs::write(resources.join("manifest.json"), "{}").unwrap();
+    for (folder, original, stable) in [
+        ("mybatis", "openidea.mybatis", "hyhanyue.mybatis"),
+        ("spring-beans", "aritti.spring-beans", "hyhanyue.spring-beans"),
+    ] {
+        let target = resources.join("plugins").join(folder);
+        copy_dir(&official(folder), &target);
+        let file = target.join("plugin.toml");
+        std::fs::write(&file, std::fs::read_to_string(&file).unwrap().replacen(original, stable, 1)).unwrap();
+    }
+    resources
+}
+
+#[test]
+fn fork_defaults_install_without_development_links_and_preserve_user_disable() {
+    let f = fixture(Limits::default());
+    let resources = fork_resources(&f);
+    let data = f._tmp.path().join("appdata");
+    ide_host::fork_defaults::bind_resources(&data, &resources).unwrap();
+    ide_host::fork_defaults::install_plugins(&f.host, &data).unwrap();
+    for id in ["hyhanyue.mybatis", "hyhanyue.spring-beans"] {
+        let info = f.host.info_of(id).unwrap();
+        assert_eq!(info.source, PluginSource::Installed);
+        assert!(info.enabled);
+        assert_ne!(info.status, PluginStatus::NeedsConsent);
+    }
+    f.host.set_enabled("hyhanyue.mybatis", false).unwrap();
+    ide_host::fork_defaults::install_plugins(&f.host, &data).unwrap();
+    assert!(!f.host.info_of("hyhanyue.mybatis").unwrap().enabled);
+}
+
+#[test]
+fn fork_defaults_migrate_personal_spring_icons_and_remove_old_link() {
+    let f = fixture(Limits::default());
+    let resources = fork_resources(&f);
+    let old = f._tmp.path().join("old-linked-spring");
+    copy_dir(&official("spring-beans"), &old);
+    let manifest = old.join("plugin.toml");
+    std::fs::write(
+        &manifest,
+        std::fs::read_to_string(&manifest).unwrap().replacen("aritti.spring-beans", "hyhanyue.spring-beans-local", 1),
+    )
+    .unwrap();
+    let icon = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\"><path fill=\"green\" d=\"M2 2h12v12H2z\"/></svg>";
+    std::fs::write(old.join("icons/spring-bean.svg"), icon).unwrap();
+    f.host.link(&old).unwrap();
+    let data = f._tmp.path().join("appdata");
+    ide_host::fork_defaults::bind_resources(&data, &resources).unwrap();
+    ide_host::fork_defaults::install_plugins(&f.host, &data).unwrap();
+    assert!(f.host.info_of("hyhanyue.spring-beans-local").is_err());
+    let installed = f.host.info_of("hyhanyue.spring-beans").unwrap().path;
+    assert_eq!(std::fs::read_to_string(installed.join("icons/spring-bean.svg")).unwrap(), icon);
+}

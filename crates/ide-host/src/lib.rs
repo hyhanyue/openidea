@@ -5,6 +5,7 @@
 
 pub mod data_dirs;
 pub mod environment;
+pub mod fork_defaults;
 mod formatter;
 mod java_runtime;
 mod kotlin_bridge;

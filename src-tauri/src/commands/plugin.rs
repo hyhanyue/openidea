@@ -76,6 +76,13 @@ fn schedule_remote_sync(app: &AppHandle) {
 /// Creates the host over `<app-data>/plugins` and loads installed plugins in
 /// the background (no Wasm is instantiated until an activation event).
 pub fn create_host(app: &AppHandle, data_dir: &Path, project_host: &Arc<ide_host::Host>) -> IdeResult<Arc<PluginHost>> {
+    if let Ok(resources) = app.path().resource_dir() {
+        if let Err(error) =
+            ide_host::fork_defaults::bind_resources(&project_host.local_data_dir, &resources.join("fork-defaults"))
+        {
+            tracing::warn!(%error, "cannot bind fork resources");
+        }
+    }
     let projects = Arc::downgrade(project_host);
     let app = app.clone();
     let sink = move |client: Option<&str>, event: PluginEvent| {
@@ -119,10 +126,14 @@ pub fn create_host(app: &AppHandle, data_dir: &Path, project_host: &Arc<ide_host
     host.set_project_policy(Arc::new(move |root| {
         weak.upgrade().is_some_and(|host| host.trust.trusted(root).unwrap_or(false))
     }));
+    let defaults_data = project_host.local_data_dir.clone();
     let loader = Arc::downgrade(&host);
     std::thread::Builder::new().name("plugin-load".into()).spawn(move || {
         let Some(host) = loader.upgrade() else { return };
         host.load_all();
+        if let Err(error) = ide_host::fork_defaults::install_plugins(&host, &defaults_data) {
+            tracing::error!(%error, "cannot install bundled fork plugins");
+        }
         drop(host);
         std::thread::sleep(STARTUP_FINISHED_DELAY);
         let Some(host) = loader.upgrade() else { return };

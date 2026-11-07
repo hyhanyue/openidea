@@ -43,3 +43,7 @@ CLAUDE.local.md
 
 # Local reference screenshots
 pycharm-screenshots/
+
+# Generated fork release resources
+/src-tauri/resources/fork-defaults/*
+!/src-tauri/resources/fork-defaults/README.txt

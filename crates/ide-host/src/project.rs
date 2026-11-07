@@ -197,6 +197,7 @@ impl Host {
                         .into_iter()
                         .chain(ide_sdk::java::usages_bundle(&data_dir))
                         .chain(ide_sdk::java::kotlin_bridge_bundle(&data_dir))
+                        .chain(crate::fork_defaults::spring_bundles(&data_dir, root))
                         .collect();
                     let min_java = ide_sdk::java::jdtls_min_java(cfg);
                     let jdks = ide_sdk::java::jdtls_jdks(min_java, &data_dir);
@@ -266,8 +267,13 @@ impl Host {
         }
         {
             let settings = settings.clone();
+            let data_dir = self.local_data_dir.clone();
+            let root = root.clone();
             lsp.set_servers_hook(Box::new(move |language, defined| {
-                ide_sdk::apply::language_servers(language.as_str(), defined, &settings.effective())
+                let effective = settings.effective();
+                let mut servers = ide_sdk::apply::language_servers(language.as_str(), defined, &effective);
+                crate::fork_defaults::add_spring_server(&data_dir, &root, language.as_str(), &effective, &mut servers);
+                servers
             }));
         }
         {
