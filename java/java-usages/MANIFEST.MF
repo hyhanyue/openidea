@@ -2,7 +2,7 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: OpenIDEA Java usages
 Bundle-SymbolicName: ai.openidea.usages;singleton:=true
-Bundle-Version: 1.9.0
+Bundle-Version: 1.10.0
 Bundle-Activator: ai.openidea.build.AutoBuildOutputs
 Import-Package: org.osgi.framework
 Bundle-RequiredExecutionEnvironment: JavaSE-21

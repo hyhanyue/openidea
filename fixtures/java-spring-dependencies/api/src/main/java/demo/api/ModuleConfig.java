@@ -1,0 +1,1 @@
+package demo.api; @org.springframework.context.annotation.Configuration public class ModuleConfig { @org.springframework.context.annotation.Bean public ModuleValue moduleValue() { return new ModuleValue(); } }

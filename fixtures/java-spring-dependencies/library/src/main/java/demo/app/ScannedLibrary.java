@@ -1,0 +1,1 @@
+package demo.app; @org.springframework.stereotype.Component public class ScannedLibrary {}

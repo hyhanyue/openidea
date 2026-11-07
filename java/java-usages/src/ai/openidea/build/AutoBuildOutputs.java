@@ -44,6 +44,7 @@ public final class AutoBuildOutputs implements BundleActivator, IResourceChangeL
 
     @Override
     public void stop(BundleContext context) {
+        ai.openidea.spring.BeansCommand.dispose();
         ResourcesPlugin.getWorkspace().removeResourceChangeListener(this);
     }
 

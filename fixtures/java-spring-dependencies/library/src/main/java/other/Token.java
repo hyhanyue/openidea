@@ -1,0 +1,1 @@
+package other; @org.springframework.stereotype.Component public class Token {}
