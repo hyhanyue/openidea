@@ -1,0 +1,80 @@
+name: Fork macOS Release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (e.g. v0.1.40)
+        required: true
+        type: string
+      publish:
+        description: Publish after verification (false keeps a draft for Mac acceptance)
+        default: true
+        type: boolean
+permissions:
+  contents: write
+concurrency:
+  group: fork-release-${{ inputs.tag }}
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+jobs:
+  mac:
+    if: github.repository == 'hyhanyue/openidea'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fork-macos-aarch64
+      - run: pnpm install --frozen-lockfile
+      - name: Validate release identity and updater key
+        env:
+          TAG: ${{ inputs.tag }}
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          test "v$(node -p 'JSON.parse(require("fs").readFileSync("src-tauri/tauri.conf.json")).version')" = "$TAG"
+          test -n "$SIGNING_KEY"
+      - name: Prepare verified default plugins and Spring Tools
+        run: python3 scripts/prepare-fork-resources.py
+      - name: Build signed macOS updater
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          tagName: ${{ inputs.tag }}
+          releaseName: OpenIDEA ${{ inputs.tag }}
+          releaseBody: |
+            Personal Mac release: MyBatis XML generation and SQL completion, Spring Bean inspection and navigation, bundled official Spring Tools, IDEA-style dark UI and MyBatisX icons enabled by default.
+            Java 8 project support uses an independent language-server JDK. Existing licensed IntelliJ configuration and local icon overrides are preserved.
+            Platform: macOS Apple Silicon. Includes a signed update manifest for this fork.
+          releaseDraft: true
+          prerelease: false
+          args: --target aarch64-apple-darwin --bundles app
+          uploadUpdaterJson: true
+      - name: Validate release contents
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          python3 scripts/verify-fork-release.py "$TAG" --download-dir "$RUNNER_TEMP/verify-release"
+      - name: Publish
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: gh release edit "$TAG" --draft=false --latest
