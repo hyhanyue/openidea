@@ -476,7 +476,7 @@ export function activate(): () => void {
         id: "run.rerunFailed",
         title: "Rerun Failed Tests",
         category: "Run",
-        icon: "rerun",
+        icon: "rerun-failed-tests",
         when: "projectOpen",
         keywords: ["failed tests", "rerun"],
         run: () => {

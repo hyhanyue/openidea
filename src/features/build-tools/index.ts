@@ -295,7 +295,7 @@ export function activate(): () => void {
         title: "Reload All Maven Projects",
         description: "Re-reads the effective POMs and dependency trees with Maven",
         category: "Maven",
-        icon: "refresh",
+        icon: "maven-reload-all",
         when: MAVEN_WHEN,
         keywords: ["maven", "sync", "reimport", "refresh"],
         run: () => syncTool("maven"),

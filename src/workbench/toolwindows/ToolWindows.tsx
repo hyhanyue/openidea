@@ -137,6 +137,7 @@ async function setShowToolWindowNames(on: boolean) {
 const STRIPE_MIN = 44;
 const STRIPE_DEFAULT = 56;
 const STRIPE_MAX = 96;
+const STRIPE_ICON_SIZE = 20;
 const STRIPE_KEY = "openidea.stripes.v1";
 
 type StripeSide = "left" | "right";
@@ -413,7 +414,7 @@ function StripeButton({
       {...tooltipAttrs(tw.title, shortcut)}
     >
       <span className={styles.stripeIcon}>
-        <Icon name={tw.icon} size={18} />
+        <Icon name={tw.icon} size={STRIPE_ICON_SIZE} />
         {tw.useBadge && <StripeBadge useBadge={tw.useBadge} />}
       </span>
       {showName && (
@@ -454,7 +455,7 @@ function StripeMore({ windows }: { windows: ToolWindowContribution[] }) {
         onClick={() => setOpen((v) => !v)}
         {...tooltipAttrs("More Tool Windows")}
       >
-        <Icon name="more-horizontal" size={18} />
+        <Icon name="more-horizontal" size={STRIPE_ICON_SIZE} />
       </button>
       <Menu
         open={open}
@@ -702,7 +703,7 @@ function HeaderRow({
               onClick={() => setMoreOpen((v) => !v)}
             />
             <IconButton
-              icon="minus"
+              icon="hide"
               title="Hide"
               shortcut={shortcutLabel("toolwindow.hideActive")}
               size="small"

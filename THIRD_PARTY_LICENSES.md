@@ -60,6 +60,9 @@ The artwork in `src-tauri/icons/source/idea.svg` comes from `product-backend.jar
 and supplies the splash, project-opening logo, and generated desktop icons.
 Matching interface SVGs were copied from the installed platform and plugin JARs,
 including JSX, TSX, npm and Spring Boot icons under `src/ui/openidea/`.
+The database tool window uses the `icons/expui/dbms*.svg` variants from
+`database-plugin-frontend.jar`. The additional Run, Debug and Maven toolbar
+icons come from the platform `app.jar` ExpUI assets.
 
 ## JetBrains IntelliJ Platform VCS log graph algorithms
 

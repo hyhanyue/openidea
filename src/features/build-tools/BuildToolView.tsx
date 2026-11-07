@@ -142,7 +142,12 @@ function Toolbar({ tool, selection }: { tool: BuildTool; selection: BuildNode[] 
       {syncing ? (
         <IconButton icon="stop" size="small" iconSize={16} action={`${tool}.cancelReload`} />
       ) : (
-        <IconButton icon="refresh" size="small" iconSize={16} action={`${tool}.reload`} />
+        <IconButton
+          icon={maven ? "maven-reload-all" : "refresh"}
+          size="small"
+          iconSize={16}
+          action={`${tool}.reload`}
+        />
       )}
       <IconButton icon="plus" size="small" iconSize={16} action={maven ? "maven.addProjects" : "gradle.linkProjects"} />
       <span className={styles.sep} />

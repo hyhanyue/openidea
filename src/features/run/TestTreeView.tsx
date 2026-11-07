@@ -73,15 +73,15 @@ function totalDuration(node: TestNode): number | undefined {
 export function StatusIcon({ status }: { status: TestStatus | null }) {
   switch (status) {
     case "passed":
-      return <Icon name="check" size={13} className={styles.passed} label="Passed" />;
+      return <Icon name="run-test-passed" label="Passed" />;
     case "failed":
-      return <Icon name="close" size={13} className={styles.failed} label="Failed" />;
+      return <Icon name="run-test-failed" label="Failed" />;
     case "skipped":
-      return <Icon name="minus" size={13} className={styles.skipped} label="Ignored" />;
+      return <Icon name="run-test-ignored" label="Ignored" />;
     case "running":
       return <Spinner size={11} />;
     default:
-      return <Icon name="clock" size={13} className={styles.skipped} label="Pending" />;
+      return <Icon name="run-test-pending" label="Pending" />;
   }
 }
 
@@ -196,17 +196,17 @@ export function TestTreeView({ results, version, cwd, selected, onSelect, runnin
         </span>
         <span className={styles.spacer} />
         <IconButton
-          icon="check"
+          icon="show-passed-tests"
           size="small"
-          iconSize={13}
+          iconSize={16}
           title="Show Passed"
           pressed={showPassed}
           onClick={() => toggle("showPassed")}
         />
         <IconButton
-          icon="minus"
+          icon="skip-tests"
           size="small"
-          iconSize={13}
+          iconSize={16}
           title="Show Ignored"
           pressed={showIgnored}
           onClick={() => toggle("showIgnored")}

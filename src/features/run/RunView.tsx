@@ -158,9 +158,8 @@ export function SessionPanel({
         />
         {rt.tests && (
           <IconButton
-            icon="rerun"
-            iconSize={14}
-            tone="danger"
+            icon="rerun-failed-tests"
+            iconSize={16}
             title="Rerun Failed Tests"
             shortcut={shortcutLabel("run.rerunFailed")}
             disabled={running || failedTests(session.id).length === 0}

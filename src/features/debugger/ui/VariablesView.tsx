@@ -282,7 +282,7 @@ export function VariablesView({
       items.push({ label: "Copy Value", icon: "copy", run: () => void navigator.clipboard?.writeText(node.value) });
       items.push({ label: "Copy Name", run: () => void navigator.clipboard?.writeText(node.name) });
       if (node.kind === "var" && node.evaluateName)
-        items.push({ label: "Add to Watches", icon: "eye", run: () => addWatch(node.evaluateName!) });
+        items.push({ label: "Add to Watches", icon: "debug-add-watch", run: () => addWatch(node.evaluateName!) });
       if (canWatch(node))
         items.push({
           label: "Add Field Watchpoint",
