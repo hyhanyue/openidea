@@ -1,7 +1,7 @@
 # Spring integration: Mac / Java 8 acceptance
 
-Local candidate: 0.1.41, plugin API 1.4. This report describes local evidence;
-it does not assert that the candidate has been installed or published.
+Locally installed candidate: 0.1.41, plugin API 1.4. Publishing remains pending
+the user's review of the installed application.
 
 ## Combined native application checks
 
@@ -68,7 +68,28 @@ workers, passed **all 668 files and 7,360 tests**, with six existing skips and n
 failed tests. Final typecheck, lint, formatting, unused-code checks and production
 frontend build also pass. The lint/build commands retain existing warnings.
 
-## Remaining acceptance gates
+## Local release installation
 
-Final package replacement and user review follow the release build.
-Publishing remains conditional on the user's acceptance of the installed build.
+The optimized release build completed in 24m 09s and produced the 242.32 MiB
+Mac application. Code signing verification passed. Bundle identity, version,
+API 1.4 plugin manifests, staged component hashes and public resource scope were
+checked before replacement of `/Applications/OpenIDEA.app`.
+
+The old application was removed after successful replacement. The native
+application restarted successfully and restored the user's algorithm and Spring
+Java 8 project windows. The new Spring Configuration Sources contribution is
+visible, and both default plugin versions were installed as
+`0.2.0+openidea.0.1.41`. User settings and personal icon overrides were retained.
+
+The official Microsoft vscode-java-debug 0.60.0 tool package tested in the
+isolated preview was also installed into the main application's tools directory;
+its JDT bundle was checked for ZIP integrity and matched against the extension
+bundle. It will load when that project's JDT server next starts. The running
+user's editor was left available; no additional language-server restart was
+forced during editing. Actual attach/output acceptance above was performed in
+the isolated native preview.
+
+All task-owned test JVMs, the native preview and Vite session were stopped.
+The final installed application remains open for user review. Source changes
+and the release have not been pushed or published; that step remains conditional
+on the user's acceptance of the installed build.
