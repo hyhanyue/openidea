@@ -242,6 +242,7 @@ fn rel(root: &Path, p: &Path) -> String {
 
 /// The tasks Gradle's own plugins add, for display before the first sync.
 pub fn default_tasks(is_root: bool, script: &str) -> Vec<GradleTask> {
+    let script = strip_comments(script);
     let mut out = Vec::new();
     if is_root {
         out.extend([task("build setup", "init"), task("build setup", "wrapper")]);
@@ -679,6 +680,18 @@ pub(crate) fn has_war_plugin(script: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn commented_plugins_do_not_create_phantom_boot_tasks() {
+        let tasks = super::default_tasks(
+            true,
+            "// id(\"org.springframework.boot\")\n/* apply plugin: 'application' */\nplugins { java }\n",
+        );
+        assert!(!tasks.iter().any(|t| matches!(t.name.as_str(), "bootRun" | "bootJar" | "run")));
+        assert!(tasks.iter().any(|t| t.name == "test"));
+        let tasks = super::default_tasks(true, "plugins { id(\"org.springframework.boot\") version \"2.7.18\" }\n");
+        assert!(tasks.iter().any(|t| t.name == "bootRun"));
+    }
+
     #[test]
     fn default_linkage_discovers_all_shallow_builds() {
         let temp = tempfile::tempdir().unwrap();

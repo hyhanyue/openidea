@@ -86,13 +86,38 @@ pub fn install_plugins(host: &PluginHost, data: &Path) -> IdeResult<()> {
 }
 
 pub fn spring_project(root: &Path) -> bool {
-    ["pom.xml", "build.gradle", "build.gradle.kts"]
-        .iter()
-        .any(|name| std::fs::read_to_string(root.join(name)).is_ok_and(|s| s.contains("org.springframework.boot")))
+    spring_builds(&ide_build::BuildModel {
+        maven: Some(ide_build::maven::load_with_linked(root, None, &[], &[])),
+        gradle: ide_build::gradle::load_linked(root, &Default::default()),
+    })
 }
 
-pub(crate) fn spring_bundles(data: &Path, root: &Path) -> Vec<PathBuf> {
-    if !spring_project(root) {
+fn spring_builds(model: &ide_build::BuildModel) -> bool {
+    fn boot_dependency(dependency: &ide_build::MavenDependency) -> bool {
+        dependency.group_id == "org.springframework.boot" || dependency.children.iter().any(boot_dependency)
+    }
+    model.maven.as_ref().is_some_and(|maven| {
+        maven.projects.iter().any(|project| {
+            project.parent.as_ref().is_some_and(|p| p.starts_with("org.springframework.boot:"))
+                || project.dependencies.iter().any(boot_dependency)
+                || project.plugins.iter().any(|p| p.group_id == "org.springframework.boot")
+        })
+    }) || model.gradle.iter().any(|gradle| gradle.projects.iter().any(|p| p.tasks.iter().any(|t| t.name == "bootRun")))
+}
+
+fn selected_spring_project(data: &Path, root: &Path, settings: &Settings) -> bool {
+    let cache = data.join("cache").join(crate::project::project_key(root)).join("build");
+    spring_builds(&ide_build::load_linked(
+        root,
+        &cache,
+        ide_sdk::apply::maven_local_repository(root, settings),
+        &settings.languages.java.maven,
+        &settings.languages.java.gradle,
+    ))
+}
+
+pub(crate) fn spring_bundles(data: &Path, root: &Path, settings: &Settings) -> Vec<PathBuf> {
+    if !selected_spring_project(data, root, settings) {
         return Vec::new();
     }
     resources(data)
@@ -116,7 +141,7 @@ pub(crate) fn add_spring_server(
         || !["java", "properties", "yaml"].contains(&language)
         || settings.language_servers.contains_key("spring-boot")
         || servers.iter().any(|s| s.name == "spring-boot")
-        || !spring_project(root)
+        || !selected_spring_project(data, root, settings)
     {
         return;
     }
@@ -125,8 +150,9 @@ pub(crate) fn add_spring_server(
         .into_iter()
         .find(|p| Path::new(p).is_file());
     let Some(python) = python else { return };
+    let configured = ide_sdk::apply::jdtls_jdk(root, settings).ok().flatten().filter(|jdk| jdk.major >= 21);
     let jdks = ide_sdk::java::jdtls_jdks(21, data);
-    let Some(runtime) = ide_sdk::java::jdtls_runtime(&jdks, 21) else { return };
+    let Some(runtime) = configured.as_ref().or_else(|| ide_sdk::java::jdtls_runtime(&jdks, 21)) else { return };
     let jar =
         resources.join("spring-tools/extension/language-server/spring-boot-language-server-2.3.0-SNAPSHOT-exec.jar");
     if !jar.is_file() {
@@ -160,6 +186,111 @@ pub(crate) fn add_spring_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires OPENIDEA_SPRING_TEST_TOOL_JDK pointing to a real JDK 21+"]
+    fn selected_tool_jdk_is_used_for_the_bundled_spring_launch() {
+        let home = PathBuf::from(std::env::var_os("OPENIDEA_SPRING_TEST_TOOL_JDK").unwrap());
+        let project = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let resources = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("pom.xml"), "<project><groupId>example</groupId><artifactId>app</artifactId><version>1</version><dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter</artifactId><version>2.7.18</version></dependency></dependencies></project>").unwrap();
+        std::fs::create_dir_all(resources.path().join("spring-tools/extension/language-server")).unwrap();
+        std::fs::write(resources.path().join("manifest.json"), b"{}").unwrap();
+        std::fs::write(
+            resources
+                .path()
+                .join("spring-tools/extension/language-server/spring-boot-language-server-2.3.0-SNAPSHOT-exec.jar"),
+            b"",
+        )
+        .unwrap();
+        bind_resources(data.path(), resources.path()).unwrap();
+        let mut settings = Settings::default();
+        settings.languages.java.jdtls_jdk = home.to_string_lossy().into_owned();
+        let mut servers = Vec::new();
+        add_spring_server(data.path(), project.path(), "java", &settings, &mut servers);
+        assert_eq!(servers.len(), 1);
+        let spec = data
+            .path()
+            .join("fork-defaults/profiles")
+            .join(crate::project::project_key(project.path()))
+            .join("spring.json");
+        let launch: serde_json::Value = serde_json::from_slice(&std::fs::read(spec).unwrap()).unwrap();
+        assert_eq!(launch["command"][0], home.join("bin/java").to_string_lossy().as_ref());
+    }
+
+    #[test]
+    fn a_boot_module_activates_services_for_its_aggregator() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("web")).unwrap();
+        std::fs::write(temp.path().join("pom.xml"), "<project><modelVersion>4.0.0</modelVersion><groupId>example</groupId><artifactId>parent</artifactId><version>1</version><packaging>pom</packaging><modules><module>web</module></modules></project>").unwrap();
+        std::fs::write(temp.path().join("web/pom.xml"), "<project><modelVersion>4.0.0</modelVersion><groupId>example</groupId><artifactId>web</artifactId><version>1</version><dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId><version>2.7.18</version></dependency></dependencies></project>").unwrap();
+        assert!(spring_project(temp.path()));
+    }
+
+    #[test]
+    fn boot_comments_do_not_activate_services_in_plain_maven_projects() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("pom.xml"), "<project><groupId>example</groupId><artifactId>plain</artifactId><version>1</version><!-- org.springframework.boot --></project>").unwrap();
+        assert!(!spring_project(temp.path()));
+    }
+
+    #[test]
+    fn gradle_module_plugins_activate_services_and_ignore_comments() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("web")).unwrap();
+        std::fs::write(
+            temp.path().join("settings.gradle.kts"),
+            "rootProject.name = \"workspace\"\ninclude(\":web\")\n",
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("build.gradle.kts"), "// plugins { id(\"org.springframework.boot\") }\n")
+            .unwrap();
+        std::fs::write(temp.path().join("web/build.gradle.kts"), "plugins { java }\n").unwrap();
+        assert!(!spring_project(temp.path()));
+        std::fs::write(
+            temp.path().join("web/build.gradle.kts"),
+            "plugins { id(\"org.springframework.boot\") version \"2.7.18\" }\n",
+        )
+        .unwrap();
+        assert!(spring_project(temp.path()));
+    }
+
+    #[test]
+    fn selected_maven_profiles_and_unlinked_modules_control_detection() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("web")).unwrap();
+        std::fs::write(temp.path().join("pom.xml"), "<project><groupId>example</groupId><artifactId>parent</artifactId><version>1</version><packaging>pom</packaging><profiles><profile><id>web</id><modules><module>web</module></modules></profile></profiles></project>").unwrap();
+        std::fs::write(temp.path().join("web/pom.xml"), "<project><groupId>example</groupId><artifactId>web</artifactId><version>1</version><dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId><version>2.7.18</version></dependency></dependencies></project>").unwrap();
+        let mut settings = Settings::default();
+        assert!(!selected_spring_project(data.path(), temp.path(), &settings));
+        let cache = data.path().join("cache").join(crate::project::project_key(temp.path())).join("build");
+        ide_build::save_maven_profiles(&cache, &["web".into()]).unwrap();
+        assert!(selected_spring_project(data.path(), temp.path(), &settings));
+        settings.languages.java.maven.unlinked_projects = vec!["web/pom.xml".into()];
+        assert!(!selected_spring_project(data.path(), temp.path(), &settings));
+        settings.languages.java.maven.unlinked_projects.clear();
+        ide_build::save_maven_profiles(&cache, &[]).unwrap();
+        assert!(!selected_spring_project(data.path(), temp.path(), &settings));
+    }
+
+    #[test]
+    fn an_explicitly_unlinked_gradle_build_does_not_enable_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("build.gradle"),
+            "plugins { id 'org.springframework.boot' version '2.7.18' }\n",
+        )
+        .unwrap();
+        let mut settings = Settings::default();
+        assert!(selected_spring_project(data.path(), temp.path(), &settings));
+        settings.languages.java.gradle.linked_projects = Some(vec![]);
+        assert!(!selected_spring_project(data.path(), temp.path(), &settings));
+    }
+
     #[test]
     fn plain_java_does_not_load_spring_and_explicit_choices_win() {
         let temp = tempfile::tempdir().unwrap();
@@ -168,7 +299,7 @@ mod tests {
         let mut servers = Vec::new();
         add_spring_server(temp.path(), temp.path(), "java", &Settings::default(), &mut servers);
         assert!(servers.is_empty());
-        std::fs::write(temp.path().join("pom.xml"), "<groupId>org.springframework.boot</groupId>").unwrap();
+        std::fs::write(temp.path().join("pom.xml"), "<project><groupId>example</groupId><artifactId>app</artifactId><version>1</version><dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter</artifactId><version>2.7.18</version></dependency></dependencies></project>").unwrap();
         assert!(spring_project(temp.path()));
         let mut settings = Settings::default();
         settings.language_servers.insert("spring-boot".into(), Default::default());

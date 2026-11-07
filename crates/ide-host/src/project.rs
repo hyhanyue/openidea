@@ -197,7 +197,7 @@ impl Host {
                         .into_iter()
                         .chain(ide_sdk::java::usages_bundle(&data_dir))
                         .chain(ide_sdk::java::kotlin_bridge_bundle(&data_dir))
-                        .chain(crate::fork_defaults::spring_bundles(&data_dir, root))
+                        .chain(crate::fork_defaults::spring_bundles(&data_dir, root, &effective))
                         .collect();
                     let min_java = ide_sdk::java::jdtls_min_java(cfg);
                     let jdks = ide_sdk::java::jdtls_jdks(min_java, &data_dir);

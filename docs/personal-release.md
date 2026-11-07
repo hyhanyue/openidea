@@ -12,10 +12,14 @@ to the installed copy. Those assets are never part of the public package.
 Replaced upstream Spring and MyBatis providers stay disabled to avoid duplicates.
 
 On this Mac, Spring Tools starts automatically for Java/properties/YAML files
-when the project's Maven/Gradle build declares `org.springframework.boot`.
+when the selected Maven reactor or linked Gradle build uses Spring Boot. Module
+dependencies and cached resolved dependencies count; selected Maven profiles and
+unlinked projects follow the existing build model. Commented Gradle plugins do
+not enable services or create phantom Boot tasks.
 Ordinary Java projects do not start Spring Tools. Existing custom Spring server
 settings take precedence, including an explicit disabled choice. The server uses
-an independent suitable tooling JDK (21+); the project's Java 8 SDK is unchanged.
+an independent suitable tooling JDK (21+), preferring the valid configured
+language-server JDK; the project's Java 8 SDK is unchanged.
 JDT receives the bundled official Spring extensions for its Java model bridge.
 
 Spring Tools 2.3.0 comes from the pinned official Open VSX archive, verified by
