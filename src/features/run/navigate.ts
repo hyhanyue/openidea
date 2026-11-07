@@ -88,6 +88,15 @@ export function runDirectory(cwd: string | null | undefined): string {
 }
 
 export async function resolveTarget(target: FileTarget, cwd: string): Promise<string | null> {
+  if (target.resolve === "resource") {
+    const path = target.path.replace(/^\//, "");
+    // The working directory is independent of the classpath module; never use it to guess an owner.
+    const name = path.split("/").pop()!;
+    const files = await call(commands.findFiles(name, 1000));
+    if (files.length >= 1000) return null;
+    const matches = files.filter((file) => file.relPath.endsWith(`/resources/${path}`));
+    return matches.length === 1 ? matches[0]!.path : null;
+  }
   if (target.resolve === "path") {
     const candidate = joinPath(cwd, target.path);
     if (await exists(candidate)) return candidate;

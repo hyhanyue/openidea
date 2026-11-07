@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { executeAction } from "@/platform/actions";
 import { setContext } from "@/platform/context";
-import type { RunConfig } from "@/platform/ipc";
+import { commands, type RunConfig } from "@/platform/ipc";
 import {
   useDebugRunSessions,
   provideNotificationService,
@@ -94,7 +94,21 @@ describe("single-instance runs", () => {
 });
 
 describe("restart", () => {
+  it("does not overwrite a live process after the stop timeout", async () => {
+    vi.useFakeTimers();
+    const stop = vi.spyOn(commands, "runStop").mockResolvedValue({ status: "ok", data: null });
+    const app = config("slow-stop");
+    useRun.setState({ sessions: [running("run1", app, 7)] });
+    const rerun = startRun(app, "run1");
+    await vi.advanceTimersByTimeAsync(10_100);
+    expect(await rerun).toBeNull();
+    expect(useRun.getState().sessions[0]).toMatchObject({ runId: 7, status: "running", stopped: true });
+    stop.mockRestore();
+    vi.useRealTimers();
+  });
+
   it("starts the new process only after the old one exited", async () => {
+    const stop = vi.spyOn(commands, "runStop").mockResolvedValue({ status: "ok", data: null });
     const app = config("app");
     useRun.setState({ sessions: [running("run1", app, 7)] });
     let restarted = false;
@@ -106,6 +120,7 @@ describe("restart", () => {
     useRun.setState((s) => ({ sessions: s.sessions.map((x) => ({ ...x, status: "finished" as const })) }));
     await rerun;
     expect(useRun.getState().sessions.map((s) => [s.id, s.runId])).toEqual([["run1", null]]);
+    stop.mockRestore();
   });
 });
 

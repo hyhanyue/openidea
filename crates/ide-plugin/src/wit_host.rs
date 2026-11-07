@@ -818,7 +818,11 @@ impl views::Host for StoreData {
 impl settings::Host for StoreData {
     fn get(&mut self, key: String) -> wasmtime::Result<Option<String>> {
         let root = self.invocation.workspace_root.clone();
-        Ok(self.host.setting(root.as_deref(), &clip(key, 128)))
+        let key = clip(key, 128);
+        if let Some(value) = self.setting_overrides.get(&key) {
+            return Ok(serde_json::to_string(value).ok());
+        }
+        Ok(self.host.setting(root.as_deref(), &key))
     }
 }
 

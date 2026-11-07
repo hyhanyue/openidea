@@ -183,7 +183,11 @@ export function joinPropertyArgs(args: readonly string[]): string {
   return args
     .map((a) => {
       if (a && !/[\s"']/.test(a)) return a;
-      return a.includes('"') ? `'${a}'` : `"${a}"`;
+      if (!a.includes('"')) return `"${a}"`;
+      return a
+        .split("'")
+        .map((part) => `'${part}'`)
+        .join(`"'"`);
     })
     .join(" ");
 }
@@ -211,6 +215,21 @@ export const mavenForkedJvm: ForkedJvm = {
       words(p.tasks).some((g) => isSpringBootRun(g) || isMavenTestGoal(g)),
     ),
     profilesField("Comma separated; passed as -Dspring-boot.run.profiles", (p) => words(p.tasks).some(isSpringBootRun)),
+    {
+      key: "programArgs",
+      label: "Program arguments",
+      mono: true,
+      hint: "Passed to the Spring Boot application, not to Maven",
+      visible: (p) => words(p.tasks).some(isSpringBootRun),
+    },
+    {
+      key: "applicationCwd",
+      label: "Application working directory",
+      mono: true,
+      browse: "directory",
+      hint: "Absolute path; empty uses the Maven module directory",
+      visible: (p) => words(p.tasks).some(isSpringBootRun),
+    },
   ],
   args(p) {
     const goals = words(p.tasks);
@@ -220,6 +239,10 @@ export const mavenForkedJvm: ForkedJvm = {
       if (vm.length) out.push(`-Dspring-boot.run.jvmArguments=${joinPropertyArgs(vm)}`);
       const profiles = p.activeProfiles?.trim();
       if (profiles) out.push(`-Dspring-boot.run.profiles=${profiles}`);
+      const program = splitJvmArgs(p.programArgs);
+      if (program.length) out.push(`-Dspring-boot.run.arguments=${joinPropertyArgs(program)}`);
+      const cwd = p.applicationCwd?.trim();
+      if (cwd) out.push(`-Dspring-boot.run.workingDirectory=${cwd}`);
     } else if (vm.length && goals.some(isMavenTestGoal)) {
       out.push(`-DargLine=${joinPropertyArgs(vm)}`);
     }

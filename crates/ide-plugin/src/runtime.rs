@@ -157,6 +157,14 @@ pub trait HostApi: Send + Sync {
     fn open_location(&self, client: Option<&str>, path: &Path, line: u32, column: u32) -> Result<(), HostError>;
     /// A setting of the plugin as JSON (project over global over the schema default).
     fn setting(&self, root: Option<&Path>, key: &str) -> Option<String>;
+    /// Transient per-window facts may override project settings without persisting them.
+    fn settings_overlay(
+        &self,
+        _client: Option<&str>,
+        _root: Option<&Path>,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::Map::new()
+    }
 }
 
 /// Shared compilation engine plus an epoch ticker thread for wall-clock limits.
@@ -393,6 +401,7 @@ pub struct StoreData {
     pub(crate) granted: Vec<Capability>,
     pub(crate) host: Arc<dyn HostApi>,
     pub(crate) invocation: Invocation,
+    pub(crate) setting_overrides: serde_json::Map<String, serde_json::Value>,
     /// The running call is a command or an event, so it may ask the user.
     pub(crate) interactive: bool,
     /// Tasks begun by the running call and not ended yet.
@@ -576,6 +585,7 @@ impl Runtime {
             granted: setup.granted,
             host: setup.host,
             invocation: Invocation::default(),
+            setting_overrides: serde_json::Map::new(),
             interactive: false,
             open_tasks: Vec::new(),
             last_report: None,
@@ -1010,10 +1020,14 @@ impl Runtime {
         f: impl FnOnce(&Exports, &mut Store<StoreData>) -> wasmtime::Result<R>,
     ) -> Result<R, CallError> {
         arm(&mut self.store, &self.limits, timeout).map_err(|e| CallError::Trap(e.to_string()))?;
+        let overlay =
+            self.store.data().host.settings_overlay(invocation.client.as_deref(), invocation.workspace_root.as_deref());
+        self.store.data_mut().setting_overrides = overlay;
         self.store.data_mut().invocation = invocation;
         let result = f(&self.exports, &mut self.store);
         let data = self.store.data_mut();
         data.invocation = Invocation::default();
+        data.setting_overrides.clear();
         data.interactive = false;
         // Tasks don't outlive the call that began them.
         for id in std::mem::take(&mut data.open_tasks) {

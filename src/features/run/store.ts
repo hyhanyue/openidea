@@ -59,6 +59,12 @@ import { tomcatBrowserUrl } from "./tomcat";
 import { gradleDelegation, gradleTestLaunch } from "./gradleRun";
 import { openUrl } from "./navigate";
 import { tx } from "@/platform/i18n";
+import {
+  isSpringBootLaunch,
+  springBootLine,
+  springBootEnded,
+  type SpringBootLifecycle,
+} from "@/platform/springBootLifecycle";
 
 /** The permanent "Current File" pseudo-configuration of the chooser (runs the active file's context). */
 export const CURRENT_FILE = "current-file";
@@ -82,6 +88,7 @@ export interface RunSession {
   terminal?: boolean;
   /** The HTTP port the application's embedded web server reported it started on. */
   httpPort?: number;
+  springBoot?: SpringBootLifecycle;
 }
 
 interface SessionRuntime {
@@ -692,6 +699,19 @@ export async function startRun(
   }
   // The new process starts once the old one is gone (it may still hold a port or a lock).
   await waitForExit(stopping);
+  if (
+    stopping.some((id) => {
+      const current = getSession(id);
+      return current && busy(current);
+    })
+  ) {
+    notifications().notify({
+      group: "run",
+      level: "warning",
+      title: tx("The previous process is still stopping. Wait for it to exit before restarting."),
+    });
+    return null;
+  }
   session ??= state.sessions.find((s) => s.config.id === config.id && !busy(s));
 
   try {
@@ -719,6 +739,7 @@ export async function startRun(
       stdinClosed: false,
       stopped: false,
       httpPort: undefined,
+      springBoot: isSpringBootLaunch(config) ? { phase: "preparing" } : undefined,
     };
     const updated = session;
     useRun.setState((s) => ({
@@ -736,6 +757,7 @@ export async function startRun(
       endedAt: null,
       stdinClosed: false,
       baseConfig,
+      springBoot: isSpringBootLaunch(config) ? { phase: "preparing" } : undefined,
     };
     runtimes.set(session.id, newRuntime(config));
     const created = session;
@@ -750,6 +772,11 @@ export async function startRun(
   if (options.onLine) rt.lineListeners.push(options.onLine);
   let browserOpened = false;
   rt.lineListeners.push((line) => {
+    const boot = getSession(sessionId)?.springBoot;
+    if (boot) {
+      const next = springBootLine(boot, line);
+      if (next !== boot) patchSession(sessionId, { springBoot: next });
+    }
     if (config.kind === "tomcat" && /Server startup in/.test(line)) {
       patchSession(sessionId, { httpPort: Number(config.params?.httpPort || "8080") });
       if (!browserOpened && config.params?.openBrowser === "true") {
@@ -773,7 +800,11 @@ export async function startRun(
   if (!isTauri()) {
     enqueue(sessionId, { kind: "system", text: "Running processes requires the desktop app.\n" });
     flush(sessionId);
-    patchSession(sessionId, { status: "failed", endedAt: Date.now() });
+    patchSession(sessionId, {
+      status: "failed",
+      endedAt: Date.now(),
+      ...(getSession(sessionId)?.springBoot ? { springBoot: { phase: "failed", failure: "startup" } } : {}),
+    });
     return getSession(sessionId) ?? null;
   }
 
@@ -797,6 +828,9 @@ export async function startRun(
         patchSession(sessionId, {
           status: getSession(sessionId)?.stopped ? "finished" : "failed",
           endedAt: Date.now(),
+          ...(getSession(sessionId)?.springBoot
+            ? { springBoot: { phase: getSession(sessionId)?.stopped ? "stopped" : "failed" } }
+            : {}),
         });
         return getSession(sessionId) ?? null;
       }
@@ -815,24 +849,55 @@ export async function startRun(
     const started = launch.isTest ? await gradleTestLaunch(withTestReporting(launch)) : launch;
     if (runtimes.get(sessionId)?.generation !== generation) return getSession(sessionId) ?? null;
     const processStarted = performance.now();
-    const info = await startWithRemedies(started, () => call(commands.runStart(started, channel)));
+    const info = await startWithRemedies(started, () => {
+      if (getSession(sessionId)?.stopped) throw new DOMException("Launch stopped", "AbortError");
+      return call(commands.runStart(started, channel));
+    });
     console.info("Run process started", { name: config.name, ms: performance.now() - processStarted });
-    if (runtimes.get(sessionId)?.generation !== generation) return getSession(sessionId) ?? null;
+    if (runtimes.get(sessionId)?.generation !== generation) {
+      // Closing/resetting the tab while runStart was in flight must not orphan its process.
+      await call(commands.runStop(info.id));
+      return getSession(sessionId) ?? null;
+    }
     if (rt.tests) rt.tests.mavenTestScope = info.mavenTestScope ?? undefined;
     if (info.pty && rt.terminalSize) void commands.runResize(info.id, rt.terminalSize.cols, rt.terminalSize.rows);
     // The process may already have exited (fast commands) before we got its id.
     const exited = pendingExits.get(info.id);
     // "Redirect input from": stdin is the file, the console takes no input.
-    patchSession(sessionId, { runId: info.id, status: "running", stdinClosed: !!launch.stdinFile });
+    const boot = getSession(sessionId)?.springBoot;
+    patchSession(sessionId, {
+      runId: info.id,
+      status: "running",
+      stdinClosed: !!launch.stdinFile,
+      ...(boot && (boot.phase === "preparing" || boot.phase === "compiling")
+        ? { springBoot: { phase: "starting" as const } }
+        : {}),
+    });
     if (exited !== undefined) {
       pendingExits.delete(info.id);
       finishSession(sessionId, exited);
+    } else if (getSession(sessionId)?.stopped) {
+      patchSession(sessionId, { stopped: false, ...(boot ? { springBoot: { phase: "starting" } } : {}) });
+      await stopSession(sessionId);
     }
   } catch (e) {
+    if (runtimes.get(sessionId)?.generation !== generation) return getSession(sessionId) ?? null;
+    if (getSession(sessionId)?.stopped && getSession(sessionId)?.runId === null) {
+      patchSession(sessionId, {
+        status: "finished",
+        endedAt: Date.now(),
+        ...(getSession(sessionId)?.springBoot ? { springBoot: { phase: "stopped" } } : {}),
+      });
+      return getSession(sessionId) ?? null;
+    }
     const message = e instanceof Error ? e.message : String(e);
     enqueue(sessionId, { kind: "stderr", text: tx`Error running '${config.name}': ${message}\n` });
     flush(sessionId);
-    patchSession(sessionId, { status: "failed", endedAt: Date.now() });
+    patchSession(sessionId, {
+      status: "failed",
+      endedAt: Date.now(),
+      ...(getSession(sessionId)?.springBoot ? { springBoot: { phase: "failed", failure: "startup" } } : {}),
+    });
     notifications().notify({
       group: "run",
       level: "error",
@@ -869,6 +934,7 @@ async function resolveJvmApplication(sessionId: string, config: RunConfig): Prom
   }
   if (!parsed.classpath) return { ...config, args: [...consoleVmArgs(config), ...config.args] };
   const rt = runtime(sessionId)!;
+  if (getSession(sessionId)?.springBoot) patchSession(sessionId, { springBoot: { phase: "compiling" } });
   const request = { id: nextRequestId(), controller: new AbortController() };
   rt.resolveRequest = request;
   try {
@@ -939,7 +1005,13 @@ function finishSession(sessionId: string, code: number | null) {
         rt.tests.finish(code);
         recordTestStates(rt.tests);
       }
-      patchSession(sessionId, { status: "finished", exitCode: code, endedAt: Date.now() });
+      const latest = getSession(sessionId)!;
+      patchSession(sessionId, {
+        status: "finished",
+        exitCode: code,
+        endedAt: Date.now(),
+        ...(latest.springBoot ? { springBoot: springBootEnded(latest.springBoot, code, latest.stopped) } : {}),
+      });
       bump(sessionId);
       notifyExit(sessionId, code);
       try {
@@ -1096,15 +1168,27 @@ export async function stopSession(sessionId: string): Promise<void> {
   const request = runtimes.get(sessionId)?.resolveRequest;
   if (session.status === "starting" && request) {
     request.controller.abort();
-    patchSession(sessionId, { stopped: true, status: "finished", endedAt: Date.now() });
+    patchSession(sessionId, {
+      stopped: true,
+      status: "finished",
+      endedAt: Date.now(),
+      ...(session.springBoot ? { springBoot: { phase: "stopped" } } : {}),
+    });
     await commands.cancelRequest(request.id);
     return;
   }
+  if (session.status === "starting") {
+    // Preparation or the native spawn call may still be in flight. Its continuation
+    // observes this flag and either skips spawning or stops only the returned RunId.
+    patchSession(sessionId, { stopped: true, ...(session.springBoot ? { springBoot: { phase: "stopping" } } : {}) });
+    return;
+  }
   if (session.runId === null || session.status !== "running") return;
-  patchSession(sessionId, { stopped: true });
+  patchSession(sessionId, { stopped: true, ...(session.springBoot ? { springBoot: { phase: "stopping" } } : {}) });
   try {
     await call(commands.runStop(session.runId));
   } catch (e) {
+    patchSession(sessionId, { stopped: session.stopped, springBoot: session.springBoot });
     notifications().notify({
       group: "run",
       level: "error",
@@ -1119,7 +1203,7 @@ export function waitForExit(sessionIds: readonly string[], timeoutMs = 10_000): 
   const live = () =>
     sessionIds.some((id) => {
       const s = getSession(id);
-      return !!s && s.runId !== null && s.status === "running";
+      return !!s && (s.status === "starting" || (s.runId !== null && s.status === "running"));
     });
   if (!live()) return Promise.resolve();
   return new Promise((resolve) => {

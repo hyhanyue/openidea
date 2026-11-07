@@ -107,3 +107,27 @@ it("flushes output while an unfocused webview suspends animation frames", () => 
   expect(lines(13).map((l) => l.text)).toEqual(["Spring Boot starting…\n"]);
   expect(useDebug.getState().sessions[13]?.status).toBe("running");
 });
+
+it("keeps Boot startup facts per debuggee and waits for complete output lines", () => {
+  const runConfig = {
+    id: "boot",
+    name: "boot",
+    kind: "spring-boot",
+    args: [],
+    command: "java",
+    env: {},
+    cwd: null,
+    isTest: false,
+    detected: false,
+    debugAdapter: "java-debug",
+  };
+  adoptSession(61, { runConfig });
+  adoptSession(62, { runConfig: { ...runConfig, id: "other" } });
+  appendConsole(61, "stdout", "Started Main in 1.25 seconds ");
+  expect(useDebug.getState().sessions[61]!.springBoot?.phase).toBe("starting");
+  appendConsole(61, "stdout", "(JVM running for 2.5)\n");
+  expect(useDebug.getState().sessions[61]!.springBoot?.phase).toBe("ready");
+  expect(useDebug.getState().sessions[62]!.springBoot).toBeUndefined();
+  appendConsole(61, "stderr", "Failed to bind properties under 'probe.number' to int\n");
+  expect(useDebug.getState().sessions[61]!.springBoot).toEqual({ phase: "failed", failure: "binding" });
+});

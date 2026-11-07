@@ -33,6 +33,14 @@ vi.mock("@/workbench/contributions", () => ({
 const { openTarget, resolveTarget } = await import("./navigate");
 
 describe("JVM stack frame resolution", () => {
+  it("opens a unique Boot property resource and refuses ambiguous module copies", async () => {
+    files["/p/app/src/main/resources/application.yml"] = "probe: true";
+    const target = { resolve: "resource" as const, path: "application.yml", line: 3, col: 5 };
+    expect(await resolveTarget(target, "/outside/work")).toBe("/p/app/src/main/resources/application.yml");
+    files["/p/other/src/main/resources/application.yml"] = "probe: false";
+    expect(await resolveTarget(target, "/p/app")).toBeNull();
+  });
+
   afterEach(() => {
     files = { ...projectFiles };
     openFile.mockClear();

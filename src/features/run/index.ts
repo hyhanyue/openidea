@@ -80,6 +80,7 @@ import {
 } from "./store";
 import { compoundTargets, selectedTarget } from "./sessionTargets";
 import { tx } from "@/platform/i18n";
+import { publishSpringLaunchContext } from "@/platform/springLaunchContext";
 
 function hasProject() {
   return !!useProject.getState().project;
@@ -566,6 +567,8 @@ export function activate(): () => void {
     onIdeEvent("runExited", (e) => onRunExited(e.run, e.code)),
     // Lets other title items follow the selected configuration (e.g. Build shows only for compiled ones).
     useRun.subscribe((s) => {
+      const selected = s.configs.find((c) => c.id === s.selectedId) ?? null;
+      publishSpringLaunchContext(selected, !!selected && !selected.detected && !s.temporary.includes(selected.id));
       setContext("run.selectedKind", s.configs.find((c) => c.id === s.selectedId)?.kind ?? "");
       setContext("run.updatableRunning", updatableSessions().length > 0);
     }),

@@ -240,3 +240,25 @@ describe("naming the Java project jdtls imported", () => {
     expect(await javaProjectName("/p")).toBe("p");
   });
 });
+
+it("honours an explicit Java 8 project runtime instead of the JDT tooling runtime", async () => {
+  kotlinFiles = false;
+  const launch = await javaLaunchConfig(
+    {
+      ...app,
+      kind: "spring-boot",
+      command: "/project-jdk8/bin/java",
+      module: "api",
+      cwd: "/work/app",
+      env: { PROBE: "configured" },
+      args: ["-Dprobe=vm", ...app.args, "--spring.profiles.active=prod"],
+    },
+    "/p",
+  );
+  expect(launch).toMatchObject({ cwd: "/work/app", env: { PROBE: "configured" } });
+  expect(JSON.parse(launch.extraJson!)).toMatchObject({
+    javaExec: "/project-jdk8/bin/java",
+    vmArgs: "-Dspring.output.ansi.enabled=always -Dprobe=vm -Xmx1g",
+    args: '--port "8081 x" --spring.profiles.active=prod',
+  });
+});

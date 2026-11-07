@@ -1,3 +1,9 @@
+import {
+  isSpringBootLaunch,
+  springBootLine,
+  springBootEnded,
+  type SpringBootLifecycle,
+} from "@/platform/springBootLifecycle";
 /**
  * Debug sessions as the UI sees them, fed by `IdeEvent::Debug` and by pulls
  * (threads, frames, locals) after each stop.
@@ -54,6 +60,7 @@ export interface DebugSession {
   process: RunId | null;
   /** HTTP port announced by this debuggee's Spring Boot server. */
   httpPort?: number;
+  springBoot?: SpringBootLifecycle;
   status: SessionStatus;
   stoppedThread: number | null;
   stopReason: string | null;
@@ -312,6 +319,10 @@ export function publishContext() {
           startedAt: session.startedAt ?? 0,
           status: paused ? ("paused" as const) : session.status,
           processId: session.process,
+          springBoot:
+            session.status === "terminated" && session.springBoot?.phase !== "failed"
+              ? session.springBoot && { phase: "stopped" as const }
+              : session.springBoot,
           httpPort:
             session.process === null
               ? (session.httpPort ??
@@ -398,12 +409,15 @@ function flushConsoleOutput() {
   applyConsoleOutput(pendingOutput.splice(0).filter(({ session }) => sessions[session]));
 }
 
-function outputPort(stream: ConsoleStream, text: string): number | null {
+function outputPort(stream: ConsoleStream, text: string, onLine?: (line: string) => void): number | null {
   const lines = (stream.tail + text).split("\n");
   // Keep the end of a partial line, without retaining arbitrarily long console output.
   stream.tail = lines.pop()!.slice(-8192);
   let port = null;
-  for (const line of lines) port = startedPort(line) ?? port;
+  for (const line of lines) {
+    port = startedPort(line) ?? port;
+    onLine?.(line);
+  }
   return port;
 }
 
@@ -420,9 +434,17 @@ function applyConsoleOutput(chunks: PendingOutput[]) {
       const debug = sessions[session];
       if (debug && debug.status !== "terminated" && debug.process === null && session > 0) {
         if (category === "stdout" || category === "stderr") {
-          const port = outputPort(stream, spans.map((span) => span.text).join(""));
-          if (port !== null && port !== debug.httpPort)
-            sessions = { ...sessions, [session]: { ...debug, httpPort: port } };
+          let boot =
+            debug.springBoot ??
+            (debug.runConfig && isSpringBootLaunch(debug.runConfig) ? { phase: "starting" as const } : undefined);
+          const port = outputPort(stream, spans.map((span) => span.text).join(""), (line) => {
+            if (boot) boot = springBootLine(boot, line);
+          });
+          if ((port !== null && port !== debug.httpPort) || boot !== debug.springBoot)
+            sessions = {
+              ...sessions,
+              [session]: { ...debug, ...(port !== null ? { httpPort: port } : {}), springBoot: boot },
+            };
         }
       }
       const prev = consoleBySession[session] ?? [];
@@ -503,7 +525,12 @@ export async function startPreparedSession(
   useDebug.setState((s) => ({
     sessions: {
       ...s.sessions,
-      [id]: blank(id, { name: config.name, adapter: config.debugAdapter ?? "", runConfig: config }),
+      [id]: blank(id, {
+        name: config.name,
+        adapter: config.debugAdapter ?? "",
+        runConfig: config,
+        springBoot: isSpringBootLaunch(config) ? { phase: "preparing" } : undefined,
+      }),
     },
     console: { ...s.console, [id]: [] },
     active: id,
@@ -519,11 +546,14 @@ export async function startPreparedSession(
   };
   try {
     report(tx`Starting debugger for ${config.name}…` + "\n");
+    if (isSpringBootLaunch(config)) patch(id, { springBoot: { phase: "compiling" } });
     const launch = await prepare(controller.signal, report);
     controller.signal.throwIfAborted();
+    if (isSpringBootLaunch(config)) patch(id, { springBoot: { phase: "starting" } });
     return await startSession(launch, { runConfig: config, preparation: { id, signal: controller.signal } });
   } catch (e) {
     if (controller.signal.aborted || isCancelled(e)) return null;
+    if (isSpringBootLaunch(config)) patch(id, { springBoot: { phase: "failed", failure: "startup" } });
     report((e instanceof Error ? e.message : String(e)) + "\n", "stderr");
     throw e;
   } finally {
@@ -584,6 +614,10 @@ export async function startSession(
         delete sessions[preparation.id];
         consoleStreams.delete(preparation.id);
       }
+      let springBoot =
+        cur.springBoot ??
+        (options.runConfig && isSpringBootLaunch(options.runConfig) ? { phase: "starting" as const } : undefined);
+      if (springBoot) for (const line of console[id] ?? []) springBoot = springBootLine(springBoot, line.text);
       return {
         console,
         sessions: {
@@ -592,6 +626,7 @@ export async function startSession(
             ...cur,
             name: launch.name,
             runConfig: options.runConfig,
+            springBoot,
             startedAt: preparation?.startedAt ?? startedAt,
             adapter: launch.adapter,
             launch: options.rerunnable === false ? null : launch,
@@ -657,6 +692,7 @@ export async function stopSession(id: DebugSessionId, options: { stopProcess?: b
   if (!s) return;
   const root = rootOf(s);
   const preparation = preparations.get(root.id);
+  if (root.springBoot) patch(root.id, { springBoot: { phase: "stopping" } });
   if (preparation) {
     preparation.abort();
     appendConsole(root.id, "system", tx("Launch cancelled.") + "\n");
@@ -754,7 +790,24 @@ export function sessionSupports(cap: keyof DebugCapabilities, s: DebugSession | 
 
 function markTerminated(id: DebugSessionId) {
   stopTaskbarFlash();
-  patch(id, { status: "terminated", endedAt: Date.now(), frames: [], selectedFrame: null, stoppedThread: null });
+  flushConsoleOutput();
+  const current = useDebug.getState().sessions[id];
+  patch(id, {
+    status: "terminated",
+    endedAt: Date.now(),
+    frames: [],
+    selectedFrame: null,
+    stoppedThread: null,
+    ...(current?.springBoot
+      ? {
+          springBoot: springBootEnded(
+            current.springBoot,
+            current.exitCode ?? 0,
+            current.springBoot.phase === "stopping",
+          ),
+        }
+      : {}),
+  });
   const st = useDebug.getState();
   if (st.active === id) {
     // Prefer another live session (e.g. the parent of a finished child).

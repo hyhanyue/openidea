@@ -58,6 +58,7 @@ import {
   type ServiceOrder,
 } from "./serviceOrder";
 import styles from "./RunServices.module.css";
+import { springBootStatus } from "./springBootStatus";
 
 export const RUN_PROVIDER = "runConfigurations";
 const TYPE_PREFIX = "run:type:";
@@ -220,6 +221,11 @@ export function sessionStatus(s: RunSession | undefined): string | undefined {
 
 /** A node's grey text: the HTTP port of a running web application, else the state. */
 export function sessionDetail(s: RunSession | undefined): string | undefined {
+  if (s?.springBoot)
+    return (
+      springBootStatus(s.springBoot) +
+      (busy(s) && s.httpPort && s.springBoot.phase === "ready" ? ` :${s.httpPort}` : "")
+    );
   return s && busy(s) && s.httpPort ? `:${s.httpPort}` : sessionStatus(s);
 }
 
@@ -228,6 +234,11 @@ function executionDetail(s: ServiceSession | undefined): string | undefined {
   const debug = serviceDebugger(s);
   if (debug?.status === "paused") return "Suspended";
   if (debug) {
+    if (debug.springBoot)
+      return (
+        springBootStatus(debug.springBoot) +
+        (debug.httpPort && debug.springBoot.phase === "ready" ? ` :${debug.httpPort}` : "")
+      );
     const port = s.run ? (busy(s.run) ? s.run.httpPort : undefined) : debug.httpPort;
     if (port) return `:${port}`;
     return debug.status === "starting" ? "Starting" : "Debugging";

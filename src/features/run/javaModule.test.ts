@@ -4,7 +4,7 @@ import { findJavaModule, prepareJavaLaunch } from "@/platform/javaLaunch";
 import { _resetI18nForTests, setLocale } from "@/platform/i18n";
 import { provideNotificationService } from "@/workbench/contributions";
 import { applicationConfig } from "./application";
-import { resetRuns, runtime, saveUserConfigs, startRun } from "./store";
+import { onRunExited, resetRuns, runtime, saveUserConfigs, startRun, stopSession, useRun } from "./store";
 import { applicationType } from "./jvmTypes";
 import { withParams } from "./types";
 
@@ -22,6 +22,7 @@ const ipc = vi.hoisted(() => {
     runConfigs: vi.fn(() => ok([])),
     runSaveConfigs: vi.fn(() => ok(null)),
     runStart: vi.fn(() => ok({ id: 1, pty: false })),
+    runStop: vi.fn(() => ok(null)),
     javaResolveLaunch: vi.fn(() =>
       ok({
         build: "succeeded",
@@ -211,4 +212,86 @@ it("shows the Maven import cause and plugin in the launch error", async () => {
   await expect(
     prepareJavaLaunch({ ...config, module: "web" }, { request: 1, signal: new AbortController().signal }),
   ).rejects.toThrow("JDT LS 在导入时无法解析 Maven 插件 org.apache.maven.plugins:maven-resources-plugin:3.4.0");
+});
+
+it("runs with the resolved project Java 8 SDK while keeping the tooling Java home separate", async () => {
+  ipc.javaResolveLaunch.mockResolvedValueOnce({
+    status: "ok",
+    data: {
+      build: "succeeded",
+      projectRoot: "/p",
+      classPaths: ["/p/app/target/classes"],
+      modulePaths: [],
+      javaHome: "/tooling-jdk25",
+      javaExec: "/project-jdk8/bin/java",
+      shortenCommandLine: null,
+      errors: [],
+      errorCount: 0,
+      hints: [],
+    },
+  });
+  await startRun({
+    ...config,
+    kind: "spring-boot",
+    module: "app",
+    env: { PROBE: "configured" },
+    args: [...config.args, "--spring.profiles.active=dev"],
+  });
+  expect(ipc.runStart).toHaveBeenCalledWith(
+    expect.objectContaining({
+      command: "/project-jdk8/bin/java",
+      cwd: "app",
+      env: { PROBE: "configured" },
+      args: [
+        "-Dspring.output.ansi.enabled=always",
+        "-cp",
+        "/p/app/target/classes",
+        "a.Main",
+        "--spring.profiles.active=dev",
+      ],
+    }),
+    expect.anything(),
+  );
+});
+
+it("tracks Boot startup and failure from process output and resets the facts on rerun", async () => {
+  const boot = { ...config, kind: "spring-boot", args: ["a.Main"] };
+  const session = (await startRun(boot))!;
+  expect(session.springBoot?.phase).toBe("starting");
+  const console = runtime(session.id)!.console;
+  console.append({ kind: "stdout", text: "Tomcat started on port(s): 8081 (http)\n" });
+  const current = () => useRun.getState().sessions.find((s) => s.id === session.id)!;
+  expect(current().springBoot?.phase).toBe("starting");
+  console.append({ kind: "stdout", text: "Started Main in 1.25 seconds (JVM running for 2.5)\n" });
+  expect(current().springBoot?.phase).toBe("ready");
+  console.append({ kind: "stderr", text: "Application run failed\nNoSuchBeanDefinitionException: a.Missing\n" });
+  expect(current().springBoot).toEqual({ phase: "failed", failure: "missingBean" });
+  expect(current().status).toBe("running");
+  onRunExited(1, 1);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(current()).toMatchObject({ status: "finished", springBoot: { phase: "failed", failure: "missingBean" } });
+  const restarted = await startRun(boot, session.id);
+  expect(restarted).toMatchObject({ springBoot: { phase: "starting" }, httpPort: undefined });
+});
+
+it("honours Stop while native process creation is still in flight", async () => {
+  let resolve!: (value: { status: "ok"; data: { id: number; pty: boolean } }) => void;
+  ipc.runStart.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const launching = startRun({ ...config, kind: "spring-boot", args: ["a.Main"] });
+  await vi.waitFor(() => expect(ipc.runStart).toHaveBeenCalled());
+  const id = useRun.getState().sessions[0]!.id;
+  await stopSession(id);
+  expect(useRun.getState().sessions[0]).toMatchObject({ stopped: true, springBoot: { phase: "stopping" } });
+  resolve({ status: "ok", data: { id: 99, pty: false } });
+  await launching;
+  expect(ipc.runStop).toHaveBeenCalledWith(99);
+  expect(useRun.getState().sessions[0]).toMatchObject({ runId: 99, stopped: true });
+  onRunExited(99, 130);
+  await new Promise((done) => setTimeout(done, 50));
+  expect(useRun.getState().sessions[0]).toMatchObject({ status: "finished", springBoot: { phase: "stopped" } });
 });

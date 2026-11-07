@@ -1,41 +1,81 @@
-# Spring Run / Debug progress
+# Spring Run / Debug delivery
 
-Baseline: `57653df63a91789a3544436109ee288b7cfb0ba6`; independent clone and branch `codex/spring-run-debug`.
+Independent clone: `/Users/hyl/Documents/Codex/2026-11-07/openidea-spring-run-debug/work/openidea`.
+Branch: `codex/spring-run-debug`. Baseline: `57653df63a91789a3544436109ee288b7cfb0ba6`.
+Audit checkpoint commit: `8cde1937`. Implementation/verification commits recorded below when frozen.
 
-## Audit
+## Implemented
 
-- Existing `RunConfig` saves args, params, env, cwd, module, env files and inheritance in project/local TOML. Application/Spring Boot forms already expose profiles, VM/program args, JRE, module.
-- Run/Debug share `prepareJavaLaunch`; backend selects Project JDK separately from JDT tooling JDK. Explicit run JRE wins.
-- Java 8 (1.8.0_421) real JDWP probe `java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:0 -version` succeeded. Initial sandbox denied socket bind; elevated local probe succeeded. No speculative JDWP rewrite.
-- Missing: Maven Boot dedicated application args and application cwd; selected launch context does not reach Spring Beans settings; Boot lifecycle lacks startup/ready/failure facts.
-- Stop uses owned RunId and process group; rerun waits for old run exit. No process-name kills.
-- Update already distinguishes resource copy, debugger HotSwap and restart. No dependency injection / DevTools installation needed.
+- Existing Application/Spring Boot forms already persist profiles, VM/program args, env/env files, cwd, JRE and module. Kept that model and added actual shared/local persistence + Java8 regression rather than a duplicate runner.
+- Maven Boot gets separate application program arguments and application working directory, forwarded via `spring-boot.run.arguments` and `spring-boot.run.workingDirectory`. Maven's own cwd/goals remain independent. Fixed fork argument quoting when one argument contains both quote characters; real Maven run/debug verifies it.
+- Java Run and Debug retain the resolved Project SDK / explicit run JRE, independently of the JDT tooling JDK. Tests explicitly use a Java8 project executable with a different tooling javaHome.
+- When system environment inheritance is disabled, Java Debug uses the existing Run process manager to launch the project JVM, then the same debugger attaches on loopback JDWP. This fixes java-debug merging the JDT tooling process environment even when inheritance was disabled. Env-file precedence, args, cwd and project executable follow the Run path.
+- Spring lifecycle facts distinguish preparation, compilation, application startup, observed Boot startup completion, failure, stopping and stopped. Process liveness stays separate: a startup failure log does not falsely claim a live process exited. Direct Java Debug and Maven/Run output use the same parser. `Started ... (JVM running for ...)` is a log milestone, not an HTTP readiness/health guarantee.
+- Failure summary categories: occupied port, missing required Bean, ambiguous Bean and configuration binding. Existing JVM stack links remain; Boot's explicit file/classpath-resource configuration origins now link to line/column. Duplicate resource paths across modules remain unresolved; cwd is never used to guess a classpath module.
+- Restart refuses to replace a still-live/still-starting process after its stop timeout. Stop during native `runStart` waits for its owned RunId and stops only that process; reset/close while spawn is in flight also disposes its returned process. A failed stop restores live state. No process-name kills or service-port kills.
+- Application update already distinguishes resource/class publication, debugger HotSwap and restart. No DevTools dependency is installed. No Initializr/starter creation entry was found in inspected source; no new download flow.
 
-## Validation and commits
+## Frozen producer/consumer contract
 
-In progress. No application rebuild or GUI claim. No changes to installed app, main, release, original demo or port 18088.
+Authoritative shared file (single writer F):
+`/Users/hyl/Documents/Codex/2026-11-06/https-github-com-anomalyco-opencode-https-2/work/spring-parity-coordination/launch-context-contract.json`.
+Committed identical fixture: `docs/spring-launch-context-contract.json`.
+Protocol: `openidea.spring-launch-context`, version **1**. Six public synthetic combination samples cover dev→prod, CLI/system/env precedence, saved nonboolean properties, deselection, unknown high-priority values and stable plugin ID routing.
 
-## Integration boundary (current implementation)
+- Run publishes through platform `useSpringLaunchContext`; frontend features do not import each other's stores.
+- Bridge: existing `pluginRunCommand(installedId, "openidea.setLaunchContext", JSON.stringify({projectRoot, context}), null, [])`. Exact known aliases only, routed to the actually enabled active/inactive package, preferring `hyhanyue.spring-beans`; source `aritti.spring-beans` and migration `hyhanyue.spring-beans-local` are supported. Native validates enabled status and expected project root.
+- **Guest reads `host::setting("springBeans.launchContext")` as a JSON object**, with `{version:1, launch:{configId,name,kind,persisted,mainClass,module,cwd,profiles,commandLineProperties,systemProperties,environment,inheritEnvironment,envFiles,unresolvedSources}}`. This is **not** the draft `openideaLaunchContext` JSON-string envelope in `springBeans.propertyOverrides` and does not overwrite that user setting. The old persistent analysis settings remain user-owned.
+- Each source map is `Map<string, Fact>`, where Fact is `{state:"known",value:string}` or `{state:"unknown"}`. The production transport carries only non-sensitive literal booleans and validated profile names as known values. Every other configured value is an **unknown present override with a source**, never known absence / false / the old `!key` tombstone. An unknown high-priority value blocks lower-priority file fallback for that key.
+- `persisted:true` refers to the exact selected ID in `.openidea/run.toml` / `.openidea/run.local.toml` under the current authorized project. The consumer reads matching saved args/env values in memory, validates selection metadata, and can resolve nonboolean properties. It must not pick a different ID, import the complete inherited process environment, expand third-party plugin scope, or log/show/persist sensitive values. Unsaved/unreadable/mismatched references retain source-specific unknown overrides.
+- `context:null` removes the transient layer only. Guest `{version:1,launch:null}` means conflicting/unknown selection, not permission to retain a previous launch. Selected configs with unresolved profiles use `{state:"unknown",values:[],source:"unknown"}`.
+- The native host replaces context atomically per `(window, project)` and snapshots it once per guest invocation. Windows without a selection still participate in conflict detection. Background editor providers lack window identity; conflicting window selections yield unknown. Views retain invoking-window identity.
+- Marker/view generations invalidate pending results; Spring view/marker requests wait for synchronization. Native navigation contributions are invalidated after replacement. Closed windows and late project-mismatched requests cannot leak earlier context.
+- IPC/WIT wire types are unchanged; `src/bindings.ts` was not edited and needs no regeneration. `HostApi::settings_overlay` is an internal defaulted Rust method, restricted to known Spring IDs by the host implementation.
 
-- Run feature publishes `useSpringLaunchContext` in `src/platform/springLaunchContext.ts`; consumers use platform services rather than importing the Run feature.
-- `src/features/plugins/springLaunchContext.ts` resolves the **actually enabled** known Spring Beans package: stable `hyhanyue.spring-beans`, source `aritti.spring-beans`, migration `hyhanyue.spring-beans-local`. It does not invoke guessed or arbitrary IDs. The host also restricts the reserved bridge command to those aliases and an active/inactive installed package.
-- Existing IPC `pluginRunCommand(id, "openidea.setLaunchContext", JSON.stringify({projectRoot, context}), null, [])` transports a sanitized context. This is a host-reserved command, not a guest plugin command. No IPC/WIT serialization schema changes or generated-bindings edit.
-- `context` is `null` to **remove the temporary layer** on deselection / unsupported unknown launch. Persistent user plugin settings remain intact. A selected Java application with an unresolved profile instead sends `activeProfiles: null`, never the previous selection's profile.
-- Context shape: `{applicationClass: string|null, activeProfiles: string|null, propertyOverrides: Map<string,string|null>, environmentComplete: false}`. **propertyOverrides is an object map, not the old properties-text setting string, and not the other session's draft JSON-in-a-string envelope.** This is the integration contract for `environment.rs` to consume. Arbitrary string/number values and sensitive keys have null values; only non-sensitive boolean switches are carried. `null` means unknown, never missing/false.
-- Host overlays exactly `springBeans.applicationClass`, `springBeans.activeProfiles`, `springBeans.propertyOverrides`, `springBeans.environmentComplete`; it never writes the user's settings. Map replacement is atomic. Runtime snapshots all overrides per guest invocation, avoiding mixed generations across multiple setting reads.
-- Context storage is `(window, project)` scoped and cleared on window close. Background editor providers currently have no window identity; they use a root's facts only when all windows agree, otherwise all launch facts become unknown. Views keep the invoking window's facts. Late requests for another project are rejected by the host root guard.
-- Setting revisions invalidate in-flight markers/views; marker and Spring view requests wait for synchronization. Host navigation contributions are invalidated after context changes.
-- Explicit CLI properties beat VM/environment values. Repeated Boot CLI properties combine comma-separated values. Inherited environments, env files, JVM option env variables, JSON and dynamic substitutions keep unsupported facts unknown; this adapter never claims a complete Spring Environment.
+## Validation
 
-## Verified so far
+All commands run from this independent clone. Shared dependencies are read from caches; `target` is local to this clone. Frontend binaries are invoked directly from cached `node_modules/.bin` because pnpm's auto-install guard refuses an external node_modules symlink; no shared dependency directory was mutated.
 
-- Frontend focused launch/SDK tests: 68 passed (before subsequent extra lifecycle cases).
-- `cargo test -p ide-run --test config --test spring_launch_context --offline`: 14 passed (before extra late-project request case).
-- Java8 fixture compile succeeded offline using cached Maven compiler; dependency plugin 3.3.0 was incompletely cached, so classpath generation used cached `org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath` successfully.
-- Real Java8 `ide-run` regression passed in 14.60s: shared/local config persistence, dev/prod HTTP response, env/VM/args/cwd, actual JDWP suspend/resume, stop/restart isolation, missing Bean, ambiguous Bean, binding and occupied-port failures. macOS `/var` → `/private/var` canonicalization is compared as paths. Additional env-file/Maven cases are in progress.
-- No full environment is printed or written to this report. The probe endpoint returns only synthetic test markers, runtime version, cwd and a boolean for inheritance.
-- Existing application update differentiates class/resource publication, debugger HotSwap and restart; no DevTools dependency is added. No Initializr/starter creation entry was found in the inspected source; no download flow added.
+- Java8 JDWP probe: `/Library/Java/JavaVirtualMachines/jdk-1.8.jdk/Contents/Home/bin/java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:0 -version` succeeded (Java 1.8.0_421). The initial sandbox socket-bind denial was rerun with local execution permission. No speculative JDWP syntax change.
+- Fixture compile/classpath: `JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-1.8.jdk/Contents/Home "/Applications/IntelliJ IDEA.app/Contents/plugins/maven/lib/maven3/bin/mvn" -o -f fixtures/spring-run-debug-java8/pom.xml compile org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dmdep.outputFile=target/classpath.txt` passed. Default dependency plugin 3.3.0 was incompletely cached; cached 3.8.1 succeeded without download.
+- Real regression: `JAVA_HOME=<Java8> OPENIDEA_JAVA8_FIXTURE=<this clone>/fixtures/spring-run-debug-java8 OPENIDEA_MAVEN=<IDEA Maven>/bin/mvn cargo test -p ide-run --test spring_java8 --offline -- --ignored --nocapture` passed in **41.17s**. Actual Java8/Boot2.7.18 processes and HTTP verified shared/local config reload, two profiles, env/env-file precedence, VM options, quoted program args, cwd, Java8 executable, JDWP suspend/resume, restart, isolated stop, and four failure paths. Real Maven Run and JDWP Debug were included. Binding failure emitted an explicit source origin. Ports are ephemeral; 18088 was not used.
+- `cargo test -p ide-run --test config --test spring_launch_context --offline`: **15 passed**. Includes the exact shared JSON producer payloads, all known aliases, project guard, window isolation, invocation snapshots and unknown facts.
+- `cargo check -p ide-host --lib --offline -j 2` passed (cold metadata check 10m11s; no app link/launch).
+- `cargo clippy -p ide-host -p ide-plugin -p ide-run --all-targets --offline -j 2 -- -D warnings` passed (1m53s).
+- Frontend main/node/perf/scripts/smoke TypeScript checks passed; `vite build` passed (existing chunk-size/dynamic-import warnings).
+- Broad frontend snapshot: **105 suites / 1227 tests passed** in 110.42s. Focused final changes (bounded-context fallback and in-flight spawn Stop) were rerun: **29 passed**, and the SDK/cancellation/selection group: **58 passed**. Text catalog validation, Oxfmt, Oxlint, Knip and `git diff --check` passed (Knip's existing unused-ignore hint only).
+
+No full launch environment appears in logs, screenshots, this contract or this report. Fixture HTTP exposes only allowlisted synthetic markers, Java version/cwd and an inheritance boolean. Original demo, main checkout, installed app, main branch and release artifacts remain untouched.
 
 ## Pending unified Mac acceptance
 
-Native UI build/launch, screenshots, Java debugger breakpoint/variable inspection and stable-ID real WASM integration remain for the main session's combined Mac acceptance. The JDWP regression proves the real transport and suspended/resumed Java8 app, not the full IDE DAP/GUI flow. No claim of GUI completion.
+Native app UI, before/after screenshots, IDE DAP breakpoint/variable inspection, stable-ID real WASM wiring and combined session A environment consumption remain for unified Mac acceptance. The real JDWP test proves transport and suspended/resumed Java8 apps; it does not pretend to be the full IDE DAP/GUI flow. Producer/consumer combination conformance has passed as recorded below; the actual combined native app/WASM/UI remains a separate acceptance gate.
+
+## Combined consumer conformance — passed
+
+A's consumer reads the same `springBeans.launchContext` object and its copied fixture matches the canonical SHA256 **`3a5e0d26690ee5a64f17619b97cdf4edd272137d3bba9d15a175758a7f0f375e`**.
+
+`scripts/verify-spring-launch-contract.py` copies the consumer, SDK, support and fixture sources into F's own isolated scratch tree. It appends only the combination test to that copy and uses an independent Cargo target. The original A checkout/target is never modified. The exact producer payloads run through the actual consumer environment snapshot in the shared sequence; this is not a mock consumer or separate hand-written interpretation.
+
+Results: **1 F combination test passed**, then **3 A consumer contract tests passed**, covering the same shared samples, unmatched saved metadata, unknown/null rather than absence, shared/local duplicate-ID precedence and project-scoped env files. The final manifest records the frozen contract digest, source hashes and whether the source snapshot still matches A. Earlier in-progress source/test-copy issues were corrected before this successful snapshot.
+
+Command:
+
+```sh
+python3 scripts/verify-spring-launch-contract.py \
+  --consumer-root /Users/hyl/Documents/Codex/2026-11-07/openidea-spring-boot-parity/work/openidea \
+  --work-dir /Users/hyl/Documents/Codex/2026-11-07/openidea-spring-run-debug/work/contract-consumer \
+  --cargo /Users/hyl/Documents/Codex/2026-11-06/https-github-com-anomalyco-opencode-https-2/work/openidea-toolchain/rust/cargo/bin/cargo
+```
+
+Use the shared `CARGO_HOME` and `RUSTUP_HOME` from the task environment; no inherited environment values are emitted. The result manifest is in this session's `work/contract-consumer/manifest.json`. A owns its consumer commit; the main session must integrate that commit together with F's producer, not use the older draft envelope implementation.
+
+## Integration / Mac acceptance recipe
+
+1. Apply F's commits in order. No changes were made to MVC `http-client/spring`, `ops/routes.rs`, `commands/nav.rs`, runtime Actuator panels, generated bindings or installed/release resources.
+2. Use an independent fixture copy. Set Project SDK to Java8 and JDT tooling SDK independently. Create dev/prod Spring Boot configs for `com.example.demo.DemoApplication`, explicit module, distinct cwd/env/env files, VM `-Dprobe.vm=...`, args `--server.port=0 --probe.arg=...`; save/reopen and inspect both configs. Never run the original demo or port 18088.
+3. Run then Debug, exercise a controller breakpoint/variables, verify `/launch-probe`, switch configs and inspect Bean/Profile analysis. Check both ordinary inherited-env Debug and isolated-env owned Run+JDWP Debug. Verify stable `hyhanyue.spring-beans` real WASM, then unknown/deselected facts.
+4. Stop/restart each config, Stop during preparation and launch, and exercise `missing`, `ambiguous`, `binding` plus a synthetic occupied port. Binding-origin links must select the deterministic resource; duplicate module resources must stay unresolved. Capture UI before/after evidence from the combined native build.
+5. Update resources/classes/HotSwap/restart labels must keep their existing distinct meanings; do not add DevTools or claim restart is HotSwap.
+
+Official references checked: [Spring Boot Maven plugin 2.7.18](https://docs.spring.io/spring-boot/docs/2.7.18/maven-plugin/reference/htmlsingle/), [Boot 2.7 external configuration](https://docs.spring.io/spring-boot/docs/2.7.x/reference/htmlsingle/), and [java-debug's environment merge implementation](https://github.com/microsoft/java-debug/blob/main/com.microsoft.java.debug.core/src/main/java/com/microsoft/java/debug/core/adapter/handler/LaunchRequestHandler.java).

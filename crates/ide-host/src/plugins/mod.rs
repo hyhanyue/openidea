@@ -23,6 +23,7 @@ mod icons;
 pub mod index_ops;
 mod install;
 pub mod intellij;
+mod launch_context;
 mod market;
 pub mod navigation;
 mod points;
@@ -1043,6 +1044,20 @@ impl PluginHost {
         arg: Option<&str>,
         invocation: Invocation,
     ) -> IdeResult<Option<String>> {
+        if launch_context::is_plugin(id) && command == launch_context::COMMAND {
+            let client = invocation.client.as_deref().ok_or_else(|| IdeError::invalid("No launch context window"))?;
+            let root =
+                invocation.workspace_root.as_deref().ok_or_else(|| IdeError::invalid("No launch context project"))?;
+            let plugin = self.get(id)?;
+            if !matches!(plugin.status(), PluginStatus::Active | PluginStatus::Inactive) {
+                return Err(IdeError::unavailable("Spring analysis plugin is not enabled"));
+            }
+            let facts = launch_context::parse_request(arg.unwrap_or("{}"), root).map_err(IdeError::invalid)?;
+            self.shared.set_launch_context(client, root, facts);
+            self.invalidate_navigation(root, None);
+            self.emit(Some(client), PluginEvent::DocumentIndexesChanged);
+            return Ok(None);
+        }
         let (cmd, arg) = (command.to_owned(), arg.map(str::to_owned));
         self.code_call(id, invocation, "running the command", move |rt, inv| rt.run_command(&cmd, arg.as_deref(), inv))
     }

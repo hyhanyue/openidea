@@ -179,6 +179,7 @@ pub(super) struct Shared {
     /// (scope, plugin, key) → JSON value.
     contexts: Mutex<BTreeMap<ContextKey, String>>,
     closed_clients: Mutex<BTreeSet<String>>,
+    launch_contexts: Mutex<super::launch_context::Contexts>,
     /// plugin → kinds subscribed at run time (kept across idle reclaim).
     pub subscriptions: Mutex<HashMap<String, BTreeSet<EventKind>>>,
     /// plugin → files it shows problems for, withdrawn when it stops.
@@ -212,6 +213,7 @@ impl Shared {
             status: Mutex::default(),
             contexts: Mutex::default(),
             closed_clients: Mutex::default(),
+            launch_contexts: Mutex::default(),
             subscriptions: Mutex::default(),
             diagnostics: Mutex::default(),
         })
@@ -275,6 +277,15 @@ impl Shared {
     pub fn forget_client(&self, client: &str) {
         self.closed_clients.lock().insert(client.to_owned());
         self.contexts.lock().retain(|(scope, ..), _| scope.as_deref() != Some(client));
+        self.launch_contexts.lock().forget(client);
+    }
+
+    pub fn set_launch_context(&self, client: &str, root: &Path, facts: serde_json::Map<String, serde_json::Value>) {
+        let closed = self.closed_clients.lock();
+        if closed.contains(client) {
+            return;
+        }
+        self.launch_contexts.lock().set(client, root, facts);
     }
 
     /// A window labelled `client` is being created (labels are reused after a close).
@@ -910,6 +921,17 @@ impl HostApi for PluginApi {
         };
         self.shared.sink.emit(client, event);
         Ok(())
+    }
+
+    fn settings_overlay(
+        &self,
+        client: Option<&str>,
+        root: Option<&Path>,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        if super::launch_context::is_plugin(self.id()) {
+            return self.shared.launch_contexts.lock().snapshot(client, root);
+        }
+        serde_json::Map::new()
     }
 
     fn setting(&self, root: Option<&Path>, key: &str) -> Option<String> {

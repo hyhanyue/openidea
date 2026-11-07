@@ -30,6 +30,8 @@ import type {
 import { tx } from "@/platform/i18n";
 import { call, commands, IpcError, isTauri } from "@/platform/ipc";
 import { editorContext } from "./editorContext";
+import { syncSpringLaunchContext } from "./springLaunchContext";
+import { isSpringBeansPlugin } from "@/platform/springPlugins";
 
 export interface PluginsBackend {
   list(): Promise<PluginsSnapshot>;
@@ -199,8 +201,10 @@ export const tauriPluginsBackend: PluginsBackend = {
   installedIntellijThemes: () => call(commands.pluginInstalledIntellijThemes()),
   stagePackage: (name, files) => call(commands.pluginStagePackage(name, files)),
   // A tool window's calls (no `doc`) carry the window's active editor.
-  renderView: (pluginId, view, viewport, doc) =>
-    call(commands.pluginViewRender(pluginId, view, viewport, doc, doc == null ? editorContext() : null)),
+  renderView: async (pluginId, view, viewport, doc) => {
+    if (isSpringBeansPlugin(pluginId)) await syncSpringLaunchContext();
+    return call(commands.pluginViewRender(pluginId, view, viewport, doc, doc == null ? editorContext() : null));
+  },
   viewEvent: async (pluginId, view, event, doc) => {
     await call(commands.pluginViewEvent(pluginId, view, event, doc, doc == null ? editorContext() : null));
   },

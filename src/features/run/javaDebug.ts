@@ -10,7 +10,7 @@
  */
 import { executeAction } from "@/platform/actions";
 import type { RunConfig } from "@/platform/ipc";
-import { isJvmApplication, JDWP_AGENT, jdwpListeningPort } from "@/platform/javaLaunch";
+import { isJvmApplication, JDWP_AGENT, jdwpListeningPort, resolveJavaModule } from "@/platform/javaLaunch";
 import { startRun, useRun } from "./store";
 import { DELEGATED_DEBUG, DELEGATED_MAIN } from "./gradleRun";
 
@@ -40,6 +40,9 @@ function withProperty(args: readonly string[], key: string, value: string): stri
 export function jdwpLaunch(config: RunConfig): RunConfig | null {
   if (config.kind === "tomcat") return { ...config, params: { ...config.params, tomcatDebug: "true" } };
   const args = config.args;
+  // java-debug merges env into its tooling JVM's environment. Let the Run manager own
+  // isolated project JVMs instead, then attach the same debugger over loopback JDWP.
+  if (isJvmApplication(config) && config.includeSystemEnv === false) return { ...config, args: [JDWP_AGENT, ...args] };
   // A single source file (`java Hi.java`): the agent goes before the file. Compiled first
   // (`javac … && java -cp …`): through `JDK_JAVA_OPTIONS`, which only the `java` launcher reads.
   if (config.kind === "java-file")
@@ -76,6 +79,7 @@ export function jdwpLaunch(config: RunConfig): RunConfig | null {
 export async function debugWithAgent(config: RunConfig): Promise<boolean> {
   const launch = jdwpLaunch(config);
   if (!launch) return false;
+  if (isJvmApplication(launch)) launch.module = await resolveJavaModule(config);
   let sessionId: string | null = null;
   const waiting: number[] = [];
   const attach = (port: number) => {
@@ -83,7 +87,7 @@ export async function debugWithAgent(config: RunConfig): Promise<boolean> {
     void executeAction("debug.attach", {
       name: config.name,
       // The application's module (a delegated run's working directory is the Gradle build).
-      module: config.module ?? config.cwd ?? "",
+      module: launch.module ?? config.module ?? config.cwd ?? "",
       hostName: "127.0.0.1",
       port,
       process: runId,

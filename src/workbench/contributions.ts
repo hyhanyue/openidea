@@ -1,3 +1,4 @@
+import type { SpringBootLifecycle } from "@/platform/springBootLifecycle";
 /**
  * Workbench extension points. Features contribute UI here instead of the
  * workbench importing features, so feature folders stay independent:
@@ -1476,6 +1477,7 @@ export interface DebugServiceSession {
   processId: number | null;
   /** The debuggee's HTTP port announced on its console (not the JDWP attach port), if known. */
   httpPort?: number;
+  springBoot?: SpringBootLifecycle;
   rerun: (() => void) | null;
   stop: (options?: { stopProcess?: boolean }) => Promise<void>;
   show: () => void;

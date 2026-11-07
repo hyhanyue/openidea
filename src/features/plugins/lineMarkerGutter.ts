@@ -12,6 +12,7 @@ import { isSpringBeansPlugin, springLabels } from "./springLabels";
 import { navigationButton } from "./navigationButton";
 import { pluginsBackend } from "./backend";
 import { usePluginSettingsRevision } from "./settingsRevision";
+import { syncSpringLaunchContext } from "./springLaunchContext";
 import { commands, type LineMarkerInfo } from "@/platform/ipc";
 import { gutterIconMarkup, isIconName, useFileIconRevision } from "@/ui";
 import styles from "@/editor/navigation/LineMarkers.module.css";
@@ -132,6 +133,8 @@ class MarkersPlugin {
     const gen = ++this.generation;
     const text = this.view.state.doc;
     try {
+      await syncSpringLaunchContext();
+      if (gen !== this.generation) return;
       const markers = await commands.pluginLineMarkers(this.doc);
       if (gen !== this.generation || this.view.state.doc !== text || !this.view.dom.isConnected) return;
       if (markers.status !== "ok") return;

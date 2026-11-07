@@ -279,3 +279,34 @@ describe("build wrapper per execution host", () => {
     expect(wrapperCommands()).toEqual(c.expected);
   });
 });
+
+it("keeps Maven Boot application arguments and working directory separate from Maven", () => {
+  registerBuiltinTypes();
+  const type = typeFor("maven")!;
+  const line = type.commandLine({
+    tasks: "spring-boot:run",
+    projectDir: "module",
+    programArgs: '--probe="hello world" --server.port=0',
+    applicationCwd: "/tmp/boot work",
+  })!;
+  expect(line.cwd).toBe("module");
+  expect(line.args).toContain('-Dspring-boot.run.arguments="--probe=hello world" --server.port=0');
+  expect(line.args).toContain("-Dspring-boot.run.workingDirectory=/tmp/boot work");
+  expect(type.commandLine({ tasks: "test", programArgs: "ignored", applicationCwd: "/tmp/ignored" })!.args).toEqual([
+    "test",
+  ]);
+});
+
+it("uses an owned Java launch for Debug when the system environment is excluded", () => {
+  const boot = cfg({
+    kind: "spring-boot",
+    includeSystemEnv: false,
+    args: ["-cp", "${classpath}", "a.App", "--spring.profiles.active=dev"],
+  });
+  expect(jdwpLaunch(boot)?.args).toEqual([expect.stringContaining("-agentlib:jdwp="), ...boot.args]);
+  expect(jdwpLaunch({ ...boot, includeSystemEnv: true })).toBeNull();
+});
+
+it("serializes Maven forked arguments containing both quote characters", () => {
+  expect(joinPropertyArgs([`It's a "quoted" value`])).toBe(`'It'"'"'s a "quoted" value'`);
+});

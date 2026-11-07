@@ -16,7 +16,7 @@ export interface FileTarget {
    * `rubyTest`: a Minitest test with no file in its output — `className` is its class, `path` its
    * method name — found by searching the project (`rubyTests.ts`).
    */
-  resolve: "path" | "name" | "rubyTest";
+  resolve: "path" | "name" | "rubyTest" | "resource";
   /** JVM frames: the class's binary name (`com.acme.OrderController$Inner`). */
   className?: string;
   /** Maven reactor module, relative to the project where possible. */
@@ -28,7 +28,11 @@ export interface FileTarget {
  * under its package directory, so frames resolve by fully qualified class name
  * (as in IDEA), not by a bare file name that several packages may share.
  */
-export function jvmFrameTarget(className: string | undefined, file: string, line: number | undefined): FileTarget {
+export function jvmFrameTarget(
+  className: string | undefined,
+  file: string,
+  line: number | undefined,
+): FileTarget & { resolve: "name" } {
   const pkg = className?.includes(".") ? className.slice(0, className.lastIndexOf(".")).replace(/\./g, "/") : "";
   return {
     path: pkg ? `${pkg}/${file}` : file,
@@ -61,6 +65,19 @@ function groupRange(m: RegExpMatchArray, g: number): [number, number] {
 const PATH = String.raw`(?:[A-Za-z]:[\\/]|~?\/|\.{1,2}\/)?(?:[\w.@+\-]+[\\/])*[\w@+\-][\w.@+\-]*\.[A-Za-z][\w]{0,9}`;
 
 const PATTERNS: Pattern[] = [
+  // Boot configuration binding errors print the origin only when it is known.
+  {
+    re: /(?:Origin:\s*)?(class path resource|file) \[([^\]\r\n]+\.(?:properties|ya?ml))\] - ([1-9]\d*):([1-9]\d*)/dg,
+    build: (m) => {
+      const [start] = groupRange(m, 2);
+      return {
+        kind: "file",
+        start,
+        end: m.index! + m[0].length,
+        target: { path: m[2]!, line: num(m[3]), col: num(m[4]), resolve: m[1] === "file" ? "path" : "resource" },
+      };
+    },
+  },
   // Maven prints source locations unquoted, including spaces in absolute Java paths.
   {
     re: new RegExp(

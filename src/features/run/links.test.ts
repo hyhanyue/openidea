@@ -139,3 +139,16 @@ describe("joinPath", () => {
     expect(joinPath("/p/app/", "file:///abs/y.js")).toBe("/abs/y.js");
   });
 });
+
+it("links known Boot binding origins without manufacturing a location for command-line properties", () => {
+  expect(files("    Origin: class path resource [application-dev.yml] - 7:12")).toEqual([
+    { path: "application-dev.yml", line: 7, col: 12, resolve: "resource", text: "application-dev.yml] - 7:12" },
+  ]);
+  expect(files("    Origin: file [/work/config/app.properties] - 2:1")[0]).toMatchObject({
+    path: "/work/config/app.properties",
+    line: 2,
+    col: 1,
+    resolve: "path",
+  });
+  expect(files('Origin: "probe.number" from property source "commandLineArgs"')).toEqual([]);
+});
