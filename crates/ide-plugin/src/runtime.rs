@@ -744,13 +744,15 @@ impl Runtime {
 
     fn provider_call<R>(
         &mut self,
+        doc: &ProviderDocument,
         timeout: Duration,
         f: impl FnOnce(&wit_prov::Guest, &mut Store<StoreData>) -> wasmtime::Result<R>,
     ) -> Result<R, CallError> {
         if self.exports.providers.is_none() {
             return Err(CallError::missing_export("providers"));
         }
-        self.call(Invocation::default(), timeout, |e, store| f(e.providers.as_ref().expect("checked"), store))
+        let invocation = provider_invocation(doc, self.store.data().host.projects());
+        self.call(invocation, timeout, |e, store| f(e.providers.as_ref().expect("checked"), store))
     }
 
     pub fn provide_completion(
@@ -761,7 +763,7 @@ impl Runtime {
         timeout: Duration,
     ) -> Result<Vec<CompletionItem>, CallError> {
         let d = doc_to_wit(doc);
-        let items = self.provider_call(timeout, |p, s| p.call_completion(s, &d, pos_to_wit(at), trigger))?;
+        let items = self.provider_call(doc, timeout, |p, s| p.call_completion(s, &d, pos_to_wit(at), trigger))?;
         Ok(items
             .into_iter()
             .take(MAX_PROVIDER_ITEMS)
@@ -792,7 +794,7 @@ impl Runtime {
         timeout: Duration,
     ) -> Result<Option<InlineSuggestion>, CallError> {
         let d = doc_to_wit(doc);
-        let s = self.provider_call(timeout, |p, s| p.call_inline_completion(s, &d, pos_to_wit(at)))?;
+        let s = self.provider_call(doc, timeout, |p, s| p.call_inline_completion(s, &d, pos_to_wit(at)))?;
         Ok(s.map(|s| InlineSuggestion {
             insert_text: clip(s.insert_text, 64 << 10),
             replace: s.replace.map(range_from_wit),
@@ -806,7 +808,7 @@ impl Runtime {
         timeout: Duration,
     ) -> Result<Vec<CodeAction>, CallError> {
         let d = doc_to_wit(doc);
-        let actions = self.provider_call(timeout, |p, s| p.call_code_actions(s, &d, range_to_wit(selection)))?;
+        let actions = self.provider_call(doc, timeout, |p, s| p.call_code_actions(s, &d, range_to_wit(selection)))?;
         Ok(actions.into_iter().take(MAX_PROVIDER_ITEMS).map(code_action_from_wit).collect())
     }
 
@@ -819,7 +821,7 @@ impl Runtime {
     ) -> Result<CodeAction, CallError> {
         let d = doc_to_wit(doc);
         let a = code_action_to_wit(action);
-        let resolved = self.provider_call(timeout, |p, s| p.call_resolve_code_action(s, &d, &a))?;
+        let resolved = self.provider_call(doc, timeout, |p, s| p.call_resolve_code_action(s, &d, &a))?;
         resolved.map(code_action_from_wit).map_err(|e| CallError::Guest(e.into()))
     }
 
@@ -830,7 +832,7 @@ impl Runtime {
         timeout: Duration,
     ) -> Result<Vec<Location>, CallError> {
         let d = doc_to_wit(doc);
-        let locations = self.provider_call(timeout, |p, s| p.call_definition(s, &d, pos_to_wit(at)))?;
+        let locations = self.provider_call(doc, timeout, |p, s| p.call_definition(s, &d, pos_to_wit(at)))?;
         Ok(locations.into_iter().take(MAX_PROVIDER_ITEMS).map(location_from_wit).collect())
     }
 
@@ -840,7 +842,7 @@ impl Runtime {
         timeout: Duration,
     ) -> Result<Vec<LineMarker>, CallError> {
         let d = doc_to_wit(doc);
-        let markers = self.provider_call(timeout, |p, s| p.call_line_markers(s, &d))?;
+        let markers = self.provider_call(doc, timeout, |p, s| p.call_line_markers(s, &d))?;
         Ok(markers
             .into_iter()
             .take(MAX_PROVIDER_ITEMS)
@@ -867,7 +869,8 @@ impl Runtime {
             version: doc.version,
             text: doc.text.clone(),
         };
-        let tokens = self.call(Invocation::default(), timeout, |e, store| {
+        let invocation = provider_invocation(doc, self.store.data().host.projects());
+        let tokens = self.call(invocation, timeout, |e, store| {
             e.semantic.as_ref().expect("checked").call_semantic_tokens(store, &d)
         })?;
         Ok(tokens
@@ -1028,6 +1031,20 @@ impl Runtime {
                 Err(CallError::Trap(msg))
             }
         }
+    }
+}
+
+fn provider_invocation(doc: &ProviderDocument, roots: Vec<std::path::PathBuf>) -> Invocation {
+    let workspace_root =
+        roots.into_iter().filter(|root| doc.path.starts_with(root)).max_by_key(|root| root.components().count());
+    Invocation {
+        workspace_root,
+        editor: Some(crate::EditorContext {
+            path: doc.path.clone(),
+            language: doc.language.clone(),
+            selections: vec![],
+        }),
+        ..Invocation::default()
     }
 }
 
@@ -1246,6 +1263,22 @@ fn event_to_wit_view(e: ViewEvent) -> wit_vt::ViewEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_providers_use_the_documents_longest_owning_project() {
+        let doc = ProviderDocument {
+            path: "/projects/app/nested/src/Client.java".into(),
+            language: "java".into(),
+            version: 1,
+            text: String::new(),
+        };
+        let roots = vec!["/projects/app".into(), "/projects/app/nested".into(), "/projects/app/nest".into()];
+        let ctx = provider_invocation(&doc, roots);
+        assert_eq!(ctx.workspace_root, Some("/projects/app/nested".into()));
+        assert_eq!(ctx.editor.unwrap().path, doc.path);
+        let loose = provider_invocation(&doc, vec!["/projects/application".into()]);
+        assert_eq!(loose.workspace_root, None);
+    }
 
     #[cfg(windows)]
     #[test]

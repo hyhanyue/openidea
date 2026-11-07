@@ -50,3 +50,21 @@ The checked-in Spring gutter icons are independently drawn. The local Mac
 preview can substitute original assets from the user's IDEA installation; those
 commercial assets are kept outside the source tree. Upstream provenance is in
 UPSTREAM.md; its MIT license is preserved.
+
+### Selected source context
+
+The application class, active profiles and known property overrides can be set
+per project in the Spring Beans settings. With one Boot application it is
+selected automatically. Profile expressions, literal `ConditionalOnProperty`,
+component scan packages and imported configuration classes narrow candidates
+consistently in the Bean list, graph, definitions, gutter and diagnostics.
+Known user registrations make corresponding `ConditionalOnMissingBean` factory
+methods in auto-configurations back off. Unknown environment values, dynamic
+scan/import logic and unsupported condition ordering remain labeled uncertain.
+The source view never claims to be the runtime application context.
+
+Profile settings are comma-separated; an empty value means `default`, while an
+unset value means unknown. Property overrides are `key=value` lines, with `!key`
+for a property known to be absent. Only mark the environment complete for a fully
+specified development launch with no inherited or external values. Native editor
+providers now read the owning project's settings, matching the tool windows.

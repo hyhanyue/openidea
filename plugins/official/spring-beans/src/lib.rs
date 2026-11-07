@@ -7,6 +7,7 @@
 mod annotation_checks;
 mod aop;
 mod checks;
+mod context;
 mod generics;
 mod injection_checks;
 mod kotlin;
@@ -45,6 +46,7 @@ const MAX_CLASSES: usize = 200;
 struct World<'a> {
     files: &'a BTreeMap<String, FileModel>,
     generics: generics::Index<'a>,
+    context: context::Index,
     supers: BTreeMap<&'a str, Vec<&'a str>>,
     /// Every file has been read at least once.
     complete: bool,
@@ -63,13 +65,17 @@ impl<'a> World<'a> {
         Self {
             files: index.files(),
             generics: generics::Index::new(index.files().values()),
+            context: context::Index::new(index.files()),
             supers,
             complete: index.complete(),
         }
     }
 
     fn beans(&self) -> impl Iterator<Item = Found<'a>> + '_ {
-        self.files.iter().flat_map(|(p, m)| m.beans.iter().map(move |b| (p.as_str(), b)))
+        self.files
+            .iter()
+            .flat_map(|(p, m)| m.beans.iter().map(move |b| (p.as_str(), b)))
+            .filter(|(_, b)| self.context.state(b) != context::State::Inactive)
     }
 
     /// Whether `ty` is `target` or one of its subtypes.
@@ -94,6 +100,15 @@ impl<'a> World<'a> {
     /// The beans Spring would consider for `inj`: by type, then qualifier,
     /// `@Primary`, and the field or parameter name.
     fn candidates(&self, inj: &Injection) -> Vec<Found<'a>> {
+        if self
+            .files
+            .values()
+            .find(|m| m.injections.iter().any(|i| std::ptr::eq(i, inj)))
+            .and_then(|m| inj.owner.and_then(|o| m.beans.get(o)))
+            .is_some_and(|b| self.context.state(b) == context::State::Inactive)
+        {
+            return vec![];
+        }
         if inj.ty.is_empty() {
             return self.named(inj.qualifier.as_deref().unwrap_or(&inj.name));
         }
@@ -109,7 +124,10 @@ impl<'a> World<'a> {
             .collect();
         if inj.multiple
             || typed.len() < 2
-            || typed.iter().any(|(_, b)| self.generics.matching(inj, b) == generics::Match::Unknown)
+            || typed.iter().any(|(_, b)| {
+                self.generics.matching(inj, b) == generics::Match::Unknown
+                    || self.context.state(b) == context::State::Unknown
+            })
         {
             return typed;
         }
@@ -419,13 +437,17 @@ impl Providers for Navigator {
                 let found = world.candidates(inj);
                 let Some((path, first)) = found.first() else { continue };
                 let tooltip = match found.as_slice() {
+                    [(_, one)] if world.context.state(one) == context::State::Unknown => {
+                        format!("Candidate bean (eligibility unknown): {}", describe(one))
+                    }
                     [(_, one)] => format!("Injected bean: {}", describe(one)),
                     many => {
                         let names: Vec<String> = many.iter().map(|(_, b)| describe(b)).collect();
                         format!("{} candidate beans: {}", many.len(), names.join(", "))
                     }
                 };
-                let target = (found.len() == 1).then(|| Location { path: path.to_string(), range: first.range });
+                let target = (found.len() == 1 && world.context.state(first) == context::State::Active)
+                    .then(|| Location { path: path.to_string(), range: first.range });
                 markers.push(LineMarker {
                     line: inj.range.start.line,
                     icon: Some("file-icon:autowired-bean".into()),
@@ -699,6 +721,9 @@ impl Navigator {
             items.push(TreeItem::new(&group, kind).icon(group_icon).detail(&beans.len().to_string()).expandable(true));
             for (path, b) in beans {
                 let mut detail = file_name(path).to_owned();
+                if world.context.state(b) == context::State::Unknown {
+                    detail += " · eligibility unknown";
+                }
                 if b.primary {
                     detail += " · primary";
                 }
@@ -710,7 +735,12 @@ impl Navigator {
                 );
             }
         }
-        View::new(Body::Tree(items)).button(refresh).status(&format!("{}{}", bean_count(total), scanning(index)))
+        View::new(Body::Tree(items)).button(refresh).status(&format!(
+            "{}{} · {}",
+            bean_count(total),
+            scanning(index),
+            world.context.label
+        ))
     }
 
     fn graph(index: &Index<FileModel>) -> View {
@@ -737,8 +767,18 @@ impl Navigator {
                 }
             }
         }
-        let nodes: Vec<diagram::Node> =
-            beans.iter().map(|(p, b)| diagram::Node::new(&location_key(p, b.range), &b.name).detail(&b.kind)).collect();
+        let nodes: Vec<diagram::Node> = beans
+            .iter()
+            .map(|(p, b)| {
+                diagram::Node::new(&location_key(p, b.range), &b.name).detail(&if world.context.state(b)
+                    == context::State::Unknown
+                {
+                    format!("{} · eligibility unknown", b.kind)
+                } else {
+                    b.kind.clone()
+                })
+            })
+            .collect();
         let edges: Vec<diagram::Edge> =
             edges.into_iter().map(|(a, b)| diagram::Edge::new(&nodes[a].id, &nodes[b].id)).collect();
         let shown =

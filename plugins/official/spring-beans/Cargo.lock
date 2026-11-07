@@ -106,6 +106,7 @@ name = "openidea-plugin-aritti-spring-beans"
 version = "0.1.0"
 dependencies = [
  "openidea-plugin",
+ "serde_json",
  "spring-text",
 ]
 

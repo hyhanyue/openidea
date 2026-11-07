@@ -9,6 +9,7 @@ import { EditorView, GutterMarker, ViewPlugin, gutter, type ViewUpdate } from "@
 import type { EditorDocContext } from "@/editor/api";
 import { navigationButton } from "./navigationButton";
 import { pluginsBackend } from "./backend";
+import { usePluginSettingsRevision } from "./settingsRevision";
 import { commands, type LineMarkerInfo } from "@/platform/ipc";
 import { gutterIconMarkup, isIconName, useFileIconRevision } from "@/ui";
 import styles from "@/editor/navigation/LineMarkers.module.css";
@@ -89,6 +90,7 @@ class MarkersPlugin {
   private shown = false;
   private off: () => void;
   private offIcons: () => void;
+  private offSettings: () => void;
 
   constructor(
     private view: EditorView,
@@ -97,12 +99,17 @@ class MarkersPlugin {
   ) {
     this.off = pluginsBackend().onEvent((event) => {
       if (event.type !== "documentIndexesChanged") return;
-      this.generation++;
-      this.shown = false;
-      this.view.dispatch({ effects: [setMarkers.of([]), this.column.reconfigure([])] });
-      this.schedule();
+      this.invalidate();
     });
     this.offIcons = useFileIconRevision.subscribe(() => this.schedule());
+    this.offSettings = usePluginSettingsRevision.subscribe(() => this.invalidate());
+    this.schedule();
+  }
+
+  private invalidate() {
+    this.generation++;
+    this.shown = false;
+    this.view.dispatch({ effects: [setMarkers.of([]), this.column.reconfigure([])] });
     this.schedule();
   }
 
@@ -139,6 +146,7 @@ class MarkersPlugin {
   destroy() {
     this.off();
     this.offIcons();
+    this.offSettings();
     if (this.timer) clearTimeout(this.timer);
     this.generation++;
   }

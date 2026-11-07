@@ -31,6 +31,7 @@ import {
   type MenuItem,
 } from "@/ui";
 import { pluginsBackend } from "../backend";
+import { usePluginSettingsRevision } from "../settingsRevision";
 import { subscribeTheme, themeKey } from "@/platform/themeWatch";
 import { FRAME_TAG, frameDocument, frameTheme, frameThemeMessage } from "./frame";
 import { onViewMessage, useViewRevision } from "./viewStore";
@@ -58,6 +59,7 @@ export function PluginView({ pluginId, view, doc = null, revision = 0, label, it
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport | null>(null);
   const pluginRevision = useViewRevision(pluginId, view);
+  const settingsRevision = usePluginSettingsRevision((s) => s.revision);
   const seq = useRef(0);
 
   useEffect(() => {
@@ -75,7 +77,7 @@ export function PluginView({ pluginId, view, doc = null, revision = 0, label, it
           setError(e instanceof Error ? e.message : String(e));
         },
       );
-  }, [pluginId, view, doc, viewport, revision, pluginRevision]);
+  }, [pluginId, view, doc, viewport, revision, pluginRevision, settingsRevision]);
 
   const send = useCallback(
     (event: ViewEvent) => {

@@ -108,6 +108,7 @@ pub struct Pointcut {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileModel {
+    pub context: crate::context::Metadata,
     pub generics: crate::generics::Model,
     pub beans: Vec<Bean>,
     pub injections: Vec<Injection>,
@@ -364,6 +365,7 @@ fn java_model(text: &str) -> FileModel {
         }
     }
     out.generics = crate::generics::Model::java(text, &file, &out);
+    out.context = crate::context::Metadata::java(text, &file, &out);
     out
 }
 

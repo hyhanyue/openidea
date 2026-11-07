@@ -380,7 +380,13 @@ fn resolves_like_spring() {
     let controller = java("UserController.java", CONTROLLER);
     let markers = n.line_markers(&controller);
     let tips: Vec<_> = markers.iter().map(|m| (m.line, m.tooltip.as_str())).collect();
-    assert_eq!(tips, [(5, "Injected bean: users (@Service) [dev, prod]"), (7, "Injected bean: clock() (@Bean)")]);
+    assert_eq!(
+        tips,
+        [
+            (5, "Candidate bean (eligibility unknown): users (@Service) [dev, prod]"),
+            (7, "Injected bean: clock() (@Bean)")
+        ]
+    );
 }
 
 fn n_definition(n: &mut Navigator, doc: &Document, at: Position) -> Vec<(&'static str, u32)> {
@@ -393,6 +399,7 @@ fn n_definition(n: &mut Navigator, doc: &Document, at: Position) -> Vec<(&'stati
 #[test]
 fn primary_wins_between_candidates() {
     let _host = setup();
+    _host.set_setting("springBeans.activeProfiles", "\"dev\"");
     let mut n = Navigator::default();
     let text = "package com.acme;\n@Service\nclass Alerts {\n    Alerts(Notifier notifier) {}\n}\n";
     let found = n_definition(&mut n, &java("Alerts.java", text), after(text, "(Noti", 1));
@@ -523,9 +530,12 @@ fn views_list_and_draw_beans() {
         [Some("file-xml"), Some("annotation"), Some("database")]
     );
     assert_eq!([icon("clock"), icon("userRepository")], [Some("method"), Some("interface")]);
-    assert_eq!(tree.status.as_deref(), Some(&*format!("{} beans", items.len() - groups.len())));
+    assert_eq!(
+        tree.status.as_deref(),
+        Some(&*format!("{} beans · Source context: unselected", items.len() - groups.len()))
+    );
     let users = items.iter().find(|i| i.label == "users").unwrap();
-    assert_eq!(users.detail.as_deref(), Some("UserServiceImpl.java · dev, prod"));
+    assert_eq!(users.detail.as_deref(), Some("UserServiceImpl.java · eligibility unknown · dev, prod"));
     assert_eq!(icon("users"), Some("class"));
     n.handle(BEANS_VIEW, ViewEvent::Activate(users.key.clone()), &host.invocation()).unwrap();
     assert_eq!(host.opened_locations(), [(format!("{ROOT}/UserServiceImpl.java"), 7, 13)]);
@@ -533,7 +543,7 @@ fn views_list_and_draw_beans() {
     let graph = n.render(GRAPH_VIEW, None, &host.invocation()).unwrap();
     let Body::Html(page) = graph.body else { panic!("html expected") };
     assert!(page.contains(">users<") && page.contains("<path class=\"e\""));
-    assert!(page.contains("<title>users (@Service)</title>"));
+    assert!(page.contains("<title>users (@Service · eligibility unknown)</title>"));
     let status = graph.status.unwrap();
     assert!(status.ends_with("dependencies · arrows point to dependencies"), "{status}");
     n.handle(GRAPH_VIEW, ViewEvent::Message(users.key.clone()), &host.invocation()).unwrap();
@@ -2774,4 +2784,108 @@ fn nested_raw_generic_arguments_remain_uncertain() {
     let mut n = Navigator::default();
     assert!(findings(&host, &mut n, "Client.java", text).is_empty());
     assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Store", 1)).len(), 2);
+}
+
+#[test]
+fn selected_source_context_filters_profiles_scans_and_imported_factories() {
+    let host = MockHost::install();
+    host.set_setting("springBeans.activeProfiles", "\"dev\"");
+    host.add_file(
+        "src/main/java/com/live/App.java",
+        "package com.live; @SpringBootApplication @Import(other.Imported.class) class App {}",
+    );
+    host.add_file("src/main/java/com/live/Port.java", "package com.live; interface Port {}");
+    host.add_file(
+        "src/main/java/com/live/Dev.java",
+        "package com.live; @Service @Profile(\"dev & !cloud\") class Dev implements Port {}",
+    );
+    host.add_file(
+        "src/main/java/com/live/Prod.java",
+        "package com.live; @Service @Primary @Profile(\"prod\") class Prod implements Port {}",
+    );
+    host.add_file("src/main/java/other/Out.java", "package other; @Service @Primary class Out implements Port {}");
+    host.add_file(
+        "src/main/java/other/Imported.java",
+        "package other; @Configuration class Imported { @Bean Clock clock(){return null;} }",
+    );
+    let text = "package com.live; @Service class Client { Client(Port port) {} }";
+    let doc = Document {
+        path: "/project/src/main/java/com/live/Client.java".into(),
+        language: "java".into(),
+        text: text.into(),
+        version: 1,
+    };
+    let mut n = Navigator::default();
+    assert_eq!(n_definition(&mut n, &doc, after(text, "Port", 1))[0].0, "Dev.java");
+    let index = n.indexes.for_document(&doc.path, text, COMMAND_BUDGET).unwrap();
+    let w = World::new(index);
+    let names: Vec<_> = w.beans().map(|(_, b)| b.name.as_str()).collect();
+    assert!(names.contains(&"clock"));
+    assert!(!names.contains(&"prod") && !names.contains(&"out"));
+    host.set_setting("springBeans.activeProfiles", "\"prod\"");
+    assert_eq!(n_definition(&mut n, &doc, after(text, "Port", 1))[0].0, "Prod.java");
+}
+
+#[test]
+fn property_conditions_and_unknown_environment_keep_candidates_consistent() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Port.java", "package com.acme; interface Port {}");
+    host.add_file("src/main/java/com/acme/On.java","package com.acme; @Service @ConditionalOnProperty(prefix=\"feature\",name=\"enabled\",havingValue=\"true\") class On implements Port {}");
+    let text = "package com.acme; @Service class Client { Client(Port port) {} }";
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    host.set_setting("springBeans.propertyOverrides", &serde_json::to_string("feature.enabled=false").unwrap());
+    assert!(findings(&host, &mut n, "Client.java", text).iter().any(|(code, _)| code == "missing-bean"));
+    host.set_setting("springBeans.propertyOverrides", &serde_json::to_string("feature.enabled=true").unwrap());
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Port", 1))[0].0, "On.java");
+}
+
+#[test]
+fn missing_bean_auto_configuration_backs_off_only_for_definite_user_registration() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Port.java", "package com.acme; interface Port {}");
+    host.add_file("src/main/java/com/acme/Auto.java","package com.acme; @AutoConfiguration class Auto { @Bean @ConditionalOnMissingBean(Port.class) Port fallback(){return null;} }");
+    host.add_file("src/main/java/com/acme/One.java", "package com.acme; @Service class One implements Port {}");
+    let text = "package com.acme; @Service class Client { Client(Port port) {} }";
+    let mut n = Navigator::default();
+    assert_eq!(
+        n_definition(&mut n, &java("Client.java", text), after(text, "Port", 1))
+            .iter()
+            .map(|x| x.0)
+            .collect::<Vec<_>>(),
+        ["One.java"]
+    );
+}
+
+#[test]
+fn spring_profile_expression_semantics() {
+    let active = BTreeSet::from(["dev".into(), "local".into()]);
+    assert_eq!(context::profile("dev & (!prod | local)", &active), Some(true));
+    assert_eq!(context::profile("prod | cloud", &active), Some(false));
+    assert_eq!(context::profile("dev & prod | local", &active), None);
+}
+
+#[test]
+fn real_java8_context_fixture_has_the_same_profile_candidates() {
+    let host = MockHost::install();
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/java-spring-context/src/main/java");
+    let mut todo = vec![fixture.clone()];
+    while let Some(path) = todo.pop() {
+        if path.is_dir() {
+            todo.extend(std::fs::read_dir(path).unwrap().map(|e| e.unwrap().path()));
+        } else if path.extension().is_some_and(|e| e == "java") {
+            let relative = format!("src/main/java/{}", path.strip_prefix(&fixture).unwrap().display());
+            host.add_file(&relative, &std::fs::read_to_string(path).unwrap());
+        }
+    }
+    let text = "package dev.openidea.context.components; import dev.openidea.context.Port; @Component class Client { Client(Port port) {} }";
+    let document = doc("/project/src/main/java/dev/openidea/context/components/Client.java", text);
+    let mut n = Navigator::default();
+    for (profile, target) in [("dev", "DevPort.java"), ("prod", "ProdPort.java")] {
+        host.set_setting("springBeans.activeProfiles", &serde_json::to_string(profile).unwrap());
+        let found = n_definition(&mut n, &document, after(text, "Client(Port", 1));
+        assert_eq!(found.iter().map(|x| x.0).collect::<Vec<_>>(), [target]);
+    }
 }

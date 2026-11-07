@@ -19,8 +19,7 @@ pub(super) fn problems(path: &str, world: &World, file: &spring_text::java::Java
         if inj.multiple
             || inj.optional
             || inj.ty.is_empty()
-            || owner.conditional
-            || !owner.profiles.is_empty()
+            || world.context.state(owner) != crate::context::State::Active
             || world.generics.uncertain(inj)
         {
             continue;
@@ -35,7 +34,7 @@ pub(super) fn problems(path: &str, world: &World, file: &spring_text::java::Java
             continue;
         }
         let possible: Vec<_> = world.beans().filter(|(_, b)| !b.is_abstract && world.is_a(&b.ty, &inj.ty)).collect();
-        if possible.iter().any(|(_, b)| b.conditional || !b.profiles.is_empty()) {
+        if possible.iter().any(|(_, b)| world.context.state(b) == crate::context::State::Unknown) {
             continue;
         }
         if possible.iter().any(|(_, b)| world.generics.matching(inj, b) == crate::generics::Match::Unknown) {

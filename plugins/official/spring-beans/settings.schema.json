@@ -74,6 +74,23 @@
       "type": "boolean",
       "title": "Check missing or ambiguous injection of project-defined Java Bean types (library, optional and profile-dependent injections are skipped)",
       "default": true
+    },
+    "springBeans.applicationClass": {
+      "type": "string",
+      "title": "Spring source context: application class (fully qualified; empty selects the only Boot application)"
+    },
+    "springBeans.activeProfiles": {
+      "type": "string",
+      "title": "Spring source context: active profiles (comma separated; empty means default; unset means unknown)"
+    },
+    "springBeans.propertyOverrides": {
+      "type": "string",
+      "title": "Spring source context: known property overrides (one key=value per line; !key means known absent)"
+    },
+    "springBeans.environmentComplete": {
+      "type": "boolean",
+      "title": "Treat properties absent from the selected source environment as missing (only for a fully specified development launch)",
+      "default": false
     }
   }
 }

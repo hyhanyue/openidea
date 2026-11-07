@@ -100,3 +100,32 @@ it("repaints fallback markers when icon assets arrive and withdraws them when un
     remove();
   }
 });
+
+it("drops a pending marker result when project plugin settings change", async () => {
+  vi.useFakeTimers();
+  const { usePluginSettingsRevision } = await import("./settingsRevision");
+  let finish!: (value: unknown) => void;
+  mock.markers.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  view = new EditorView({
+    parent: document.body,
+    state: EditorState.create({
+      doc: "class Client {}",
+      extensions: pluginLineMarkerGutter({ doc: 1 } as EditorDocContext),
+    }),
+  });
+  await vi.advanceTimersByTimeAsync(450);
+  usePluginSettingsRevision.setState((s) => ({ revision: s.revision + 1 }));
+  finish({
+    status: "ok",
+    data: [{ pluginId: "test", line: 0, icon: "navigate", tooltip: "stale profile", target: null }],
+  });
+  mock.markers.mockResolvedValue({ status: "ok", data: [] });
+  await vi.advanceTimersByTimeAsync(450);
+  expect(view.dom.querySelector(".cm-plugin-mapping-button")).toBeNull();
+  expect(mock.markers).toHaveBeenCalledTimes(2);
+});
