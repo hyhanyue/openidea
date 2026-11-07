@@ -469,7 +469,7 @@ describe("Settings dialog", () => {
       }),
     );
     const dialog = await openDialog("appearance");
-    expect(within(dialog).getByRole("button", { name: "Theme" })).toHaveTextContent("Islands Light");
+    expect(within(dialog).getByRole("button", { name: "Theme" })).toHaveTextContent("Islands Dark");
     expect(within(dialog).getByLabelText("UI font size")).toHaveValue("13");
   });
 });

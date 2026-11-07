@@ -5,6 +5,7 @@
   "JDT LS could not resolve Maven plugin {plugin} or one of its dependencies during import. Check the Maven settings and local repository, then reload Maven projects.": "JDT LS could not resolve Maven plugin {plugin} or one of its dependencies during import. Check the Maven settings and local repository, then reload Maven projects.",
   "JDT LS could not import some Maven projects. Check the Maven settings and local repository, then reload Maven projects.": "JDT LS could not import some Maven projects. Check the Maven settings and local repository, then reload Maven projects.",
   "Cannot copy reference": "Cannot copy reference",
+  "Decompiled assembly (read-only).": "Decompiled assembly (read-only).",
   "Connect through:": "Connect through:",
   "Connect through": "Connect through",
   "GitHub Commit Checks": "GitHub Commit Checks",
@@ -46,10 +47,14 @@
   "Listening for Xdebug on port {port}": "Listening for Xdebug on port {port}",
   "Port {port} is already in use: another IDE or debug session may be listening on it. Stop it or choose another port.": "Port {port} is already in use: another IDE or debug session may be listening on it. Stop it or choose another port.",
   "Unable to load image: {path}": "Unable to load image: {path}",
-  "Updates": "Updates",
-  "Update source": "Update source",
-  "Where updates are downloaded from. If it can't be reached, the other source is tried.": "Where updates are downloaded from. If it can't be reached, the other source is tried.",
   "Automatic": "Automatic",
-  "CNB (China mirror)": "CNB (China mirror)",
-  "Remote connection cancelled": "Remote connection cancelled"
+  "Remote connection cancelled": "Remote connection cancelled",
+  "Xdebug is not loaded in PHP {version}": "Xdebug is not loaded in PHP {version}",
+  "{php} runs without Xdebug, so breakpoints are skipped. Install Xdebug 3 for this PHP or choose another PHP interpreter.": "{php} runs without Xdebug, so breakpoints are skipped. Install Xdebug 3 for this PHP or choose another PHP interpreter.",
+  "Open PHP Settings": "Open PHP Settings",
+  "Type your answer": "Type your answer",
+  "Recommended": "Recommended",
+  "No preview": "No preview",
+  "Running in the background": "Running in the background",
+  "Couldn't stop the background task": "Couldn't stop the background task"
 }
