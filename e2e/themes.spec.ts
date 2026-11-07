@@ -218,17 +218,23 @@ test("gear › Theme previews the theme under the pointer and keeps the one chos
 
 test("Settings › Appearance › Theme previews the highlighted theme until Cancel", async ({ workbench: page }) => {
   const html = page.locator("html");
+  // Browser mode has no persisted settings; choose the theme Cancel must restore.
+  await page.getByRole("button", { name: "IDE and Project Settings", exact: true }).click();
+  await page.getByText("Theme", { exact: true }).click();
+  await page.getByText("Islands Dark", { exact: true }).click();
+  await expect(html).toHaveAttribute("data-theme", "dark");
   const dialog = await settings(page);
+  await expect(html).toHaveAttribute("data-theme", "dark");
   await page.getByRole("button", { name: "Theme", exact: true }).click();
   await page.getByRole("option", { name: "Solarized Dark", exact: true }).hover();
   await expect(html).toHaveAttribute("data-color-theme", "solarized-dark");
   await page.keyboard.press("Escape");
-  await expect(html).toHaveAttribute("data-theme", "light");
+  await expect(html).toHaveAttribute("data-theme", "dark");
   await expect(html).not.toHaveAttribute("data-color-theme");
   // Picked: it shows until Apply or Cancel.
   await choose(page, "Theme", "One Dark");
   await expect(html).toHaveAttribute("data-color-theme", "one-dark");
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect(html).toHaveAttribute("data-theme", "light");
+  await expect(html).toHaveAttribute("data-theme", "dark");
   await expect(html).not.toHaveAttribute("data-color-theme");
 });

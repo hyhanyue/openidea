@@ -1479,6 +1479,9 @@ mod tests {
     #[test]
     fn frame_color_follows_theme_and_os_mode() {
         let mut a = AppearanceSettings::default();
+        assert_eq!(frame_color(&a, false), Color(0x26, 0x28, 0x2c, 0xff));
+        assert_eq!(frame_color(&a, true), Color(0x26, 0x28, 0x2c, 0xff));
+        a.theme = "light".into();
         assert_eq!(frame_color(&a, true), Color(0xe9, 0xea, 0xee, 0xff));
         a.theme = "dark-hc".into();
         assert_eq!(frame_color(&a, false), Color(0x1a, 0x1b, 0x1e, 0xff));

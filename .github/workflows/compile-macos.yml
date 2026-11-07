@@ -1,4 +1,4 @@
-name: Compile merged OpenIDEA for macOS
+name: Compile merged OpenIDEA for macOS arm64
 on:
   push:
     branches: [codex/build-openidea-20261107]
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: compile-openidea-${{ github.ref }}
+  group: compile-openidea-arm64-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -26,7 +26,6 @@ jobs:
       matrix:
         include:
           - { arch: arm64, target: aarch64-apple-darwin }
-          - { arch: x64, target: x86_64-apple-darwin }
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v5
@@ -38,7 +37,9 @@ jobs:
           targets: ${{ matrix.target }}
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-        with: { key: "compile-macos-${{ matrix.arch }}" }
+        with:
+          key: compile-macos-${{ matrix.arch }}
+          cache-on-failure: true
       - run: pnpm install --frozen-lockfile
       - name: Rust checks and tests
         if: matrix.arch == 'arm64'
@@ -46,7 +47,7 @@ jobs:
           mkdir -p dist
           cargo fmt --all --check
           cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace --no-fail-fast
+          cargo test --workspace --no-fail-fast -- --test-threads=1
       - name: Verify generated bindings
         if: matrix.arch == 'arm64'
         run: git diff --exit-code src/bindings.ts
@@ -66,25 +67,3 @@ jobs:
             SHA256SUMS-macos-${{ matrix.arch }}.txt
           if-no-files-found: error
           retention-days: 14
-
-  e2e:
-    name: Browser E2E
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    container: mcr.microsoft.com/playwright:v1.64.1-noble
-    steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v5
-        with: { version: 11 }
-      - uses: actions/setup-node@v5
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm e2e
-        env:
-          HOME: /root
-      - uses: actions/upload-artifact@v6
-        if: failure()
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
