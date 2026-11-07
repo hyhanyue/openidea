@@ -63,6 +63,11 @@ fix, the affected Run/Debugger/Services/catalog suite passed all 95 files and
 97 files and 1,163 passing tests with six skips. These counts describe separate
 runs, not a summed total.
 
+The final complete frontend rerun, with the required loopback access and four
+workers, passed **all 668 files and 7,360 tests**, with six existing skips and no
+failed tests. Final typecheck, lint, formatting, unused-code checks and production
+frontend build also pass. The lint/build commands retain existing warnings.
+
 ## Remaining acceptance gates
 
 Final package replacement and user review follow the release build.
