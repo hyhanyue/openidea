@@ -102,16 +102,15 @@ file sources are retained, known config-server URLs show a safe origin, and unkn
 programmatic names use an index. Configprops bean/prefix and condition-name metadata
 reject free-form URI/message text; configuration values/input origins remain omitted.
 
-
 ### Observed Java 8 / Boot 2.7.18 identities
 
-| Fixture mapping / bean | Actual runtime identity | MVC metadata / target |
-| --- | --- | --- |
-| GET `/runtime-child/inherited` | mappings `com.example.runtime.base.BaseController` | controller `com.example.runtime.ChildController`, declaration `com.example.runtime.base.BaseController`, target `base/BaseController.java` |
-| GET `/runtime-nested/inherited` | mappings `com.example.runtime.base.BaseController` | controller `com.example.runtime.NestedFixture.InnerController`, declaration BaseController, target `base/BaseController.java` |
-| GET `/runtime-override/override` | mappings `com.example.runtime.OverrideController` | controller and declaration OverrideController, target `OverrideController.java` |
-| GET `/runtime-nested/mapping` | mappings `com.example.runtime.NestedFixture.InnerController` | source FQN `com.example.runtime.NestedFixture.InnerController`, target `NestedFixture.java` |
-| Nested controller and Bean | beans `com.example.runtime.NestedFixture$InnerController` / `NestedFixture$InnerBean` | canonical source nested FQN, unique class position in `NestedFixture.java` |
+| Fixture mapping / bean           | Actual runtime identity                                                               | MVC metadata / target                                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| GET `/runtime-child/inherited`   | mappings `com.example.runtime.base.BaseController`                                    | controller `com.example.runtime.ChildController`, declaration `com.example.runtime.base.BaseController`, target `base/BaseController.java` |
+| GET `/runtime-nested/inherited`  | mappings `com.example.runtime.base.BaseController`                                    | controller `com.example.runtime.NestedFixture.InnerController`, declaration BaseController, target `base/BaseController.java`              |
+| GET `/runtime-override/override` | mappings `com.example.runtime.OverrideController`                                     | controller and declaration OverrideController, target `OverrideController.java`                                                            |
+| GET `/runtime-nested/mapping`    | mappings `com.example.runtime.NestedFixture.InnerController`                          | source FQN `com.example.runtime.NestedFixture.InnerController`, target `NestedFixture.java`                                                |
+| Nested controller and Bean       | beans `com.example.runtime.NestedFixture$InnerController` / `NestedFixture$InnerBean` | canonical source nested FQN, unique class position in `NestedFixture.java`                                                                 |
 
 Boot 2.7.18 actually uses canonical dotted names for these nested **mapping** className
 fields, and binary dollar names for the **beans** type fields. Both were asserted from the
@@ -161,7 +160,6 @@ the controller FQN instead of the declaration FQN.
 Native compilation, generated bindings and macOS GUI/end-to-end acceptance remain pending
 for unified integration, unchanged from the original delivery. No GUI screenshots or
 native navigation acceptance are claimed by the fixture/module checks.
-
 
 ## Follow-up: concrete Specta IPC result
 
