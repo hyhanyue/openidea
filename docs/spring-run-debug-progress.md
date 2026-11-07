@@ -2,7 +2,7 @@
 
 Independent clone: `/Users/hyl/Documents/Codex/2026-11-07/openidea-spring-run-debug/work/openidea`.
 Branch: `codex/spring-run-debug`. Baseline: `57653df63a91789a3544436109ee288b7cfb0ba6`.
-Audit checkpoint commit: `8cde1937`. Implementation/verification commits recorded below when frozen.
+Commits (apply in order): audit `8cde1937`; implementation **`f65beb11d976b92661b2476f701bf682bfc91644`**. This final report is frozen in a following documentation commit.
 
 ## Implemented
 
@@ -79,3 +79,16 @@ Use the shared `CARGO_HOME` and `RUSTUP_HOME` from the task environment; no inhe
 5. Update resources/classes/HotSwap/restart labels must keep their existing distinct meanings; do not add DevTools or claim restart is HotSwap.
 
 Official references checked: [Spring Boot Maven plugin 2.7.18](https://docs.spring.io/spring-boot/docs/2.7.18/maven-plugin/reference/htmlsingle/), [Boot 2.7 external configuration](https://docs.spring.io/spring-boot/docs/2.7.x/reference/htmlsingle/), and [java-debug's environment merge implementation](https://github.com/microsoft/java-debug/blob/main/com.microsoft.java.debug.core/src/main/java/com/microsoft/java/debug/core/adapter/handler/LaunchRequestHandler.java).
+
+## Final verification freeze
+
+- Implementation commit: `f65beb11d976b92661b2476f701bf682bfc91644`.
+- Consumer verification exit code: **0**; both filters passed; `sourceStillMatches: true` at snapshot completion.
+- Canonical / committed / consumer copied contract SHA256: `3a5e0d26690ee5a64f17619b97cdf4edd272137d3bba9d15a175758a7f0f375e`.
+- A consumer source fingerprints from the verified snapshot:
+  - `plugins/official/spring-beans/src/environment.rs`: `d2bb84192dc23a45985b460d68d27c7c6d3e72d402693b66bfcba4c70941c4a9`.
+  - `plugins/official/spring-beans/src/launch.rs`: `dbd1ec625f9aa5ed36f5df0a10fcb6faa551f2f8759a249450f1e5b9ba05cf87`.
+  - `plugins/official/spring-beans/src/context.rs`: `c362ee47d3766c87162d329bcac022d9423d70bb1e787bcb2bc996bc5c8793e0`.
+- Final source-text catalog: **20 passed, 6 skipped**; the skipped tests are existing conditional checks. The obsolete draft error key was removed from both en/zh catalogs.
+- Final native Clippy after the unknown-context fallback: passed in 8.25s. Final native config/bridge tests: 15 passed. Final Vite build, TypeScript, Oxlint, Oxfmt and diff whitespace checks passed.
+- No release, push, app replacement or native GUI launch was performed. Only this session's own Cargo targets are eligible for cleanup; the fixture's small Java target is retained for unified acceptance.
