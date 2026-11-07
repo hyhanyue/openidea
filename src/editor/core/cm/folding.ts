@@ -23,6 +23,7 @@ import {
   unfoldEffect,
 } from "@codemirror/language";
 import type { FoldRange } from "@/platform/ipc";
+import { iconMarkup } from "@/ui";
 import { enclosingCodeBlock } from "./caretCommands";
 import { regionMarkerAt, regionNameAt } from "./regions";
 
@@ -373,20 +374,7 @@ function chevron(open: boolean): HTMLElement {
   const span = document.createElement("span");
   span.className = open ? "cm-openidea-foldOpen" : "cm-openidea-foldClosed";
   span.title = open ? "Collapse" : "Expand";
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("width", "9");
-  svg.setAttribute("height", "9");
-  svg.setAttribute("viewBox", "0 0 9 9");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS(ns, "path");
-  path.setAttribute("d", open ? "M8 2.75 4.5 6.25 1 2.75" : "M3 8 6.5 4.5 3 1");
-  svg.appendChild(path);
-  span.appendChild(svg);
+  span.innerHTML = iconMarkup(open ? "gutter-fold" : "gutter-unfold", 9) ?? "";
   return span;
 }
 

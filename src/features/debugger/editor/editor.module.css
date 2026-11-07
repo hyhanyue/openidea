@@ -12,51 +12,58 @@
   position: absolute;
   left: calc(50% + 1px);
   top: 50%;
-  width: 1em;
-  height: 1em;
+  width: 14px;
+  height: 14px;
   transform: translate(-50%, -50%);
-  border-radius: 50%;
-  background: var(--danger);
-  box-sizing: border-box;
+  background: var(--breakpoint-icon) center / contain no-repeat;
   pointer-events: none;
 }
 
-.normal::before {
-  background: var(--danger);
+.normal {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpoint.svg");
 }
 
-/* Disabled: hollow circle. */
-.disabled::before {
-  background: transparent;
-  border: 1.5px solid var(--danger);
+:global(:root[data-theme^="dark"]) .normal {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpoint_dark.svg");
 }
 
-/* Mute Breakpoints (expui breakpointMuted). */
-.muted::before {
-  border-radius: 0;
-  background: url("../../../ui/expui/breakpoints/breakpointMuted.svg") center / contain no-repeat;
+.disabled {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpointDisabled.svg");
 }
 
-:global(:root[data-theme^="dark"]) .muted::before {
-  background-image: url("../../../ui/expui/breakpoints/breakpointMuted_dark.svg");
+:global(:root[data-theme^="dark"]) .disabled {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpointDisabled_dark.svg");
+}
+
+.muted {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpointMuted.svg");
+}
+
+:global(:root[data-theme^="dark"]) .muted {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpointMuted_dark.svg");
 }
 
 /* Not bound by the adapter. */
-.unverified::before {
-  background: var(--fg-gutter);
+.unverified {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpointInvalid.svg");
+}
+
+:global(:root[data-theme^="dark"]) .unverified {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpointInvalid_dark.svg");
 }
 
 /* Condition / hit count: dot with a small notch. */
 .conditional::before {
+  border-radius: 50%;
   background: radial-gradient(circle at 50% 50%, var(--bg-app) 0 0.16em, var(--danger) 0.18em);
 }
 
-/* Logpoint: diamond. */
-.log::before {
-  border-radius: 1.5px;
-  width: 0.8em;
-  height: 0.8em;
-  transform: translate(-50%, -50%) rotate(45deg);
+.log {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpointUnsuspendent.svg");
+}
+
+:global(:root[data-theme^="dark"]) .log {
+  --breakpoint-icon: url("../../../ui/expui/breakpoints/breakpointUnsuspendent_dark.svg");
 }
 
 /* Bound by the debugger in a running session (expui breakpointValid). */

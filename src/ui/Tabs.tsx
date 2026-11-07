@@ -424,10 +424,10 @@ export function Tabs({
                 <span className={styles.closeSlot} data-tab-close>
                   {item.modified && <span className={styles.modified} aria-label={tx("Modified")} />}
                   <IconButton
-                    icon="close"
+                    icon={variant === "editor" ? "editor-tab-close" : "close"}
                     title="Close Tab"
                     size="small"
-                    iconSize={11}
+                    iconSize={variant === "editor" ? 16 : 11}
                     tabIndex={-1}
                     className={styles.close}
                     onClick={(e) => {

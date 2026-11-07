@@ -79,19 +79,19 @@ class InspectionWidget {
       open,
     );
     summary.classList.add("cm-openidea-inspection-summary");
-    if (!total) summary.appendChild(iconNode("check", 14, "cm-openidea-inspection-ok"));
+    if (!total) summary.appendChild(iconNode("editor-inspection-ok"));
     const add = (n: number, icon: string, cls: string) => {
       if (!n) return;
       const item = document.createElement("span");
       item.className = `cm-openidea-inspection-count ${cls}`;
-      item.appendChild(iconNode(icon, 14));
+      item.appendChild(iconNode(icon));
       item.appendChild(document.createTextNode(String(n)));
       summary.appendChild(item);
     };
-    add(c.error, "error", "cm-openidea-inspection-error");
-    add(c.warning, "warning", "cm-openidea-inspection-warning");
-    add(c.info, "warning", "cm-openidea-inspection-weak");
-    add(c.typo, "info", "cm-openidea-inspection-typo");
+    add(c.error, "editor-inspection-error", "cm-openidea-inspection-error");
+    add(c.warning, "editor-inspection-warning", "cm-openidea-inspection-warning");
+    add(c.info, "editor-inspection-weak", "cm-openidea-inspection-weak");
+    add(c.typo, "editor-inspection-typo", "cm-openidea-inspection-typo");
     const children: HTMLElement[] = [summary];
     if (total) {
       const prev = button(
@@ -154,12 +154,12 @@ const inspectionTheme = EditorView.theme({
   ".cm-openidea-inspection-button:focus-visible": { outline: "1px solid var(--focus-ring)", outlineOffset: "-1px" },
   ".cm-openidea-inspection-summary": { padding: "0 5px" },
   ".cm-openidea-inspection-count": { display: "inline-flex", alignItems: "center", gap: "3px" },
+  // The error and warning SVGs are supplied as white stencils and tinted by severity.
+  '.cm-openidea-inspection-count [fill="white"]': { fill: "currentColor" },
   ".cm-openidea-icon": { display: "inline-flex", alignItems: "center" },
   ".cm-openidea-inspection-error .cm-openidea-icon": { color: "var(--danger)" },
   ".cm-openidea-inspection-warning .cm-openidea-icon": { color: "var(--warning)" },
   ".cm-openidea-inspection-weak .cm-openidea-icon": { color: "var(--fg-weak-warning, var(--fg-faint))" },
-  ".cm-openidea-inspection-typo .cm-openidea-icon": { color: "var(--success)" },
-  ".cm-openidea-inspection-ok": { color: "var(--success)" },
 });
 
 export function inspectionWidgetExtension() {

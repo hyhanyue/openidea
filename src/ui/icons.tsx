@@ -207,6 +207,7 @@ const ICONS = {
   "chevron-up": "general/chevronUp",
   "chevron-left": "general/chevronLeft",
   close: "general/close",
+  "editor-tab-close": "general/closeSmall",
   plus: "general/add",
   minus: "general/remove",
   check: "actions/checked",
@@ -346,6 +347,11 @@ const ICONS = {
   warning: "status/warning",
   info: "status/info",
   success: "status/success",
+  "editor-inspection-ok": "general/inspections/inspectionsOK",
+  "editor-inspection-error": "general/inspections/inspectionsError",
+  "editor-inspection-warning": "general/inspections/inspectionsWarning",
+  "editor-inspection-weak": "general/inspections/inspectionsWarningEmpty",
+  "editor-inspection-typo": "general/inspections/inspectionsTypos",
   // Run / debug
   run: "run/run",
   debug: "run/debug",
@@ -362,6 +368,8 @@ const ICONS = {
   "gutter-implementing": "gutter/implementingMethod",
   "gutter-overridden": "gutter/overridenMethod",
   "gutter-overriding": "gutter/overridingMethod",
+  "gutter-fold": "gutter/fold",
+  "gutter-unfold": "gutter/unfold",
   stop: "run/stop",
   rerun: "run/rerun",
   "hot-reload": "openidea/general/hotReload",
@@ -779,13 +787,9 @@ function repaintMarkup() {
 
 useFileIconRevision.subscribe(repaintMarkup);
 
-/**
- * Gutter icon markup in the 14px gutter column. The plain play glyph fills its canvas, so it is
- * drawn smaller; the other gutter icons (run-all, status badges, inheritance arrows, file types)
- * carry padding or compose several shapes and need the full 14px to look the same size.
- */
+/** Gutter icon markup at IntelliJ's 14px gutter size. */
 export function gutterIconMarkup(name: string): string | null {
-  return iconMarkup(name, name === "gutter-run" ? 12 : 14);
+  return iconMarkup(name, 14);
 }
 
 /**
