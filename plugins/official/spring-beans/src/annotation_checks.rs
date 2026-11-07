@@ -5,15 +5,40 @@ use crate::checks::spring;
 use crate::model::is_repository;
 use openidea_plugin::Severity;
 use spring_text::finding::Finding;
-use spring_text::java::{Annotation, JavaFile, TypeDecl};
+use spring_text::java::{Annotation, JavaFile, TypeDecl, TypeRef};
 
 const CACHE_ANNOTATIONS: [&str; 3] = ["Cacheable", "CachePut", "CacheEvict"];
 const CACHE_NAME_ARGS: [&str; 3] = ["value", "cacheNames", "cacheResolver"];
 
-const NON_FUTURE_RETURNS: [&str; 18] = [
-    "boolean", "byte", "short", "char", "int", "long", "float", "double", "String", "Integer", "Long", "Double",
-    "Boolean", "Object", "List", "Set", "Map", "Optional",
-];
+fn non_future_return(file: &JavaFile, returned: &TypeRef) -> bool {
+    if returned.array {
+        return true;
+    }
+    let package = match returned.name.as_str() {
+        "boolean" | "byte" | "short" | "char" | "int" | "long" | "float" | "double" => return true,
+        "String" | "Byte" | "Short" | "Character" | "Integer" | "Long" | "Float" | "Double" | "Boolean" | "Object"
+        | "Void" => "java.lang",
+        "List" | "Set" | "Map" | "Optional" => "java.util",
+        "CompletionStage" => "java.util.concurrent",
+        _ => return false,
+    };
+    let expected = format!("{package}.{}", returned.name);
+    let written = returned.text.split('<').next().unwrap_or_default().split_whitespace().collect::<String>();
+    if written.contains('.') {
+        return written == expected;
+    }
+    if file.types.iter().any(|ty| ty.name == returned.name) {
+        return false;
+    }
+    if let Some(import) = file.imports.iter().find(|i| !i.is_static && i.path.ends_with(&format!(".{}", returned.name)))
+    {
+        return import.path == expected;
+    }
+    if file.imports.iter().any(|i| !i.is_static && i.path.ends_with(".*") && !i.path.starts_with("java.")) {
+        return false;
+    }
+    returned.name != "CompletionStage" || file.imports.iter().any(|i| i.path == "java.util.concurrent.*")
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Token {
@@ -139,19 +164,23 @@ pub fn check_profiles(file: &JavaFile, ty: &TypeDecl, out: &mut Vec<Finding>) {
 }
 
 pub fn check_async(file: &JavaFile, ty: &TypeDecl, out: &mut Vec<Finding>) {
+    let class_async = spring(file, &ty.annotations, "Async").is_some();
     for method in ty.methods() {
-        if spring(file, &method.annotations, "Async").is_none() {
+        let method_async = spring(file, &method.annotations, "Async").is_some();
+        if !method_async
+            && (!class_async || method.modifiers.iter().any(|m| ["private", "static", "final"].contains(&m.as_str())))
+        {
             continue;
         }
         let Some(returned) = &method.ty else { continue };
-        if !NON_FUTURE_RETURNS.contains(&returned.name.as_str()) {
+        if !non_future_return(file, returned) {
             continue;
         }
         out.push(Finding::new(
             returned.at,
             returned.at + returned.name.len(),
             "async-return-type",
-            format!("An @Async method should return void or a Future: the caller gets null instead of this {}, because the call returns before the work runs.", returned.name),
+            format!("An @Async method should return void or a Future-compatible type: this {} return type cannot deliver the asynchronous result.", returned.name),
         ));
     }
 }
@@ -211,5 +240,64 @@ pub fn check_cache(file: &JavaFile, ty: &TypeDecl, out: &mut Vec<Finding>) {
                 "@Cacheable skips the method when the entry exists, while @CachePut always runs it: combining them on one method gives surprising results.",
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod async_contract_tests {
+    use super::*;
+    use spring_text::java;
+
+    fn findings(text: &str) -> Vec<Finding> {
+        let file = java::parse(text);
+        let mut out = Vec::new();
+        for ty in &file.types {
+            check_async(&file, ty, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn type_level_async_checks_interceptable_methods() {
+        let text = "import org.springframework.scheduling.annotation.Async; @Async class Jobs { public String text(){return null;} public int count(){return 0;} public void run(){} public Future<String> future(){return null;} public CompletableFuture<String> complete(){return null;} }";
+        let found = findings(text);
+        assert_eq!(found.len(), 2);
+        assert_eq!(&text[found[0].start..found[0].end], "String");
+        assert_eq!(&text[found[1].start..found[1].end], "int");
+    }
+
+    #[test]
+    fn class_defaults_do_not_treat_uninterceptable_helpers_as_async_calls() {
+        let text = "@Async class Jobs { private String helper(){return null;} public final String local(){return null;} static int value(){return 0;} public Future<String> allowed(){return null;} }";
+        assert!(findings(text).is_empty());
+        assert!(findings("import other.Async; @Async class Jobs { public String text(){return null;} }").is_empty());
+    }
+
+    #[test]
+    fn return_type_identity_and_unknown_hierarchies_remain_conservative() {
+        assert!(findings("import other.String; class Jobs { @Async public String future(){return null;} }").is_empty());
+        assert!(
+            findings(
+                "class String extends FutureTask<Object> {} class Jobs { @Async public String future(){return null;} }"
+            )
+            .is_empty()
+        );
+        assert!(findings("class Jobs { @Async public other.String future(){return null;} }").is_empty());
+        assert!(findings("class Jobs { @Async public CustomFuture future(){return null;} }").is_empty());
+        assert_eq!(
+            findings("import other.String; class Jobs { @Async public java.lang.String text(){return null;} }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn arrays_and_explicit_completion_stage_cannot_carry_async_results() {
+        assert_eq!(findings("class Jobs { @Async public Future<String>[] values(){return null;} }").len(), 1);
+        assert_eq!(findings("import java.util.concurrent.CompletionStage; class Jobs { @Async public CompletionStage<String> value(){return null;} }").len(), 1);
+        assert_eq!(
+            findings("class Jobs { @Async public java.util.concurrent.CompletionStage<String> value(){return null;} }")
+                .len(),
+            1
+        );
     }
 }
