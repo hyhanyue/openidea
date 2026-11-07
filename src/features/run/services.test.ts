@@ -235,6 +235,18 @@ describe("run configurations in Services", () => {
     expect(sessionDetail(session("s1", app, "finished", 1, { httpPort: 8080, stopped: true }))).toBe("Stopped");
     expect(runServiceItems([app], [running], DEFAULT_TYPES)[0]!.children![0]!.detail).toBe(":8080");
   });
+
+  it("shows an observed HTTP port during Boot startup without claiming completion or hiding failure", () => {
+    const app = config("spring:app", "spring-boot");
+    const running = session("s1", app, "running", 1, { httpPort: 8080, springBoot: { phase: "starting" } });
+    expect(sessionDetail(running)).toBe("Starting Spring Boot :8080");
+    expect(sessionDetail({ ...running, springBoot: { phase: "failed", failure: "binding" } })).toBe(
+      "Spring Boot failed: configuration binding error",
+    );
+    expect(sessionDetail({ ...running, status: "finished", springBoot: { phase: "stopped" } })).toBe(
+      "Spring Boot stopped",
+    );
+  });
 });
 
 describe("types added to Services", () => {

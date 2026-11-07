@@ -2,10 +2,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RunConfig } from "@/platform/ipc";
 import { provideJavaAgentDebugger, provideNotificationService } from "@/workbench/contributions";
 import { debugWithAgent } from "./javaDebug";
-import { onRunExited, resetRuns, runtime, stopSession, useRun } from "./store";
+import { onRunExited, resetRuns, runtime, startRun, closeSession, stopSession, useRun } from "./store";
 import { sessionDetail } from "./services";
 
 const ipc = vi.hoisted(() => ({
+  channels: [] as Array<{ onmessage: ((chunk: { kind: "stdout" | "stderr"; text: string }) => void) | null }>,
   runStart: vi.fn(async () => ({ status: "ok" as const, data: { id: 99, pty: false } })),
   runStop: vi.fn(async (_id: number) => ({ status: "ok" as const, data: null })),
 }));
@@ -18,6 +19,9 @@ vi.mock("@tauri-apps/api/core", async (original) => ({
   ...(await original<typeof import("@tauri-apps/api/core")>()),
   Channel: class {
     onmessage = null;
+    constructor() {
+      ipc.channels.push(this);
+    }
   },
 }));
 const config: RunConfig = {
@@ -35,13 +39,15 @@ const config: RunConfig = {
   includeSystemEnv: false,
 };
 const attach = vi.fn(async (_port: number, _process: number, _signal: AbortSignal): Promise<boolean> => true);
-const prepare = vi.fn(async (_config: RunConfig, _module: string) => ({ attach }));
+const output = vi.fn();
+const prepare = vi.fn(async (_config: RunConfig, _module: string) => ({ attach, output }));
 const notify = vi.fn();
 let off: () => void;
 beforeEach(() => {
   vi.clearAllMocks();
+  ipc.channels.length = 0;
   attach.mockResolvedValue(true);
-  prepare.mockResolvedValue({ attach });
+  prepare.mockResolvedValue({ attach, output });
   ipc.runStop.mockImplementation(async (id) => {
     setTimeout(() => onRunExited(id, 130), 0);
     return { status: "ok", data: null };
@@ -170,4 +176,102 @@ it("releases a JVM if adapter attachment never completes", async () => {
   await vi.advanceTimersByTimeAsync(30_100);
   expect(ipc.runStop).toHaveBeenCalledExactlyOnceWith(99);
   expect(current()).toMatchObject({ status: "finished", debugAttachment: "failed" });
+});
+
+const emit = (kind: "stdout" | "stderr", text: string, channel = ipc.channels.length - 1) =>
+  ipc.channels[channel]!.onmessage?.({ kind, text });
+
+it("replays pre-attach stdout/stderr once, then streams partial chunks while preserving Run output", async () => {
+  let respond!: (value: boolean) => void;
+  attach.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        respond = resolve;
+      }),
+  );
+  await debugWithAgent(config);
+  emit("stdout", "before attach\n");
+  emit("stderr", "early error\n");
+  emit("stdout", "Listening for transport dt_socket at address: 64947\n");
+  await vi.waitFor(() => expect(attach).toHaveBeenCalled());
+  emit("stdout", "while attaching\n");
+  respond(true);
+  await vi.waitFor(() => expect(current().debugAttachment).toBe("attached"));
+  expect(output.mock.calls).toEqual([
+    [99, { kind: "stdout", text: "before attach\n" }],
+    [99, { kind: "stderr", text: "early error\n" }],
+    [99, { kind: "stdout", text: "Listening for transport dt_socket at address: 64947\n" }],
+    [99, { kind: "stdout", text: "while attaching\n" }],
+  ]);
+  const count = output.mock.calls.length;
+  announce();
+  expect(output).toHaveBeenCalledTimes(count);
+  emit("stdout", "partial stdout");
+  emit("stderr", "partial stderr");
+  expect(output).toHaveBeenLastCalledWith(99, { kind: "stderr", text: "partial stderr" });
+  await vi.waitFor(() =>
+    expect(runtime(current().id)!.console.lines.some((line) => line.text.includes("partial stderr"))).toBe(true),
+  );
+  expect(runtime(current().id)!.console.lines.some((line) => line.text === "before attach")).toBe(true);
+});
+
+it("detaches old output on Stop and replays only the restarted generation", async () => {
+  await debugWithAgent(config);
+  emit("stdout", "old startup\n");
+  announce();
+  await vi.waitFor(() => expect(current().debugAttachment).toBe("attached"));
+  const firstChannel = 0;
+  await stopSession(current().id);
+  const count = output.mock.calls.length;
+  emit("stdout", "after Stop\n", firstChannel);
+  expect(output).toHaveBeenCalledTimes(count);
+  await vi.waitFor(() => expect(current().status).toBe("finished"));
+  ipc.runStart.mockResolvedValueOnce({ status: "ok", data: { id: 100, pty: false } });
+  await debugWithAgent(config);
+  output.mockClear();
+  emit("stdout", "new startup\n");
+  announce(65028);
+  await vi.waitFor(() => expect(current().debugAttachment).toBe("attached"));
+  expect(output.mock.calls).toEqual([[100, { kind: "stdout", text: "new startup\n" }]]);
+  emit("stderr", "old late error\n", firstChannel);
+  expect(output.mock.calls).toEqual([[100, { kind: "stdout", text: "new startup\n" }]]);
+});
+
+it("keeps output arriving during startup replay ordered and unique", async () => {
+  await debugWithAgent(config);
+  emit("stdout", "history one\n");
+  emit("stderr", "history two\n");
+  output.mockImplementationOnce(() => emit("stdout", "live during replay\n"));
+  announce();
+  await vi.waitFor(() => expect(current().debugAttachment).toBe("attached"));
+  expect(output.mock.calls).toEqual([
+    [99, { kind: "stdout", text: "history one\n" }],
+    [99, { kind: "stderr", text: "history two\n" }],
+    [99, { kind: "stdout", text: "live during replay\n" }],
+  ]);
+});
+
+it("bounds replay memory and does not capture ordinary Run output", async () => {
+  await debugWithAgent(config);
+  emit("stdout", "x".repeat(2 * 1024 * 1024));
+  expect(runtime(current().id)!.output!.characters).toBeLessThanOrEqual(1024 * 1024);
+  announce();
+  await vi.waitFor(() => expect(current().debugAttachment).toBe("attached"));
+  expect(output.mock.calls[0]).toEqual([99, { kind: "stdout", text: "x".repeat(1024 * 1024) }]);
+  const ordinary = await startRun({ ...config, id: "ordinary", includeSystemEnv: true });
+  expect(runtime(ordinary!.id)!.output).toBeUndefined();
+});
+
+it("disconnects the output bridge when its Run tab closes", async () => {
+  await debugWithAgent(config);
+  emit("stdout", "before close\n");
+  announce();
+  await vi.waitFor(() => expect(current().debugAttachment).toBe("attached"));
+  const id = current().id;
+  closeSession(id);
+  const count = output.mock.calls.length;
+  emit("stderr", "late closed output\n", 0);
+  expect(output).toHaveBeenCalledTimes(count);
+  expect(useRun.getState().sessions.some((s) => s.id === id)).toBe(false);
+  await new Promise((done) => setTimeout(done, 50));
 });

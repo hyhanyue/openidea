@@ -175,6 +175,9 @@ it("shows a Spring Boot HTTP port discovered in direct debugger output", () => {
   act(() => appendConsole(18080, "stdout", "Tomcat started on port 18080 (http) with context path '/'\n"));
   expect(screen.getByRole("log")).toHaveTextContent("Tomcat started on port 18080");
   expect(screen.getByRole("tree", { name: "Services" })).toHaveTextContent(":18080");
+  expect(screen.getByRole("tree", { name: "Services" })).toHaveTextContent("Starting Spring Boot");
+  expect(screen.getByRole("tree", { name: "Services" })).not.toHaveTextContent("Spring Boot started");
+  expect(useDebug.getState().sessions[18080]?.springBoot?.phase).toBe("starting");
 });
 
 it("follows split child output and keeps the port with its own debug execution", async () => {
@@ -198,7 +201,7 @@ it("follows split child output and keeps the port with its own debug execution",
     output(102, "stderr", "91\x1b[0m\r\n");
     output(103, "stdout", "Tomcat started on port 8083 (http)\n");
   });
-  await within(tree).findByText(":8083");
+  await within(tree).findByText("Starting Spring Boot :8083");
   expect(tree).not.toHaveTextContent(":9091");
   expect(tree).not.toHaveTextContent(":5005");
 
@@ -226,6 +229,6 @@ it("follows split child output and keeps the port with its own debug execution",
     adoptSession(104, { runConfig: config, startedAt: 3 });
     appendConsole(104, "stdout", "Listening for transport dt_socket at address: 5006\n");
   });
-  expect(tree).toHaveTextContent("Debugging");
+  expect(tree).toHaveTextContent("Starting Spring Boot");
   expect(tree).not.toHaveTextContent(/:(8083|9091|5006)/);
 });

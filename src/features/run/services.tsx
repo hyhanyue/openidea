@@ -226,7 +226,7 @@ export function sessionDetail(s: RunSession | undefined): string | undefined {
   if (s?.springBoot)
     return (
       springBootStatus(s.springBoot) +
-      (busy(s) && s.httpPort && s.springBoot.phase === "ready" ? ` :${s.httpPort}` : "")
+      (busy(s) && s.httpPort && ["starting", "ready"].includes(s.springBoot.phase) ? ` :${s.httpPort}` : "")
     );
   return s && busy(s) && s.httpPort ? `:${s.httpPort}` : sessionStatus(s);
 }
@@ -239,7 +239,7 @@ function executionDetail(s: ServiceSession | undefined): string | undefined {
     if (debug.springBoot)
       return (
         springBootStatus(debug.springBoot) +
-        (debug.httpPort && debug.springBoot.phase === "ready" ? ` :${debug.httpPort}` : "")
+        (debug.httpPort && ["starting", "ready"].includes(debug.springBoot.phase) ? ` :${debug.httpPort}` : "")
       );
     const port = s.run ? (busy(s.run) ? s.run.httpPort : undefined) : debug.httpPort;
     if (port) return `:${port}`;

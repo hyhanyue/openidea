@@ -40,6 +40,7 @@ import { debugUnsupportedReason, launchConfigFor } from "./launch";
 import { isRemoteConfig, REMOTE_JVM, remoteAttachConfig, remoteJvmTarget } from "./remote";
 import {
   activeSession,
+  appendConsoleQueued,
   resumeExecution,
   evaluate,
   isLive,
@@ -364,6 +365,7 @@ export function registerDebugActions(): () => void {
       const root = useProject.getState().project?.root;
       if (!root) throw new Error(tx("No project is open"));
       // Starting the DAP server probes the actual JDT bundle before a JVM is suspended.
+      const attached = new Set<number>();
       let prepared: LaunchConfig | null = await javaAttachConfig(
         { name: config.name, module, hostName: "127.0.0.1", port: 0 },
         root,
@@ -379,14 +381,24 @@ export function registerDebugActions(): () => void {
             ...base,
             extraJson: JSON.stringify({ ...JSON.parse(base.extraJson ?? "{}"), port }),
           };
-          return (
-            (await startSession(launch, {
-              process: process as RunId,
-              runConfig: config,
-              rerunnable: false,
-              signal,
-            })) !== null
-          );
+          const id = await startSession(launch, {
+            process: process as RunId,
+            runConfig: config,
+            rerunnable: false,
+            signal,
+          });
+          if (id !== null) attached.add(id);
+          return id !== null;
+        },
+        output(process, chunk) {
+          for (const id of attached) {
+            const session = useDebug.getState().sessions[id];
+            if (!session || session.status === "terminated") {
+              attached.delete(id);
+              continue;
+            }
+            if (session.process === process) appendConsoleQueued(id, chunk.kind, chunk.text);
+          }
         },
       };
     },

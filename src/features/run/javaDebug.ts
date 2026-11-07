@@ -13,7 +13,7 @@ import { tx } from "@/platform/i18n";
 import { javaAgentDebugger, notifications } from "@/workbench/contributions";
 import type { RunConfig } from "@/platform/ipc";
 import { isJvmApplication, JDWP_AGENT, jdwpListeningPort, resolveJavaModule } from "@/platform/javaLaunch";
-import { setDebugAttachment, startRun, stopSession, useRun, waitForExit } from "./store";
+import { observeRunOutput, setDebugAttachment, startRun, stopSession, useRun, waitForExit } from "./store";
 import { DELEGATED_DEBUG, DELEGATED_MAIN } from "./gradleRun";
 
 const isMavenTestGoal = (a: string) =>
@@ -105,6 +105,7 @@ export async function debugWithAgent(config: RunConfig): Promise<boolean> {
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let failed = false;
   let off = () => {};
+  let offOutput: (() => void) | null = null;
   const current = () => useRun.getState().sessions.find((s) => s.id === sessionId && s.runId === ownedRunId);
   const mark = (debugAttachment: "waiting" | "attached" | "failed") => {
     if (!current()) return;
@@ -112,6 +113,8 @@ export async function debugWithAgent(config: RunConfig): Promise<boolean> {
   };
   const dispose = () => {
     off();
+    offOutput?.();
+    offOutput = null;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     controller.abort();
@@ -146,7 +149,10 @@ export async function debugWithAgent(config: RunConfig): Promise<boolean> {
     timers.add(timer);
     try {
       if (!(await prepared.attach(port, ownedRunId!, controller.signal))) await release();
-      else if (!controller.signal.aborted && current()) mark("attached");
+      else if (!controller.signal.aborted && current()) {
+        mark("attached");
+        offOutput ??= observeRunOutput(sessionId!, ownedRunId!, (chunk) => prepared.output(ownedRunId!, chunk));
+      }
     } catch {
       await release();
     } finally {
@@ -156,6 +162,7 @@ export async function debugWithAgent(config: RunConfig): Promise<boolean> {
   };
   const session = await startRun(config, undefined, undefined, {
     launch,
+    captureOutput: true,
     onExit: dispose,
     onLine: (line) => {
       const port = jdwpListeningPort(line);

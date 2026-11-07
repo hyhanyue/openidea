@@ -4,20 +4,31 @@ import { useProject } from "@/platform/project";
 import { javaAgentDebugger, provideNotificationService, useDebugRunSessions } from "@/workbench/contributions";
 import { IpcError, type RunConfig } from "@/platform/ipc";
 import { registerDebugActions } from "../actions";
-import { useDebug } from "../state";
+import { clearConsole, handleDebugEvent, removeSession, useDebug } from "../state";
+import { debugWithAgent } from "../../run/javaDebug";
+import { onRunExited, resetRuns, runtime, useRun } from "../../run/store";
 
 const ipc = vi.hoisted(() => ({
   javaResolveLaunch: vi.fn(),
+  runStart: vi.fn(async (_config?: unknown, _channel?: unknown) => ({ status: "ok", data: { id: 99, pty: false } })),
+  runStop: vi.fn(async () => ({ status: "ok", data: null })),
   cancelRequest: vi.fn(async () => undefined),
   javaDebugServer: vi.fn(async () => ({ status: "ok", data: 5005 })),
   debugStart: vi.fn(async (_config?: unknown) => ({ status: "ok", data: 42 })),
   debugStop: vi.fn(async () => ({ status: "ok", data: null })),
+  debugExceptionFilters: vi.fn(async () => ({ status: "ok", data: [] })),
   fsReadDir: vi.fn(async () => ({ status: "ok", data: [] })),
 }));
 vi.mock("@/platform/ipc", async (original) => {
   const real = await original<typeof import("@/platform/ipc")>();
   return { ...real, isTauri: () => true, commands: { ...real.commands, ...ipc } };
 });
+vi.mock("@tauri-apps/api/core", async (original) => ({
+  ...(await original<typeof import("@tauri-apps/api/core")>()),
+  Channel: class {
+    onmessage = null;
+  },
+}));
 const notify = vi.fn();
 const expire = vi.fn();
 const config: RunConfig = {
@@ -48,7 +59,11 @@ beforeEach(() => {
   );
   dispose = registerDebugActions();
 });
-afterEach(() => dispose());
+afterEach(() => {
+  dispose();
+  useRun.setState({ sessions: [] });
+  resetRuns();
+});
 
 async function startAndStop() {
   const starting = executeAction("debug.startConfig", config);
@@ -238,4 +253,56 @@ it("cancels a late native attach and disposes its actual debug session", async (
   expect(await attaching).toBe(false);
   expect(ipc.debugStop).toHaveBeenCalledWith(42);
   expect(useDebugRunSessions.getState().sessions).toEqual([]);
+});
+
+it("routes owned process output to its actual Debug console and ignores closed or unrelated sessions", async () => {
+  ipc.debugStart.mockResolvedValueOnce({ status: "ok", data: 42 }).mockResolvedValueOnce({ status: "ok", data: 43 });
+  const first = await javaAgentDebugger()!.prepare(config, "");
+  const second = await javaAgentDebugger()!.prepare({ ...config, id: "prod", name: "prod" }, "");
+  expect(await first.attach(65028, 99, new AbortController().signal)).toBe(true);
+  expect(await second.attach(65029, 100, new AbortController().signal)).toBe(true);
+  first.output(99, { kind: "stdout", text: "\x1b[32mBoot dev started\x1b[0m\n" });
+  first.output(100, { kind: "stderr", text: "wrong run\n" });
+  second.output(100, { kind: "stderr", text: "Boot prod error\n" });
+  const text = (id: number) => (useDebug.getState().console[id] ?? []).map((line) => line.text).join("");
+  await vi.waitFor(() => expect(text(42)).toBe("Boot dev started\n"));
+  expect(text(43)).toBe("Boot prod error\n");
+  expect(useDebug.getState().console[42]![0]!.spans[0]).toEqual({ text: "Boot dev started", fg: "var(--ansi-green)" });
+  clearConsole(42);
+  first.output(99, { kind: "stdout", text: "after clear\n" });
+  await vi.waitFor(() => expect(text(42)).toBe("after clear\n"));
+  first.output(99, { kind: "stdout", text: "queued before close\n" });
+  removeSession(42);
+  first.output(99, { kind: "stdout", text: "after close\n" });
+  second.output(100, { kind: "stdout", text: "still prod\n" });
+  await vi.waitFor(() => expect(text(43)).toContain("still prod"));
+  expect(useDebug.getState().console[42]).toBeUndefined();
+  handleDebugEvent(43, { kind: "terminated" });
+  second.output(100, { kind: "stderr", text: "late terminated error\n" });
+  await new Promise((done) => setTimeout(done, 30));
+  expect(text(43)).not.toContain("late terminated error");
+});
+
+it("bridges real owned Run startup replay and live chunks into the actual Debug console store", async () => {
+  await debugWithAgent({ ...config, kind: "spring-boot", includeSystemEnv: false, args: ["-cp", "lib/*", "Main"] });
+  const channel = ipc.runStart.mock.calls[0]![1] as {
+    onmessage(chunk: { kind: "stdout" | "stderr"; text: string }): void;
+  };
+  channel.onmessage({ kind: "stdout", text: "before attach\nListening for transport dt_socket at address: 64947\n" });
+  await vi.waitFor(() => expect(ipc.debugStart).toHaveBeenCalledOnce());
+  const consoleText = () => (useDebug.getState().console[42] ?? []).map((line) => line.text).join("");
+  await vi.waitFor(() => expect(consoleText()).toContain("before attach\n"));
+  channel.onmessage({ kind: "stdout", text: "Started Main in 1.25 seconds (JVM running for 2.5)\n" });
+  channel.onmessage({ kind: "stderr", text: "live stderr\n" });
+  await vi.waitFor(() => expect(consoleText()).toContain("live stderr\n"));
+  expect(consoleText().match(/before attach/g)).toHaveLength(1);
+  expect(consoleText()).toContain("Started Main in 1.25 seconds");
+  const run = useRun.getState().sessions[0]!;
+  expect(runtime(run.id)!.console.lines.some((line) => line.text === "live stderr")).toBe(true);
+  onRunExited(99, 0);
+  await vi.waitFor(() => expect(useRun.getState().sessions[0]!.status).toBe("finished"));
+  const before = consoleText();
+  channel.onmessage({ kind: "stdout", text: "late ended run output\n" });
+  await new Promise((done) => setTimeout(done, 30));
+  expect(consoleText()).toBe(before);
 });

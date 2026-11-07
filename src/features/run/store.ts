@@ -92,9 +92,20 @@ export interface RunSession {
   debugAttachment?: "waiting" | "attached" | "failed";
 }
 
+export interface RunProcessOutput {
+  kind: "stdout" | "stderr";
+  text: string;
+}
+interface CapturedOutput {
+  history: RunProcessOutput[];
+  characters: number;
+  listeners: Set<(chunk: RunProcessOutput) => void>;
+}
+
 interface SessionRuntime {
   resolveRequest?: { id: RequestId; controller: AbortController };
   console: ConsoleModel;
+  output?: CapturedOutput;
   tests: TestResults | null;
   parser: TestOutputParser | null;
   /** Machine-readable stdout (`go test -json`, `--teamcity`, the Ruby reporter): fed to the parser, shown decoded. */
@@ -515,6 +526,21 @@ function flush(sessionId: string) {
 function enqueue(sessionId: string, chunk: OutputChunk) {
   const rt = runtimes.get(sessionId);
   if (!rt) return;
+  if (rt.output && (chunk.kind === "stdout" || chunk.kind === "stderr")) {
+    const output = rt.output;
+    const limit = Math.max(0, Math.min(consoleCharLimit() ?? 1024 * 1024, 1024 * 1024));
+    const retained = { kind: chunk.kind, text: chunk.text.slice(-limit) };
+    if (limit > 0) {
+      output.history.push(retained);
+      output.characters += retained.text.length;
+      while (output.characters > limit || output.history.length > 4096)
+        output.characters -= output.history.shift()!.text.length;
+    } else {
+      output.history = [];
+      output.characters = 0;
+    }
+    for (const listener of [...output.listeners]) listener(chunk);
+  }
   if (rt.terminal) {
     rt.terminal.append(chunk);
     return;
@@ -570,7 +596,7 @@ export function applyConsoleSettings() {
   }
 }
 
-function newRuntime(config: RunConfig): SessionRuntime {
+function newRuntime(config: RunConfig, captureOutput = false): SessionRuntime {
   const tests = config.isTest ? new TestResults() : null;
   const parser = config.isTest ? createTestParser(config) : null;
   const feed = (line: string) => {
@@ -588,6 +614,7 @@ function newRuntime(config: RunConfig): SessionRuntime {
           ? new RubyTestOutput(feed)
           : null;
   const runtime: SessionRuntime = {
+    output: captureOutput ? { history: [], characters: 0, listeners: new Set() } : undefined,
     stdout,
     tests,
     parser,
@@ -651,6 +678,8 @@ export async function startRun(
     launch?: RunConfig;
     /** Every output line of this run. */
     onLine?: (text: string) => void;
+    /** Bounded stdout/stderr replay for the debugger owning this run. */
+    captureOutput?: boolean;
     /** The process exited. */
     onExit?: (exitCode: number | null, stopped: boolean) => void;
     /** Before launch tasks already ran (or must not run). */
@@ -724,7 +753,7 @@ export async function startRun(
   const startedAt = Date.now();
   if (session) {
     const prev = runtimes.get(session.id);
-    const rt = newRuntime(config);
+    const rt = newRuntime(config, options.captureOutput);
     rt.generation = (prev?.generation ?? 0) + 1;
     if (prev) cancelFlush(prev);
     runtimes.set(session.id, rt);
@@ -761,7 +790,7 @@ export async function startRun(
       baseConfig,
       springBoot: isSpringBootLaunch(config) ? { phase: "preparing" } : undefined,
     };
-    runtimes.set(session.id, newRuntime(config));
+    runtimes.set(session.id, newRuntime(config, options.captureOutput));
     const created = session;
     useRun.setState((s) => ({ sessions: [...s.sessions, created], activeSession: created.id }));
   }
@@ -993,6 +1022,42 @@ export function setDebugAttachment(
     flush(sessionId);
   }
   patchSession(sessionId, { debugAttachment });
+}
+
+/** Replays once and streams the same generation's output; it never follows a reused Run tab. */
+export function observeRunOutput(
+  sessionId: string,
+  runId: number,
+  listener: (chunk: RunProcessOutput) => void,
+): () => void {
+  const rt = runtimes.get(sessionId);
+  if (!rt?.output || getSession(sessionId)?.runId !== runId) return () => {};
+  const output = rt.output;
+  const history = [...output.history];
+  const pending: RunProcessOutput[] = [];
+  let replaying = true;
+  let disposed = false;
+  const emit = (chunk: RunProcessOutput) => {
+    if (disposed || runtimes.get(sessionId) !== rt || getSession(sessionId)?.runId !== runId) return;
+    try {
+      listener(chunk);
+    } catch {
+      disposed = true;
+      output.listeners.delete(forward);
+    }
+  };
+  const forward = (chunk: RunProcessOutput) => {
+    if (replaying) pending.push(chunk);
+    else emit(chunk);
+  };
+  output.listeners.add(forward);
+  for (const chunk of history) emit(chunk);
+  for (const chunk of pending) emit(chunk);
+  replaying = false;
+  return () => {
+    disposed = true;
+    output.listeners.delete(forward);
+  };
 }
 
 /** Exit codes that arrived before `runStart` resolved (keyed by run id). */

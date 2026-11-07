@@ -1463,6 +1463,7 @@ export interface JavaAgentDebugger {
     module: string,
   ): Promise<{
     attach(port: number, process: number, signal: AbortSignal): Promise<boolean>;
+    output(process: number, chunk: { kind: "stdout" | "stderr"; text: string }): void;
   }>;
 }
 let agentDebugger: JavaAgentDebugger | null = null;
