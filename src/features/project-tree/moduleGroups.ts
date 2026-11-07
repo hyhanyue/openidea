@@ -57,7 +57,7 @@ export function gradleModuleGroups(
       id: identity(m.name),
       label,
       detail: m.name === label ? undefined : m.name,
-      icon: "gradle-module",
+      icon: "module",
       path: m.dir,
     };
   };
@@ -92,7 +92,7 @@ export function gradleModuleGroups(
     return {
       id: identity(`gradleGroup:${group.join(".")}`),
       label: group[group.length - 1]!,
-      icon: "gradle-project",
+      icon: "module-group",
       children: [...[...childGroups.values()].map(node).sort(byLabel), ...moduleNodes.sort(byLabel)],
     };
   };

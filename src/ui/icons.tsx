@@ -42,6 +42,7 @@ const ICONS = {
   "folder-library": "nodes/libraryFolder",
   "folder-github": "nodes/folderGithub",
   module: "nodes/module",
+  "module-group": "nodes/moduleGroup",
   "folder-generated-source": "nodes/generatedSource",
   "folder-generated-test": "nodes/generatedTestRoot",
   "folder-compiled": "nodes/compiledClassesFolder",

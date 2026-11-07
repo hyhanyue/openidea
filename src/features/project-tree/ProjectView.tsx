@@ -24,7 +24,7 @@ import { setContext } from "@/platform/context";
 import { tx, useTxTemplate } from "@/platform/i18n";
 import { isTauri } from "@/platform/ipc";
 import { nativeDropPoint } from "@/platform/nativeDrop";
-import type { RootFolder } from "@/platform/languageSettings";
+import { rootFor, type RootFolder } from "@/platform/languageSettings";
 import { useDetectedRoots, useEffectiveRoots } from "@/platform/projectRoots";
 import { macStroke, strokeOf } from "@/platform/keymap";
 import { OWNS_FILE_DROP, prepareMenuGroups, useFileDecoration } from "@/workbench/contributions";
@@ -138,7 +138,7 @@ function iconFor(
     const rel = root ? (node.path === root ? "" : relativePath(root, node.path)) : null;
     // Modules outside the project are keyed by their absolute folder.
     const key = rel !== null && build.modules.has(rel) ? rel : node.path;
-    const module = root ? moduleFolderIcon(key, node.root, build.modules) : null;
+    const module = root ? moduleFolderIcon(key, build.modules) : null;
     if (module) return module;
     return node.root ? "module" : (themedFolderIconName(node.label, expanded, holdsOpen, node.path) ?? "folder");
   }
@@ -281,7 +281,12 @@ const Row = memo(function Row({
   const root = useProjectTree((s) => s.root);
   const detected = useDetectedRoots();
   const build = useProjectPresentation();
-  const file = useJvmPresentation(node.dir || node.placeholder ? "" : node.path, node.entry?.mtimeMs);
+  const filePath = node.dir || node.placeholder ? "" : node.path;
+  // IDEA presents Java files outside source roots as files, without class and run badges.
+  const isJava = root !== null && filePath.endsWith(".java");
+  const javaRoot = isJava ? rootFor(roots, relativePath(root, filePath))?.kind : null;
+  const jvmPath = !isJava || javaRoot === "source" || javaRoot === "test" ? filePath : "";
+  const file = useJvmPresentation(jvmPath, node.entry?.mtimeMs);
   const expanded = useProjectTree((s) => node.dir && s.expanded.has(node.key));
   const holdsOpen = useProjectTree((s) => node.dir && holdsOpenFile(node.path, s.openFiles));
   const icon =
@@ -307,11 +312,7 @@ const Row = memo(function Row({
       onPointerDown={(e) => onPointerDown(node, e)}
     >
       <span className={styles.iconStack}>
-        <Icon
-          name={icon}
-          size={16}
-          className={clsx(styles.icon, node.dir && styles.folderIcon, dimIcon && styles.faded)}
-        />
+        <Icon name={icon} size={16} className={clsx(styles.icon, dimIcon && styles.faded)} />
         {!!file?.runnable && icon !== "spring-boot" && icon !== "jvm-test" && (
           <Icon name="runnable-mark" size={16} className={styles.runnable} />
         )}

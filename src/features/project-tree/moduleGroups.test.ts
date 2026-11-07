@@ -111,11 +111,11 @@ describe("module group nodes in the tree", () => {
     const base = buildModel({ path: "/p", name: "p" }, new Map(), DEFAULT_TREE_OPTIONS);
     const group = {
       label: "Shop",
-      icon: "gradle-project",
+      icon: "module-group",
       beforeProject: true,
       children: [
-        { label: "billing", icon: "gradle-module", path: "/w/billing" },
-        { label: "core", icon: "gradle-module", path: "/w/billing/modules/core" },
+        { label: "billing", icon: "module", path: "/w/billing" },
+        { label: "core", icon: "module", path: "/w/billing/modules/core" },
       ],
     };
     const m = withExtraRoots(base, [group], listings, DEFAULT_TREE_OPTIONS);

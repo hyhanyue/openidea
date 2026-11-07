@@ -4,14 +4,14 @@ import type { BuildModel } from "./ipc";
 
 const model = (partial: unknown) => ({ maven: null, gradle: [], ...(partial as object) }) as BuildModel;
 describe("build presentation context", () => {
-  it.each(["maven", "gradle"] as const)("uses distinct %s root and nested module glyphs", (tool) => {
+  it.each(["maven", "gradle"] as const)("uses the module folder icon in the project tree for %s", (tool) => {
     const modules = new Map([
       ["", tool],
       ["app", tool],
     ]);
-    expect(moduleFolderIcon("", true, modules)).toBe(`${tool}-project`);
-    expect(moduleFolderIcon("app", false, modules)).toBe(`${tool}-module`);
-    expect(moduleFolderIcon("plain", false, modules)).toBeNull();
+    expect(moduleFolderIcon("", modules)).toBe("module");
+    expect(moduleFolderIcon("app", modules)).toBe("module");
+    expect(moduleFolderIcon("plain", modules)).toBeNull();
   });
   it("marks nested module folders, not the project root or plain folders", () => {
     const modules = new Map<string, "maven" | "gradle">([

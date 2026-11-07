@@ -27,10 +27,7 @@
 
 .icon {
   flex: none;
-  color: var(--fg-muted);
-}
-.folderIcon {
-  color: var(--fg-subtle);
+  color: var(--fg-icon);
 }
 .faded {
   opacity: 0.55;
