@@ -135,6 +135,76 @@ mod tests {
     }
 
     #[test]
+    fn new_unsaved_bean_and_mapper_after_snapshot_are_rejected() {
+        for declaration in [
+            "import org.springframework.context.annotation.Bean; class New { @Bean(\"port\") Object duplicate() { return null; } }",
+            "package a; interface New { int find(); }",
+        ] {
+            let (_tmp, p, events) = setup();
+            let origin = p.documents.open(&p.root.join("src/main/java/Config.java")).unwrap();
+            let scope = adapter::Snapshot::load(&p, origin.id, &CancellationToken::new()).unwrap().unwrap();
+            let path = p.root.join("src/main/java/New.java");
+            std::fs::write(&path, "").unwrap();
+            let new = p.documents.open(&path).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            p.documents.replace_all(new.id, declaration).unwrap();
+            assert!(p.documents.is_dirty(new.id).unwrap());
+            assert!(!path.exists());
+            assert_eq!(scope.verify(&p).unwrap_err().kind, ErrorKind::OutOfSync);
+            assert!(events.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn closing_a_captured_document_reports_source_conflict() {
+        let (_tmp, p, _) = setup();
+        let origin = p.documents.open(&p.root.join("src/main/java/Config.java")).unwrap();
+        let usage = p.documents.open(&p.root.join("src/main/java/Use.java")).unwrap();
+        p.documents.replace_all(usage.id, "// unsaved definition").unwrap();
+        let scope = adapter::Snapshot::load(&p, origin.id, &CancellationToken::new()).unwrap().unwrap();
+        // Saving preserves the exact text fingerprint. Closing must still report
+        // the captured document lifecycle change consistently as OutOfSync.
+        p.documents.save(usage.id).unwrap();
+        p.documents.close(usage.id);
+        assert_eq!(scope.verify(&p).unwrap_err().kind, ErrorKind::OutOfSync);
+    }
+
+    #[test]
+    fn closing_or_moving_a_dirty_source_invalidates_snapshot() {
+        for move_outside in [false, true] {
+            let (_tmp, p, _) = setup();
+            let origin = p.documents.open(&p.root.join("src/main/java/Config.java")).unwrap();
+            let path = p.root.join("src/main/java/Use.java");
+            let usage = p.documents.open(&path).unwrap();
+            p.documents.replace_all(usage.id, "// unsaved content").unwrap();
+            let scope = adapter::Snapshot::load(&p, origin.id, &CancellationToken::new()).unwrap().unwrap();
+            p.documents.close(usage.id);
+            if move_outside {
+                let outside = p.root.join("Outside.java");
+                std::fs::write(&outside, "").unwrap();
+                let moved = p.documents.open(&outside).unwrap();
+                p.documents.replace_all(moved.id, "// unsaved content").unwrap();
+            }
+            assert_eq!(scope.verify(&p).unwrap_err().kind, ErrorKind::OutOfSync);
+        }
+    }
+
+    #[test]
+    fn opening_a_previously_unscanned_source_invalidates_snapshot() {
+        let (_tmp, p, _) = setup();
+        let source_root = p.root.join("src/main/java");
+        std::fs::write(source_root.join(".ignore"), "Ignored.java\n").unwrap();
+        let path = source_root.join("Ignored.java");
+        std::fs::write(&path, "import org.springframework.context.annotation.Bean; class Ignored { @Bean(\"port\") Object duplicate() { return null; } }").unwrap();
+        let origin = p.documents.open(&source_root.join("Config.java")).unwrap();
+        let scope = adapter::Snapshot::load(&p, origin.id, &CancellationToken::new()).unwrap().unwrap();
+        assert!(!scope.sources.contains_key(&ide_core::ipc_path::to_ipc(&path)));
+        let opened = p.documents.open(&path).unwrap();
+        assert!(!opened.dirty);
+        assert_eq!(scope.verify(&p).unwrap_err().kind, ErrorKind::OutOfSync);
+    }
+
+    #[test]
     fn grouped_undo_refreshes_source_mtime_for_incremental_java_compilation() {
         let (_tmp, p, events) = setup();
         let path = p.root.join("src/main/java/Config.java");

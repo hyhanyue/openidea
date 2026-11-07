@@ -113,3 +113,9 @@ Mac 验收清单：复制 fixture，选择 Java8，等待 JDT 导入；分别在
 - [Spring Framework 5.3.31 Core Technologies](https://docs.spring.io/spring-framework/docs/5.3.31/reference/html/core.html)：Bean 命名、aliases 与 qualifier 的不同语义。
 - [Spring Boot 2.7.18 Core Features](https://docs.spring.io/spring-boot/docs/2.7.18/reference/html/features.html)：外部配置、ConfigurationProperties、canonical prefix 与 relaxed binding。
 - [MyBatis Mapper XML](https://mybatis.org/mybatis-3/sqlmap-xml.html)：namespace/statement id、nested select 引用及 SQL fragment 分离。
+
+## 集成复查增量（进行中）
+
+- 已在生产 Snapshot adapter 上添加新增未落盘 Bean/Mapper 的回归。原实现已通过：目录指纹中的 unsaved extras 会捕获该变化，因此没有伪造“dirty 新文件漏检”的复现结论。
+- 另确认两条失败回归：扫描后才打开被 ignore 的已有源码，原 verify 返回 Ok；捕获 dirty 文档保存后关闭，原 verify 返回 NotFound 而非 OutOfSync。现补充保存 roots 和捕获文档路径，校验根范围内新增文档、路径/版本变化和关闭，统一返回源码冲突。关闭/移出 dirty 源码的回归也纳入。
+- ConfigurationProperties JavaBean 叶子/字段/getter/setter 重构继续实现中，后续独立提交；本次继续不启动 native/UI。

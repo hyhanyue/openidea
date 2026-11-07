@@ -25,7 +25,8 @@ fn supported(path: &Path) -> bool {
 pub(super) struct Snapshot {
     pub sources: Sources,
     guard: WorkspaceEdit,
-    versions: Vec<(DocId, u32)>,
+    roots: Vec<PathBuf>,
+    versions: Vec<(DocId, PathBuf, u32)>,
 }
 
 impl Snapshot {
@@ -88,8 +89,8 @@ impl Snapshot {
             let snap = project.documents.snapshot(id)?;
             let path = snap.path.to_path_buf();
             if supported(&path) && roots.iter().any(|r| path.starts_with(r)) {
-                paths.push(path);
-                versions.push((id, snap.version));
+                paths.push(path.clone());
+                versions.push((id, path, snap.version));
             }
         }
         paths.sort();
@@ -114,7 +115,7 @@ impl Snapshot {
             }
             sources.insert(ide_core::ipc_path::to_ipc(&path), text);
         }
-        let out = Self { sources, guard, versions };
+        let out = Self { sources, guard, roots, versions };
         out.verify(project)?;
         Ok(Some(out))
     }
@@ -138,18 +139,20 @@ impl Snapshot {
         if self.guard.preconditions != now.preconditions {
             return Err(stale());
         }
-        for (doc, version) in &self.versions {
-            if project.documents.version(*doc)? != *version {
+        for (doc, path, version) in &self.versions {
+            let (current_path, current_version) = project.documents.identity(*doc).map_err(|_| stale())?;
+            if current_path != *path || current_version != *version {
                 return Err(stale());
             }
         }
         // Detect a document opened/edited while the scan/LSP was running.
         for id in project.documents.open_documents() {
-            let snap = project.documents.snapshot(id)?;
-            if let Some(before) = self.sources.get(&ide_core::ipc_path::to_ipc(&snap.path))
-                && &snap.text != before
-            {
-                return Err(stale());
+            let snap = project.documents.snapshot(id).map_err(|_| stale())?;
+            if supported(&snap.path) && self.roots.iter().any(|root| snap.path.starts_with(root)) {
+                match self.sources.get(&ide_core::ipc_path::to_ipc(&snap.path)) {
+                    Some(before) if &snap.text == before => {}
+                    _ => return Err(stale()),
+                }
             }
         }
         Ok(())
