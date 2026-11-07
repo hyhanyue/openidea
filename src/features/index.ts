@@ -44,6 +44,7 @@ import { activate as web } from "./web";
 import { activate as analysis } from "./analysis";
 import { activate as services } from "./services";
 import { activate as github } from "./github";
+import { activate as springRuntime } from "./spring-runtime";
 import { activate as httpClient } from "./http-client";
 import { activate as database } from "./database";
 import { activate as graphql } from "./graphql";
@@ -92,6 +93,7 @@ const features: Array<[string, Activate]> = [
   ["services", services],
   ["github", github],
   ["http-client", httpClient],
+  ["spring-runtime", springRuntime],
   ["database", database],
   ["graphql", graphql],
   ["deployment", deployment],
