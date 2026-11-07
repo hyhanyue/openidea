@@ -23,6 +23,7 @@ env:
 jobs:
   # Creates (or reuses) one draft release that every platform build uploads into.
   create-release:
+    if: github.repository != 'hyhanyue/openidea'
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.release.outputs.id }}
