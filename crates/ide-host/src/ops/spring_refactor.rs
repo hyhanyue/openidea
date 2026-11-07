@@ -22,6 +22,13 @@ fn supported(path: &Path) -> bool {
     matches!(path.extension().and_then(|s| s.to_str()), Some("java" | "xml" | "yml" | "yaml" | "properties"))
 }
 
+fn physical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .ok()
+        .or_else(|| Some(std::fs::canonicalize(path.parent()?).ok()?.join(path.file_name()?)))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
 pub(super) struct Snapshot {
     pub sources: Sources,
     guard: WorkspaceEdit,
@@ -37,14 +44,15 @@ impl Snapshot {
             return Err(IdeError::cancelled());
         }
         let info = project.documents.snapshot(doc)?;
-        let origin = info.path.to_path_buf();
-        if !supported(&origin) || !origin.starts_with(&project.root) {
+        let origin = physical(&info.path);
+        let project_root = physical(&project.root);
+        if !supported(&origin) || !origin.starts_with(&project_root) {
             return Ok(None);
         }
         let module = origin
             .ancestors()
             .skip(1)
-            .take_while(|p| p.starts_with(&project.root))
+            .take_while(|p| p.starts_with(&project_root))
             .find(|p| ["pom.xml", "build.gradle", "build.gradle.kts"].iter().any(|name| p.join(name).is_file()));
         let Some(module) = module else { return Ok(None) };
         let roots: Vec<_> = ["src/main/java", "src/main/resources", "src/test/java", "src/test/resources"]
@@ -87,10 +95,10 @@ impl Snapshot {
         let mut versions = Vec::new();
         for id in project.documents.open_documents() {
             let snap = project.documents.snapshot(id)?;
-            let path = snap.path.to_path_buf();
+            let path = physical(&snap.path);
             if supported(&path) && roots.iter().any(|r| path.starts_with(r)) {
                 paths.push(path.clone());
-                versions.push((id, path, snap.version));
+                versions.push((id, snap.path.to_path_buf(), snap.version));
             }
         }
         paths.sort();
@@ -121,15 +129,25 @@ impl Snapshot {
     }
 
     pub fn target(&self, path: &str, pos: Pos) -> Option<Target> {
-        spring_refactor::target(&self.sources, path, position(pos))
+        spring_refactor::target(&self.sources, self.source_key(path)?, position(pos))
     }
 
     pub fn recognized(&self, path: &str, pos: Pos) -> bool {
-        spring_refactor::recognized(&self.sources, path, position(pos))
+        self.source_key(path).is_some_and(|key| spring_refactor::recognized(&self.sources, key, position(pos)))
     }
 
     pub fn refusal(&self, path: &str, pos: Pos) -> IdeError {
-        IdeError::new(ErrorKind::InvalidInput, spring_refactor::refusal(&self.sources, path, position(pos)))
+        IdeError::new(
+            ErrorKind::InvalidInput,
+            spring_refactor::refusal(&self.sources, self.source_key(path).unwrap_or(path), position(pos)),
+        )
+    }
+
+    fn source_key(&self, path: &str) -> Option<&str> {
+        self.sources
+            .get_key_value(path)
+            .or_else(|| self.sources.get_key_value(&ide_core::ipc_path::to_ipc(&physical(Path::new(path)))))
+            .map(|(key, _)| key.as_str())
     }
 
     pub fn verify(&self, project: &Project) -> IdeResult<()> {
@@ -148,8 +166,9 @@ impl Snapshot {
         // Detect a document opened/edited while the scan/LSP was running.
         for id in project.documents.open_documents() {
             let snap = project.documents.snapshot(id).map_err(|_| stale())?;
-            if supported(&snap.path) && self.roots.iter().any(|root| snap.path.starts_with(root)) {
-                match self.sources.get(&ide_core::ipc_path::to_ipc(&snap.path)) {
+            let path = physical(&snap.path);
+            if supported(&path) && self.roots.iter().any(|root| path.starts_with(root)) {
+                match self.source_key(&ide_core::ipc_path::to_ipc(&path)).and_then(|key| self.sources.get(key)) {
                     Some(before) if &snap.text == before => {}
                     _ => return Err(stale()),
                 }
@@ -160,6 +179,32 @@ impl Snapshot {
 
     pub fn plan(&self, target: &Target, new_name: &str) -> IdeResult<spring_refactor::Plan> {
         spring_refactor::plan(&self.sources, target, new_name).map_err(|s| IdeError::new(ErrorKind::InvalidInput, s))
+    }
+
+    pub fn refine_java_edits(&self, edit: &mut WorkspaceEdit) -> IdeResult<()> {
+        for file in &mut edit.files {
+            if let FileEdit::Edit { path, edits, .. } = file
+                && path.extension().is_some_and(|ext| ext == "java")
+                && let Some(key) = self.source_key(&ide_core::ipc_path::to_ipc(path))
+                && let Some(source) = self.sources.get(key)
+            {
+                let mut refined = Vec::new();
+                for edit in edits.iter() {
+                    let planned = spring_refactor::refine_java_edit(
+                        source,
+                        &openidea_plugin::TextEdit {
+                            range: openidea_plugin::Range::new(position(edit.range.start), position(edit.range.end)),
+                            text: edit.new_text.clone(),
+                        },
+                    )
+                    .map_err(|message| IdeError::new(ErrorKind::InvalidInput, message))?;
+                    refined.extend(planned.into_iter().map(|e| TextEdit { range: range(e.range), new_text: e.text }));
+                }
+                *edits = refined;
+            }
+        }
+        edit.deduplicate();
+        Ok(())
     }
 
     /// Merge only identical or disjoint text edits. Never silently resolve a

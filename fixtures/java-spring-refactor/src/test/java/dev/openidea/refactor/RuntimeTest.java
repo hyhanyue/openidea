@@ -18,6 +18,14 @@ class RuntimeTest {
             assertEquals(Integer.valueOf(7), mapper.nested().getValue());
             assertEquals(Integer.valueOf(19), ctx.getBean(OtherMapper.class).find());
             assertEquals(Integer.valueOf(5), consumer.counter);
+            assertEquals("ready-name", ctx.getBean(Settings.class).getDisplayName());
+            PropertyClient property = ctx.getBean(PropertyClient.class);
+            assertEquals("ready-name", property.roundTrip());
+            assertEquals("ready-name", property.canonical);
+            assertEquals("ready-name", property.camel);
+            assertEquals("ready-name", property.snake);
+            assertEquals("sample.display-name", property.plainText());
+            assertEquals("unrelated", new Unrelated().getDisplayName());
         }
     }
 }

@@ -4,8 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
-const [fixture, jdtls, jdkRuntime, jdk8, scratch, output] = process.argv.slice(2).map((p) => path.resolve(p));
-if (!output) throw new Error("Usage: node spring-refactor-jdt.mjs fixture jdtls jdkRuntime jdk8 scratch output.json");
+const [fixture, jdtls, jdkRuntime, jdk8, scratch, output] = process.argv.slice(2, 8).map((p) => path.resolve(p));
+const mode = process.argv[8] ?? "mapper";
+if (!["mapper", "property"].includes(mode)) throw new Error("Mode must be mapper or property");
+if (!output)
+  throw new Error(
+    "Usage: node spring-refactor-jdt.mjs fixture jdtls jdkRuntime jdk8 scratch output.json [mapper|property]",
+  );
 fs.mkdirSync(scratch, { recursive: true });
 const config = path.join(scratch, "config");
 fs.cpSync(path.join(jdtls, "config_mac"), config, { recursive: true });
@@ -133,7 +138,10 @@ try {
   const deadline = Date.now() + 180_000;
   while (!ready && Date.now() < deadline) await new Promise((r) => setTimeout(r, 1000));
   if (!ready) throw new Error("JDT did not finish importing fixture");
-  const java = path.join(fixture, "src/main/java/dev/openidea/refactor/UserMapper.java");
+  const java = path.join(
+    fixture,
+    `src/main/java/dev/openidea/refactor/${mode === "property" ? "Settings" : "UserMapper"}.java`,
+  );
   const uri = pathToFileURL(java).href;
   const text = fs.readFileSync(java, "utf8");
   send({
@@ -141,33 +149,47 @@ try {
     method: "textDocument/didOpen",
     params: { textDocument: { uri, languageId: "java", version: 1, text } },
   });
-  const index = text.indexOf("find(");
-  const prefix = text.slice(0, index).split("\n");
-  const position = { line: prefix.length - 1, character: prefix.at(-1).length };
-  const prepared = await request("textDocument/prepareRename", { textDocument: { uri }, position });
-  if (!prepared) throw new Error("JDT refused mapper method rename");
-  const edit = await request("textDocument/rename", { textDocument: { uri }, position, newName: "lookup" });
-  const files = [];
-  const edits = (fileUri, values) =>
-    files.push({
-      kind: "edit",
-      path: fileURLToPath(fileUri),
-      edits: values.map((e) => ({
-        range: {
-          start: { line: e.range.start.line, col: e.range.start.character },
-          end: { line: e.range.end.line, col: e.range.end.character },
-        },
-        new_text: e.newText,
-      })),
-    });
-  for (const [fileUri, values] of Object.entries(edit.changes ?? {})) edits(fileUri, values);
-  for (const change of edit.documentChanges ?? []) {
-    if (!change.textDocument) throw new Error(`Unexpected resource operation: ${change.kind}`);
-    edits(change.textDocument.uri, change.edits);
+  const renames =
+    mode === "property"
+      ? [
+          ["displayName;", "titleText"],
+          ["getDisplayName", "getTitleText"],
+          ["setDisplayName", "setTitleText"],
+        ]
+      : [["find(", "lookup"]];
+  const replies = {};
+  for (const [needle, newName] of renames) {
+    const index = text.indexOf(needle);
+    if (index < 0) throw new Error(`Missing declaration ${needle}`);
+    const prefix = text.slice(0, index).split("\n");
+    const position = { line: prefix.length - 1, character: prefix.at(-1).length };
+    const prepared = await request("textDocument/prepareRename", { textDocument: { uri }, position });
+    if (!prepared) throw new Error(`JDT refused ${needle} rename`);
+    const edit = await request("textDocument/rename", { textDocument: { uri }, position, newName });
+    const files = [];
+    const edits = (fileUri, values) =>
+      files.push({
+        kind: "edit",
+        path: fileURLToPath(fileUri),
+        edits: values.map((e) => ({
+          range: {
+            start: { line: e.range.start.line, col: e.range.start.character },
+            end: { line: e.range.end.line, col: e.range.end.character },
+          },
+          new_text: e.newText,
+        })),
+      });
+    for (const [fileUri, values] of Object.entries(edit.changes ?? {})) edits(fileUri, values);
+    for (const change of edit.documentChanges ?? []) {
+      if (!change.textDocument) throw new Error(`Unexpected resource operation: ${change.kind}`);
+      edits(change.textDocument.uri, change.edits);
+    }
+    if (newName !== "titleText" && files.length < 2)
+      throw new Error(`JDT did not include the Java caller for ${newName}`);
+    replies[newName] = { files, preconditions: [] };
+    process.stdout.write(`Captured real JDT rename ${newName}: ${files.length} Java files\n`);
   }
-  if (files.length < 2) throw new Error("JDT did not include the Java caller");
-  fs.writeFileSync(output, JSON.stringify({ files, preconditions: [] }, null, 2));
-  process.stdout.write(`Captured real JDT rename: ${files.length} Java files -> ${output}\n`);
+  fs.writeFileSync(output, JSON.stringify(mode === "property" ? replies : replies.lookup, null, 2));
   await request("shutdown", null, 5000);
   send({ jsonrpc: "2.0", method: "exit", params: null });
 } finally {

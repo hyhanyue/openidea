@@ -1,5 +1,6 @@
 sample:
   label: ready
+  display_name: ready-name
 service:
   timeout: 11
 # sample service.timeout port find

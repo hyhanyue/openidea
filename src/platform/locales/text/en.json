@@ -119,7 +119,6 @@
   "Invalid bean name": "Invalid bean name",
   "Invalid configuration key": "Invalid configuration key",
   "Configuration key must stay in the same parent mapping": "Configuration key must stay in the same parent mapping",
-  "JavaBean property rename requires Java accessor refactoring; rename the configuration prefix instead": "JavaBean property rename requires Java accessor refactoring; rename the configuration prefix instead",
   "Invalid mapper method name": "Invalid mapper method name",
   "Mapper statement is ambiguous or has no unique Java method": "Mapper statement is ambiguous or has no unique Java method",
   "The target identity already exists in this source scope": "The target identity already exists in this source scope",
@@ -130,7 +129,6 @@
   "Spring/MyBatis identity is ambiguous in this source scope": "Spring/MyBatis identity is ambiguous in this source scope",
   "Java language server did not rename the framework declaration": "Java language server did not rename the framework declaration",
   "Implicit bean declaration could not be identified": "Implicit bean declaration could not be identified",
-  "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, relaxed-binding spellings and string-based MyBatis calls are not resolved.": "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, relaxed-binding spellings and string-based MyBatis calls are not resolved.",
   "Framework rename cannot merge text edits after file operations": "Framework rename cannot merge text edits after file operations",
   "Passed to the Spring Boot application, not to Maven": "Passed to the Spring Boot application, not to Maven",
   "Application working directory": "Application working directory",
@@ -154,5 +152,10 @@
   "Invalid Spring launch context fact": "Invalid Spring launch context fact",
   "Spring launch properties must be redacted or boolean": "Spring launch properties must be redacted or boolean",
   "Spring analysis plugin is not enabled": "Spring analysis plugin is not enabled",
-  "Spring launch context project changed": "Spring launch context project changed"
+  "Spring launch context project changed": "Spring launch context project changed",
+  "Configuration property requires a unique mutable JavaBean field, getter and setter": "Configuration property requires a unique mutable JavaBean field, getter and setter",
+  "Invalid JavaBean accessor name": "Invalid JavaBean accessor name",
+  "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. JavaBean property aliases are included only when uniquely resolved. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, environment-variable aliases and string-based MyBatis calls are not resolved.": "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. JavaBean property aliases are included only when uniquely resolved. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, environment-variable aliases and string-based MyBatis calls are not resolved.",
+  "Invalid Java rename range": "Invalid Java rename range",
+  "Java rename edit refinement changed the result": "Java rename edit refinement changed the result"
 }

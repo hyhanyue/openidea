@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 spring-text = { path = "../spring-text" }
 openidea-plugin = { path = "../../../sdk/rust/openidea-plugin" }
+similar = { version = "2.7", default-features = false }
 
 [dev-dependencies]
 serde_json = "1"

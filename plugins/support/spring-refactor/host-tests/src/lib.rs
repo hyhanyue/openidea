@@ -12,28 +12,42 @@ pub mod types {
     #[derive(Default)]
     pub struct Renamed {
         pub edit: ide_core::WorkspaceEdit,
+        pub incomplete: Option<()>,
     }
 }
 
 #[derive(Default)]
-pub struct FakeLsp(pub std::sync::Mutex<Option<ide_core::WorkspaceEdit>>);
+pub struct FakeLsp {
+    pub replies: std::sync::Mutex<std::collections::BTreeMap<String, ide_core::WorkspaceEdit>>,
+    pub calls: std::sync::Mutex<Vec<String>>,
+    pub cancel_after: std::sync::Mutex<Option<String>>,
+}
 impl FakeLsp {
     pub async fn rename(
         &self,
         _doc: ide_core::DocId,
         _pos: ide_core::Pos,
-        _new_name: String,
+        new_name: String,
         cancel: ide_core::CancellationToken,
     ) -> ide_core::IdeResult<types::Renamed> {
         if cancel.is_cancelled() {
             return Err(ide_core::IdeError::cancelled());
         }
-        Ok(types::Renamed { edit: self.0.lock().unwrap().take().unwrap_or_default() })
+        self.calls.lock().unwrap().push(new_name.clone());
+        if self.cancel_after.lock().unwrap().as_deref() == Some(&new_name) {
+            cancel.cancel();
+        }
+        Ok(types::Renamed {
+            edit: self.replies.lock().unwrap().get(&new_name).cloned().unwrap_or_default(),
+            ..Default::default()
+        })
     }
 }
 
 mod doc {
-    pub async fn blocking<T>(f: impl FnOnce() -> ide_core::IdeResult<T>) -> ide_core::IdeResult<T> {
+    pub async fn blocking<T: Send + 'static>(
+        f: impl FnOnce() -> ide_core::IdeResult<T> + Send + 'static,
+    ) -> ide_core::IdeResult<T> {
         f()
     }
 }
@@ -138,11 +152,20 @@ mod tests {
     fn new_unsaved_bean_and_mapper_after_snapshot_are_rejected() {
         for declaration in [
             "import org.springframework.context.annotation.Bean; class New { @Bean(\"port\") Object duplicate() { return null; } }",
-            "package a; interface New { int find(); }",
+            "package a; interface M { int find(); }",
         ] {
             let (_tmp, p, events) = setup();
             let origin = p.documents.open(&p.root.join("src/main/java/Config.java")).unwrap();
+            if declaration.contains("interface") {
+                std::fs::write(p.root.join("src/main/java/M.java"), "package a; interface M { int find(); }").unwrap();
+                std::fs::write(
+                    p.root.join("src/main/resources/M.xml"),
+                    "<mapper namespace='a.M'><select id='find'>select 1</select></mapper>",
+                )
+                .unwrap();
+            }
             let scope = adapter::Snapshot::load(&p, origin.id, &CancellationToken::new()).unwrap().unwrap();
+            let edit = preview(&p);
             let path = p.root.join("src/main/java/New.java");
             std::fs::write(&path, "").unwrap();
             let new = p.documents.open(&path).unwrap();
@@ -151,6 +174,10 @@ mod tests {
             assert!(p.documents.is_dirty(new.id).unwrap());
             assert!(!path.exists());
             assert_eq!(scope.verify(&p).unwrap_err().kind, ErrorKind::OutOfSync);
+            assert_eq!(p.documents.apply_workspace_edit(&edit).unwrap_err().kind, ErrorKind::OutOfSync);
+            assert!(
+                std::fs::read_to_string(p.root.join("src/main/java/Config.java")).unwrap().contains("@Bean(\"port\")")
+            );
             assert!(events.lock().unwrap().is_empty());
         }
     }
@@ -198,7 +225,7 @@ mod tests {
         std::fs::write(&path, "import org.springframework.context.annotation.Bean; class Ignored { @Bean(\"port\") Object duplicate() { return null; } }").unwrap();
         let origin = p.documents.open(&source_root.join("Config.java")).unwrap();
         let scope = adapter::Snapshot::load(&p, origin.id, &CancellationToken::new()).unwrap().unwrap();
-        assert!(!scope.sources.contains_key(&ide_core::ipc_path::to_ipc(&path)));
+        assert!(!scope.sources.contains_key(&ide_core::ipc_path::to_ipc(&std::fs::canonicalize(&path).unwrap())));
         let opened = p.documents.open(&path).unwrap();
         assert!(!opened.dirty);
         assert_eq!(scope.verify(&p).unwrap_err().kind, ErrorKind::OutOfSync);
@@ -328,6 +355,116 @@ mod tests {
         assert!(std::fs::read_to_string(path).unwrap().contains("id='find'"));
     }
 
+    fn java_bean_project() -> (tempfile::TempDir, Project, Arc<Mutex<Vec<u32>>>, ide_core::DocId, Pos) {
+        let (tmp, p, events) = setup();
+        let path = p.root.join("src/main/java/Settings.java");
+        std::fs::write(&path, "import org.springframework.boot.context.properties.ConfigurationProperties; @ConfigurationProperties(\"sample\") class Settings { private String displayName; public String getDisplayName() { return displayName; } public void setDisplayName(String v) { displayName = v; } }").unwrap();
+        let config = p.root.join("src/main/resources/application.properties");
+        std::fs::write(&config, "sample.display-name=ready\n").unwrap();
+        let info = p.documents.open(&config).unwrap();
+        let scope = adapter::Snapshot::load(&p, info.id, &CancellationToken::new()).unwrap().unwrap();
+        let target = scope.target(&ide_core::ipc_path::to_ipc(&config), Pos::new(0, 0)).unwrap();
+        let plan = scope.plan(&target, "sample.title-text").unwrap();
+        for java in plan.java_requests() {
+            let name = java.new_name.as_ref().unwrap();
+            p.lsp.replies.lock().unwrap().insert(
+                name.clone(),
+                WorkspaceEdit {
+                    files: vec![ide_core::FileEdit::Edit {
+                        path: PathBuf::from(&java.path).into(),
+                        version: None,
+                        edits: vec![ide_core::TextEdit {
+                            range: ide_core::Range::new(
+                                Pos::new(java.pos.line, java.pos.character),
+                                Pos::new(java.pos.line, java.pos.character + java.old_name.len() as u32),
+                            ),
+                            new_text: name.clone(),
+                        }],
+                    }],
+                    ..Default::default()
+                },
+            );
+        }
+        (tmp, p, events, info.id, Pos::new(0, 0))
+    }
+
+    #[tokio::test]
+    async fn property_symbols_are_computed_before_one_framework_transaction() {
+        let (_tmp, p, events, doc, pos) = java_bean_project();
+        let p = Arc::new(p);
+        let renamed = spring_rename::rename(p.clone(), doc, pos, "sample.title-text".into(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(*p.lsp.calls.lock().unwrap(), vec!["titleText", "getTitleText", "setTitleText"]);
+        assert!(events.lock().unwrap().is_empty());
+        p.documents.apply_workspace_edit(&renamed.edit).unwrap();
+        let text = p.documents.text_of(&p.root.join("src/main/java/Settings.java")).unwrap();
+        assert!(text.contains("private String titleText"));
+        assert!(text.contains("getTitleText()"));
+        assert!(text.contains("setTitleText(String v)"));
+        p.documents.undo_workspace_edit(events.lock().unwrap()[0]).unwrap();
+        assert!(
+            p.documents
+                .text_of(&p.root.join("src/main/java/Settings.java"))
+                .unwrap()
+                .contains("private String displayName")
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_accessor_response_refuses_the_entire_property_plan() {
+        let (_tmp, p, events, doc, pos) = java_bean_project();
+        p.lsp.replies.lock().unwrap().remove("getTitleText");
+        let p = Arc::new(p);
+        let error = spring_rename::rename(p.clone(), doc, pos, "sample.title-text".into(), CancellationToken::new())
+            .await
+            .err()
+            .unwrap();
+        assert!(error.message.contains("did not rename"));
+        assert_eq!(*p.lsp.calls.lock().unwrap(), vec!["titleText", "getTitleText"]);
+        assert!(events.lock().unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(p.root.join("src/main/resources/application.properties")).unwrap(),
+            "sample.display-name=ready\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn field_response_with_accessors_is_deduplicated_without_more_requests() {
+        let (_tmp, p, _, doc, pos) = java_bean_project();
+        let replies = p.lsp.replies.lock().unwrap().clone();
+        let combined = WorkspaceEdit {
+            files: replies.values().flat_map(|edit| edit.files.clone()).collect(),
+            ..Default::default()
+        };
+        p.lsp.replies.lock().unwrap().clear();
+        p.lsp.replies.lock().unwrap().insert("titleText".into(), combined);
+        let p = Arc::new(p);
+        let renamed = spring_rename::rename(p.clone(), doc, pos, "sample.title-text".into(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(*p.lsp.calls.lock().unwrap(), vec!["titleText"]);
+        assert_eq!(renamed.edit.files.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn cancelled_property_group_never_applies_a_partial_symbol_set() {
+        let (_tmp, p, events, doc, pos) = java_bean_project();
+        *p.lsp.cancel_after.lock().unwrap() = Some("titleText".into());
+        let p = Arc::new(p);
+        let error = spring_rename::rename(p.clone(), doc, pos, "sample.title-text".into(), CancellationToken::new())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, ErrorKind::Cancelled);
+        assert!(events.lock().unwrap().is_empty());
+        assert!(
+            std::fs::read_to_string(p.root.join("src/main/java/Settings.java"))
+                .unwrap()
+                .contains("private String displayName")
+        );
+    }
+
     #[test]
     #[ignore = "requires JDK8/Maven and real JDT edits captured by scripts/spring-refactor-jdt.mjs"]
     fn java8_boot_mybatis_apply_and_grouped_undo() {
@@ -392,6 +529,105 @@ mod tests {
             assert_eq!(std::fs::read(root.join(relative)).unwrap(), before);
             verify(&format!("{label}-undo"));
             println!("Java8 Boot start/binding/MyBatis query verified: {label} apply + grouped undo");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Java8, Maven and real JDT property responses"]
+    async fn java8_property_field_accessors_and_resource_aliases_apply_and_undo() {
+        let root = PathBuf::from(std::env::var("OPENIDEA_FIXTURE").expect("copy fixture first"));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ids = events.clone();
+        let documents = Arc::new(ide_workspace::Documents::new(
+            Arc::new(move |event| {
+                if let IdeEvent::WorkspaceEditApplied { id, .. } = event {
+                    ids.lock().unwrap().push(id);
+                }
+            }),
+            Box::new(|_, _| LanguageId("java".into())),
+        ));
+        let lsp = FakeLsp::default();
+        *lsp.replies.lock().unwrap() =
+            serde_json::from_slice(&std::fs::read(std::env::var("OPENIDEA_PROPERTY_EDITS").unwrap()).unwrap()).unwrap();
+        let project = Arc::new(Project { root: root.clone(), documents, lsp });
+        let maven = std::env::var("OPENIDEA_MAVEN").expect("Maven executable");
+        let verify = |label: &str| {
+            let mut command = std::process::Command::new(&maven);
+            command.args(["-o", "-q"]);
+            if label == "leaf-baseline" {
+                command.arg("clean");
+            }
+            let result = command.arg("test").current_dir(&root).output().unwrap();
+            std::fs::write(root.join(format!("target/{label}.log")), [&result.stdout[..], &result.stderr[..]].concat())
+                .unwrap();
+            assert!(result.status.success(), "Maven {label} failed: {}", String::from_utf8_lossy(&result.stdout));
+        };
+        verify("leaf-baseline");
+        let unrelated = std::fs::read(root.join("src/main/java/dev/openidea/refactor/Unrelated.java")).unwrap();
+        for (label, relative, needle, replacement) in [
+            ("field", "src/main/java/dev/openidea/refactor/Settings.java", "displayName;", "titleText"),
+            ("getter", "src/main/java/dev/openidea/refactor/Settings.java", "getDisplayName", "getTitleText"),
+            ("setter", "src/main/java/dev/openidea/refactor/Settings.java", "setDisplayName", "setTitleText"),
+            ("properties", "src/main/resources/application.properties", "sample.display_name=", "sample.title_text"),
+            ("yaml", "src/main/resources/application.yml", "display_name:", "title_text"),
+            (
+                "value",
+                "src/main/java/dev/openidea/refactor/PropertyClient.java",
+                "sample.display-name:fallback",
+                "sample.title-text",
+            ),
+            (
+                "call-getter",
+                "src/main/java/dev/openidea/refactor/PropertyClient.java",
+                "getDisplayName",
+                "getTitleText",
+            ),
+            (
+                "call-setter",
+                "src/main/java/dev/openidea/refactor/PropertyClient.java",
+                "setDisplayName",
+                "setTitleText",
+            ),
+            ("field-usage", "src/main/java/dev/openidea/refactor/Settings.java", "return displayName", "titleText"),
+        ] {
+            let info = project.documents.open(&root.join(relative)).unwrap();
+            let before = std::fs::read(root.join(relative)).unwrap();
+            let at = info.text.find(needle).unwrap() + if label == "field-usage" { 7 } else { 0 };
+            let pos = openidea_plugin::text::position(&info.text, at);
+            project.lsp.calls.lock().unwrap().clear();
+            let renamed = spring_rename::rename(
+                project.clone(),
+                info.id,
+                Pos::new(pos.line, pos.character),
+                replacement.into(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+            assert!(
+                !renamed.edit.files.iter().any(
+                    |file| matches!(file, ide_core::FileEdit::Edit { path, .. } if path.ends_with("Unrelated.java"))
+                )
+            );
+            assert!(project.lsp.calls.lock().unwrap().contains(&"titleText".to_owned()));
+            project.documents.apply_workspace_edit(&renamed.edit).unwrap();
+            let props = std::fs::read_to_string(root.join("src/main/resources/application.properties")).unwrap();
+            assert!(
+                props.contains(
+                    "sample.title-text=ready-name\nsample.titleText=ready-name\nsample.title_text=ready-name"
+                )
+            );
+            assert!(props.contains("# sample.display-name is an ordinary comment"));
+            verify(&format!("leaf-{label}-after"));
+            let id = *events.lock().unwrap().last().unwrap();
+            project.documents.undo_workspace_edit(id).unwrap();
+            assert_eq!(std::fs::read(root.join(relative)).unwrap(), before);
+            assert_eq!(
+                std::fs::read(root.join("src/main/java/dev/openidea/refactor/Unrelated.java")).unwrap(),
+                unrelated
+            );
+            verify(&format!("leaf-{label}-undo"));
+            println!("Java8 property/JDT/Boot/MyBatis verified: {label} apply + grouped undo");
         }
     }
 }

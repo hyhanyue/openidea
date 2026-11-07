@@ -3,6 +3,10 @@
 use openidea_plugin::{Position, Range, TextEdit};
 use spring_text::{config, java, xml};
 use std::collections::BTreeMap;
+mod properties;
+pub use properties::Selection as PropertySelection;
+mod java_edits;
+pub use java_edits::refine_java_edit;
 
 pub type Sources = BTreeMap<String, String>;
 
@@ -19,6 +23,7 @@ pub struct Target {
     pub range: Range,
     /// Java declarations must be renamed by JDT, including their Java usages.
     pub java: Option<JavaRename>,
+    pub property: Option<PropertySelection>,
 }
 
 #[derive(Clone, Debug)]
@@ -26,12 +31,20 @@ pub struct JavaRename {
     pub path: String,
     pub pos: Position,
     pub old_name: String,
+    pub new_name: Option<String>,
 }
 
 #[derive(Default, Debug)]
 pub struct Plan {
     pub files: BTreeMap<String, Vec<TextEdit>>,
     pub java: Option<JavaRename>,
+    pub related_java: Vec<JavaRename>,
+}
+
+impl Plan {
+    pub fn java_requests(&self) -> impl Iterator<Item = &JavaRename> {
+        self.java.iter().chain(&self.related_java)
+    }
 }
 
 #[derive(Clone)]
@@ -64,6 +77,9 @@ fn exact_string(text: &str, s: &java::Str) -> bool {
 
 // Requiring import/FQN evidence avoids treating an unrelated @Value/@Bean as Spring.
 fn annotation_is(file: &java::JavaFile, text: &str, a: &java::Annotation, qualified: &str) -> bool {
+    if qualified.rsplit('.').next() != Some(a.name.as_str()) {
+        return false;
+    }
     let written = text[a.at + 1..a.name_at + a.name.len()].trim();
     if written.contains('.') {
         return written == qualified;
@@ -99,7 +115,8 @@ fn placeholders(value: &str, base: usize) -> Vec<(String, usize, usize)> {
 }
 
 fn config_name(s: &str) -> bool {
-    !s.is_empty() && s.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+    !s.is_empty()
+        && s.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
 }
 
 fn simple_name(s: &str) -> bool {
@@ -110,8 +127,62 @@ fn java_name(s: &str) -> bool {
     simple_name(s)
         && !s.contains('-')
         && !s.starts_with(|c: char| c.is_ascii_digit())
-        && !["class", "interface", "default", "public", "private", "void", "new", "return", "null", "true", "false"]
-            .contains(&s)
+        && ![
+            "abstract",
+            "assert",
+            "boolean",
+            "break",
+            "byte",
+            "case",
+            "catch",
+            "char",
+            "class",
+            "const",
+            "continue",
+            "default",
+            "do",
+            "double",
+            "else",
+            "enum",
+            "extends",
+            "final",
+            "finally",
+            "float",
+            "for",
+            "goto",
+            "if",
+            "implements",
+            "import",
+            "instanceof",
+            "int",
+            "interface",
+            "long",
+            "native",
+            "new",
+            "package",
+            "private",
+            "protected",
+            "public",
+            "return",
+            "short",
+            "static",
+            "strictfp",
+            "super",
+            "switch",
+            "synchronized",
+            "this",
+            "throw",
+            "throws",
+            "transient",
+            "try",
+            "void",
+            "volatile",
+            "while",
+            "null",
+            "true",
+            "false",
+        ]
+        .contains(&s)
 }
 
 fn sites(sources: &Sources) -> Vec<Site> {
@@ -205,6 +276,14 @@ fn sites(sources: &Sources) -> Vec<Site> {
                 if t.annotations.iter().any(|a| {
                     annotation_is(&file, text, a, "org.springframework.boot.context.properties.ConfigurationProperties")
                 }) {
+                    for component in &t.components {
+                        push(
+                            component.name.clone(),
+                            component.at,
+                            component.at + component.name.len(),
+                            Kind::UnsupportedBinding,
+                        );
+                    }
                     for member in &t.members {
                         if member.kind == java::MemberKind::Field
                             || member.name.starts_with("get")
@@ -328,6 +407,14 @@ fn same_family(kind: &Kind, identity: &Identity) -> bool {
 /// Only identities proved by declarations in this source set are offered.
 pub fn target(sources: &Sources, path: &str, pos: Position) -> Option<Target> {
     let all = sites(sources);
+    if let Some(property) = properties::select(sources, &all, path, pos) {
+        return Some(Target {
+            identity: Identity::Config(property.key()),
+            range: property.range,
+            java: property.java_hint(sources),
+            property: Some(property),
+        });
+    }
     let text = sources.get(path)?;
     let at = openidea_plugin::text::offset(text, pos)?;
     let site = all.iter().find(|s| s.path == path && s.from <= at && at <= s.to)?;
@@ -335,6 +422,7 @@ pub fn target(sources: &Sources, path: &str, pos: Position) -> Option<Target> {
         path: path.to_owned(),
         pos: openidea_plugin::text::position(text, site.from),
         old_name: site.name.clone(),
+        new_name: None,
     });
     let identity = match &site.kind {
         Kind::BeanDef | Kind::BeanRef => Identity::Bean(site.name.clone()),
@@ -360,7 +448,7 @@ pub fn target(sources: &Sources, path: &str, pos: Position) -> Option<Target> {
             return None;
         }
     }
-    Some(Target { identity, range: spring_text::range(text, site.from, site.to), java })
+    Some(Target { identity, range: spring_text::range(text, site.from, site.to), java, property: None })
 }
 
 /// A recognized but unresolved source identity must not fall back to a textual
@@ -369,25 +457,28 @@ pub fn recognized(sources: &Sources, path: &str, pos: Position) -> bool {
     let Some(text) = sources.get(path) else { return false };
     let Some(at) = openidea_plugin::text::offset(text, pos) else { return false };
     let all = sites(sources);
-    all.iter().any(|s| {
-        s.path == path
-            && s.from <= at
-            && at <= s.to
-            && match &s.kind {
-                Kind::JavaStatement(ns) => all.iter().any(|x| matches!(&x.kind, Kind::StatementDef(n) if n == ns)),
-                _ => true,
-            }
-    })
+    properties::inherited_declaration(sources, path, pos)
+        || all.iter().any(|s| {
+            s.path == path
+                && s.from <= at
+                && at <= s.to
+                && match &s.kind {
+                    Kind::JavaStatement(ns) => all.iter().any(|x| matches!(&x.kind, Kind::StatementDef(n) if n == ns)),
+                    _ => true,
+                }
+        })
 }
 
 pub fn refusal(sources: &Sources, path: &str, pos: Position) -> &'static str {
     let at = sources.get(path).and_then(|text| openidea_plugin::text::offset(text, pos));
-    if at.is_some_and(|at| {
-        sites(sources)
-            .iter()
-            .any(|s| s.path == path && s.from <= at && at <= s.to && s.kind == Kind::UnsupportedBinding)
-    }) {
-        "JavaBean property rename requires Java accessor refactoring; rename the configuration prefix instead"
+    if properties::inherited_declaration(sources, path, pos)
+        || at.is_some_and(|at| {
+            sites(sources)
+                .iter()
+                .any(|s| s.path == path && s.from <= at && at <= s.to && s.kind == Kind::UnsupportedBinding)
+        })
+    {
+        properties::REFUSAL
     } else {
         "Spring/MyBatis identity is ambiguous in this source scope"
     }
@@ -396,6 +487,9 @@ pub fn refusal(sources: &Sources, path: &str, pos: Position) -> &'static str {
 /// Reject collisions/ambiguous declarations before producing any edits.
 pub fn plan(sources: &Sources, target: &Target, replacement: &str) -> Result<Plan, &'static str> {
     let all = sites(sources);
+    if let Some(property) = &target.property {
+        return properties::plan(sources, &all, property, replacement);
+    }
     let (old, new) = match &target.identity {
         Identity::Bean(old) => {
             if !simple_name(replacement) {
@@ -409,6 +503,9 @@ pub fn plan(sources: &Sources, target: &Target, replacement: &str) -> Result<Pla
             (old.as_str(), if class { spring_text::decapitalize(replacement) } else { replacement.to_owned() })
         }
         Identity::Config(old) => {
+            if properties::unresolved_prefix(sources) {
+                return Err(properties::REFUSAL);
+            }
             if !config_name(replacement) {
                 return Err("Invalid configuration key");
             }
@@ -427,10 +524,8 @@ pub fn plan(sources: &Sources, target: &Target, replacement: &str) -> Result<Pla
             }) {
                 return Err("Invalid configuration key");
             }
-            if prefixes.iter().any(|p| old.starts_with(&format!("{}.", p.name))) {
-                return Err(
-                    "JavaBean property rename requires Java accessor refactoring; rename the configuration prefix instead",
-                );
+            if prefixes.iter().any(|p| properties::under_prefix(old, &p.name)) {
+                return Err(properties::REFUSAL);
             }
             (old.as_str(), replacement.to_owned())
         }
@@ -518,6 +613,7 @@ pub fn plan(sources: &Sources, target: &Target, replacement: &str) -> Result<Pla
             path: method.path.clone(),
             pos: openidea_plugin::text::position(&sources[&method.path], method.from),
             old_name: old.to_owned(),
+            new_name: None,
         });
     }
     for s in &all {

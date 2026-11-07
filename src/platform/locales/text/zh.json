@@ -6484,7 +6484,6 @@
   "Invalid bean name": "Bean 名称无效",
   "Invalid configuration key": "配置 key 无效",
   "Configuration key must stay in the same parent mapping": "配置 key 必须保留在相同的父级映射中",
-  "JavaBean property rename requires Java accessor refactoring; rename the configuration prefix instead": "JavaBean 属性重命名需要同步重构 Java 访问方法；当前可重命名配置前缀",
   "Invalid mapper method name": "Mapper 方法名称无效",
   "Mapper statement is ambiguous or has no unique Java method": "Mapper statement 存在歧义或没有唯一对应的 Java 方法",
   "The target identity already exists in this source scope": "此源码范围中已存在目标标识符",
@@ -6495,7 +6494,6 @@
   "Spring/MyBatis identity is ambiguous in this source scope": "Spring/MyBatis 标识符在此源码范围中存在歧义",
   "Java language server did not rename the framework declaration": "Java 语言服务未成功重命名框架对应的声明",
   "Implicit bean declaration could not be identified": "无法识别隐式 Bean 的声明",
-  "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, relaxed-binding spellings and string-based MyBatis calls are not resolved.": "Spring/MyBatis 源码范围：最近的 Maven/Gradle 模块中的常规 Java 与资源目录。只包含预览列出的修改。动态 Bean 查找、SpEL、按名称自动注入、外部配置、宽松绑定的不同拼写以及通过字符串调用 MyBatis 的引用尚未解析。",
   "Framework rename cannot merge text edits after file operations": "框架重命名无法合并文件操作之后的文本修改",
   "Passed to the Spring Boot application, not to Maven": "传递给 Spring Boot 应用，而非 Maven",
   "Application working directory": "应用工作目录",
@@ -6519,5 +6517,10 @@
   "Invalid Spring launch context fact": "Spring 启动上下文事实无效",
   "Spring launch properties must be redacted or boolean": "Spring 启动属性必须已脱敏或为布尔值",
   "Spring analysis plugin is not enabled": "Spring 分析插件尚未启用",
-  "Spring launch context project changed": "Spring 启动上下文所属项目已切换"
+  "Spring launch context project changed": "Spring 启动上下文所属项目已切换",
+  "Configuration property requires a unique mutable JavaBean field, getter and setter": "配置属性必须具有唯一、可变的 JavaBean 字段、getter 和 setter",
+  "Invalid JavaBean accessor name": "JavaBean 访问器名称无效",
+  "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. JavaBean property aliases are included only when uniquely resolved. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, environment-variable aliases and string-based MyBatis calls are not resolved.": "Spring/MyBatis 源码范围：最近的 Maven/Gradle 模块中的常规 Java 与资源目录。只包含预览列出的修改。仅在唯一解析后包含 JavaBean 属性别名。动态 Bean 查找、SpEL、按名称自动注入、外部配置、环境变量别名以及通过字符串调用 MyBatis 的引用尚未解析。",
+  "Invalid Java rename range": "Java 重命名范围无效",
+  "Java rename edit refinement changed the result": "Java 重命名修改分解后的结果不一致"
 }

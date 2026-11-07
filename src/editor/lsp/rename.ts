@@ -230,7 +230,7 @@ function frameworkRenameNote(path: string, edit: WorkspaceEdit): string | null {
   if (!/\.(java|xml|ya?ml|properties)$/i.test(path)) return null;
   if (!edit.preconditions?.some((p) => /\/src\/(main|test)\/(java|resources)$/.test(p.path))) return null;
   return tx(
-    "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, relaxed-binding spellings and string-based MyBatis calls are not resolved.",
+    "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. JavaBean property aliases are included only when uniquely resolved. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, environment-variable aliases and string-based MyBatis calls are not resolved.",
   );
 }
 

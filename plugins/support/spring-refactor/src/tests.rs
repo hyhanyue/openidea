@@ -142,7 +142,7 @@ fn binding_fields_and_accessors_are_recognized_as_unsupported() {
         let pos = position(&s["Settings.java"], s["Settings.java"].find(word).unwrap());
         assert!(recognized(&s, "Settings.java", pos));
         assert!(target(&s, "Settings.java", pos).is_none());
-        assert!(refusal(&s, "Settings.java", pos).contains("accessor"));
+        assert!(refusal(&s, "Settings.java", pos).contains("getter"));
     }
 }
 
@@ -230,4 +230,215 @@ fn mapper_overloads_variants_and_collisions_refuse_every_edit() {
         ),
     ]);
     assert!(plan(&s, &at(&s, "M.xml", "find"), "lookup").is_err());
+}
+
+fn property_sources() -> Sources {
+    source(&[
+        (
+            "Settings.java",
+            "import org.springframework.boot.context.properties.ConfigurationProperties; @ConfigurationProperties(\"sample\") public class Settings { private String displayName; public String getDisplayName() { return displayName; } public void setDisplayName(String displayName) { this.displayName = displayName; } }",
+        ),
+        (
+            "application.properties",
+            "# sample.display-name=comment\nsample.display-name=kebab\nsample.displayName=camel\nsample.display_name=snake\nother.display-name=unrelated\nplain=sample.display-name\nref=${sample.display_name:default}\n",
+        ),
+        ("application-dev.yml", "sample:\n  displayName: dev\nother:\n  displayName: untouched\n"),
+        (
+            "Use.java",
+            "import org.springframework.beans.factory.annotation.Value; class Use { /*😀*/ @Value(\"${sample.display-name:fallback}\") String label; String plain = \"sample.display-name\"; }",
+        ),
+    ])
+}
+
+#[test]
+fn configuration_leaf_requests_three_jdt_symbols_and_preserves_alias_spelling() {
+    let s = property_sources();
+    for (path, word, replacement) in [
+        ("Settings.java", "displayName;", "titleText"),
+        ("Settings.java", "getDisplayName", "getTitleText"),
+        ("Settings.java", "setDisplayName", "setTitleText"),
+        ("application.properties", "sample.display-name=kebab", "sample.title-text"),
+        ("application.properties", "sample.display_name=snake", "sample.title_text"),
+        ("Use.java", "sample.display-name:fallback", "sample.title-text"),
+        ("application-dev.yml", "displayName:", "title_text"),
+    ] {
+        let target = at(&s, path, word);
+        let p = plan(&s, &target, replacement).unwrap();
+        assert_eq!(
+            p.java_requests().map(|r| (r.old_name.as_str(), r.new_name.as_deref())).collect::<Vec<_>>(),
+            vec![
+                ("displayName", Some("titleText")),
+                ("getDisplayName", Some("getTitleText")),
+                ("setDisplayName", Some("setTitleText")),
+            ]
+        );
+        assert!(!p.files.contains_key("Settings.java"), "Java edits must come from JDT");
+        let out = apply(&s, &p);
+        assert!(
+            out["application.properties"]
+                .contains("sample.title-text=kebab\nsample.titleText=camel\nsample.title_text=snake")
+        );
+        assert!(out["application.properties"].contains("# sample.display-name=comment"));
+        assert!(
+            out["application.properties"]
+                .contains("other.display-name=unrelated\nplain=sample.display-name\nref=${sample.title_text:default}")
+        );
+        assert!(out["application-dev.yml"].contains("  titleText: dev\nother:\n  displayName: untouched"));
+        assert!(out["Use.java"].contains("${sample.title-text:fallback}"));
+        assert!(out["Use.java"].contains("String plain = \"sample.display-name\""));
+    }
+}
+
+#[test]
+fn configuration_leaf_refuses_non_java_names_alias_collisions_and_accessor_collisions() {
+    let s = property_sources();
+    assert!(plan(&s, &at(&s, "Settings.java", "displayName;"), "class").is_err());
+    assert!(plan(&s, &at(&s, "Settings.java", "getDisplayName"), "readName").is_err());
+    assert!(plan(&s, &at(&s, "application.properties", "sample.display-name=kebab"), "other.title").is_err());
+    let mut s = s;
+    s.get_mut("application.properties").unwrap().push_str("sample.title_text=already\n");
+    assert!(plan(&s, &at(&s, "Settings.java", "displayName;"), "titleText").is_err());
+    let mut s = property_sources();
+    s.get_mut("Settings.java").unwrap().push_str(" class Other {} ");
+    let original = s["Settings.java"].clone();
+    s.insert(
+        "Settings.java".into(),
+        original.replace(
+            "private String displayName;",
+            "private String displayName; public String getTitleText() { return null; }",
+        ),
+    );
+    assert!(plan(&s, &at(&s, "Settings.java", "displayName;"), "titleText").is_err());
+}
+
+#[test]
+fn unsupported_property_models_do_not_offer_a_partial_leaf_rename() {
+    let valid = property_sources()["Settings.java"].clone();
+    for text in [
+        valid.replace("class Settings", "class Settings extends Base"),
+        valid.replace("private String displayName;", "private final String displayName = null;"),
+        valid.replace("public String getDisplayName()", "private String getDisplayName()"),
+        valid.replace("public String getDisplayName()", "public String[] getDisplayName()"),
+        valid.replace("private String displayName;", "private String displayName; public Settings(String value) {}"),
+        valid.replace("public void setDisplayName", "public Settings setDisplayName"),
+    ] {
+        let s = source(&[("Settings.java", &text), ("application.properties", "sample.display-name=value")]);
+        let pos = position(&s["Settings.java"], s["Settings.java"].find("displayName").unwrap());
+        assert!(recognized(&s, "Settings.java", pos));
+        assert!(target(&s, "Settings.java", pos).is_none());
+        assert!(plan(&s, &at(&s, "application.properties", "sample.display-name"), "sample.title").is_err());
+    }
+    let mut s = property_sources();
+    s.insert("Duplicate.java".into(), valid.replace("class Settings", "class Duplicate"));
+    assert!(
+        target(&s, "Settings.java", position(&s["Settings.java"], s["Settings.java"].find("displayName").unwrap()))
+            .is_none()
+    );
+    assert!(plan(&s, &at(&s, "application.properties", "sample.display-name=kebab"), "sample.title").is_err());
+}
+
+#[test]
+fn record_and_inherited_property_declarations_are_explicitly_refused() {
+    let s = source(&[(
+        "Record.java",
+        "import org.springframework.boot.context.properties.ConfigurationProperties; @ConfigurationProperties(\"sample\") record Settings(String displayName) {}",
+    )]);
+    let pos = position(&s["Record.java"], s["Record.java"].find("displayName").unwrap());
+    assert!(recognized(&s, "Record.java", pos));
+    assert!(target(&s, "Record.java", pos).is_none());
+    let s = source(&[
+        (
+            "Child.java",
+            "import org.springframework.boot.context.properties.ConfigurationProperties; @ConfigurationProperties(\"sample\") class Child extends Base {}",
+        ),
+        (
+            "Base.java",
+            "class Base { String displayName; public String getDisplayName() { return displayName; } public void setDisplayName(String v) { displayName = v; } }",
+        ),
+    ]);
+    let pos = position(&s["Base.java"], s["Base.java"].find("displayName").unwrap());
+    assert!(recognized(&s, "Base.java", pos));
+    assert!(target(&s, "Base.java", pos).is_none());
+}
+
+#[test]
+fn boolean_is_accessor_and_qualified_prefix_alias_are_preserved() {
+    let s = source(&[
+        (
+            "Flags.java",
+            "import org.springframework.boot.context.properties.ConfigurationProperties; @ConfigurationProperties(\"sample-app\") class Flags { private boolean enabled; public boolean isEnabled() { return enabled; } public void setEnabled(boolean enabled) { this.enabled = enabled; } }",
+        ),
+        ("application.properties", "sampleApp.enabled=true\n"),
+    ]);
+    let p = plan(&s, &at(&s, "Flags.java", "isEnabled"), "isActiveFlag").unwrap();
+    assert_eq!(
+        p.java_requests().map(|r| r.new_name.as_deref().unwrap()).collect::<Vec<_>>(),
+        vec!["activeFlag", "isActiveFlag", "setActiveFlag"]
+    );
+    assert_eq!(apply(&s, &p)["application.properties"], "sampleApp.active-flag=true\n");
+    let mut unsafe_source = s.clone();
+    unsafe_source.insert("Flags.java".into(), s["Flags.java"].replace("class Flags", "class Flags extends Base"));
+    assert!(
+        plan(
+            &unsafe_source,
+            &at(&unsafe_source, "application.properties", "sampleApp.enabled"),
+            "sampleApp.active-flag"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn custom_bean_info_and_factory_bound_source_properties_are_refused() {
+    let mut s = property_sources();
+    s.insert("SettingsBeanInfo.java".into(), "class SettingsBeanInfo {}".into());
+    let pos = position(&s["Settings.java"], s["Settings.java"].find("displayName;").unwrap());
+    assert!(target(&s, "Settings.java", pos).is_none());
+    let s = source(&[
+        (
+            "Factory.java",
+            "import org.springframework.boot.context.properties.ConfigurationProperties; class Factory { @ConfigurationProperties(\"sample\") Settings settings() { return new Settings(); } }",
+        ),
+        (
+            "Settings.java",
+            "class Settings { private String displayName; public String getDisplayName() { return displayName; } public void setDisplayName(String value) { displayName = value; } }",
+        ),
+    ]);
+    let pos = position(&s["Settings.java"], s["Settings.java"].find("displayName;").unwrap());
+    assert!(recognized(&s, "Settings.java", pos));
+    assert!(target(&s, "Settings.java", pos).is_none());
+}
+
+#[test]
+fn unresolved_or_default_root_binding_prefix_never_falls_back_to_a_config_only_edit() {
+    let valid = property_sources()["Settings.java"].clone();
+    for annotation in [
+        "@ConfigurationProperties",
+        "@ConfigurationProperties(prefix=PREFIX)",
+        "@ConfigurationProperties(\"sam\" + SUFFIX)",
+    ] {
+        let s = source(&[
+            ("Settings.java", &valid.replace("@ConfigurationProperties(\"sample\")", annotation)),
+            ("application.properties", "sample.display-name=value"),
+        ]);
+        assert!(plan(&s, &at(&s, "application.properties", "sample.display-name"), "sample.title-text").is_err());
+    }
+}
+
+#[test]
+fn other_imported_annotations_are_not_configuration_properties_or_implicit_beans() {
+    let mut s = property_sources();
+    s.insert(
+        "Settings.java".into(),
+        ("import org.springframework.stereotype.Component; ".to_owned() + &s["Settings.java"])
+            .replace("@ConfigurationProperties(\"sample\")", "@Component @ConfigurationProperties(\"sample\")"),
+    );
+    assert!(plan(&s, &at(&s, "Settings.java", "displayName;"), "titleText").unwrap().java.is_some());
+    let s = source(&[(
+        "Config.java",
+        "import org.springframework.context.annotation.Bean; import org.springframework.context.annotation.Primary; class Config { @Primary @Bean(\"port\") String factory() { return null; } }",
+    )]);
+    let pos = position(&s["Config.java"], s["Config.java"].find("factory").unwrap());
+    assert!(target(&s, "Config.java", pos).is_none());
+    assert!(!recognized(&s, "Config.java", pos));
 }
