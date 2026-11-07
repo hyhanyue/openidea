@@ -65,7 +65,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target aarch64-apple-darwin --bundles app
-          uploadUpdaterJson: true
+          includeUpdaterJson: true
       - name: Validate release contents
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
