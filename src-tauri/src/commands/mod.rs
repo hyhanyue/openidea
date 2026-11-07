@@ -39,6 +39,7 @@ pub mod run;
 pub mod sdk;
 pub mod search;
 pub mod spell;
+pub mod spring_runtime;
 pub mod ssh;
 pub mod syntax;
 pub mod term;
@@ -544,6 +545,7 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         github::gh_pr_review,
         github::gh_pr_comment,
         github::gh_pr_prepare_diff,
+        spring_runtime::spring_runtime_snapshot,
         http::http_requests,
         http::http_environments,
         http::http_execute,

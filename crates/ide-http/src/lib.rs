@@ -74,3 +74,5 @@ pub async fn run(input: RunInput<'_>, cancel: &CancellationToken) -> IdeResult<H
 pub fn environments(file: Option<&Path>, root: Option<&Path>) -> IdeResult<Vec<String>> {
     Ok(Environments::load(file, root)?.names())
 }
+
+pub mod spring_runtime;
