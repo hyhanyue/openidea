@@ -159,8 +159,9 @@ remain outside this source tree and are not included in its license.
 
 ## Remaining acceptance work, in order
 
-1. Package the native bridge and verify editor completion acceptance, definition,
-   diagnostics, cancellation and switching back, alongside the MyBatis changes.
+1. Native bridge packaging, configuration completion acceptance, Bean diagnostics
+   and gutter navigation were verified in the installed Mac app on 2026-11-07.
+   Continue with cancellation and switching-engine regressions.
 2. Spring injection: constructor injection, qualifiers, primary beans, multiple
    candidates, profiles and multi-module navigation. Compare actual targets and
    diagnostics, not only the number of beans in a panel.
@@ -193,3 +194,31 @@ remain outside this source tree and are not included in its license.
   [MapStruct IDEA](https://github.com/mapstruct/mapstruct-idea): references for Java
   framework workflows. They require adaptation to OpenIDEA's SDK; no IntelliJ
   plugin binary compatibility is claimed.
+
+## Installed Mac acceptance (2026-11-07)
+
+The rebuilt application replaces `/Applications/OpenIDEA.app`; the previous app
+was not retained. The local Spring Beans and MyBatisX icon packages are linked
+under their personal plugin IDs, with only project reading and file events
+granted. Replaced marketplace Spring providers are disabled to avoid duplicates.
+
+- Missing project Bean: constructor parameter underline and Problems warning.
+- Ambiguous Beans: both candidates named in the warning. Adding a qualifier
+  clears the warning; clicking its injection gutter navigates to EmailChannel.
+- Default injection navigates to the `@Primary` factory method; the explicit
+  qualifier navigates to the backup factory method.
+- The existing UserService Mapper injection navigates to UserMapper without
+  a missing-Bean warning; Mapper tabs display the MyBatisX bird.
+- Official Spring configuration completion is available in the installed app.
+  A real acceptance check exposed retained fallback commands after a resolved
+  completion replaces its edit. The stdio helper explicitly clears that removed
+  command, preserving unresolved fallbacks and exact edits. Accepting `server.po`
+  now yields `server.port=` once. The configuration was restored afterward.
+- DemoApplication runs on Java 1.8.0_421 / Spring Boot 2.7.18, port 18088.
+- Five Maven tests pass, including the three real Spring injection checks;
+  179 plugin tests, 39 shared-parser tests, 76 focused frontend tests and five
+  launcher checks pass.
+
+Inspection demo files remain under `src/test/java/dev/openidea/beanchecks`, outside
+the main application component scan. Missing and ambiguous examples intentionally
+retain their warnings. Original application sources and properties are restored.

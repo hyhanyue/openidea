@@ -20,8 +20,17 @@ def normalize_completion_filters(message):
     return message
 
 
-def forward_server(stream):
-    """Compatibility for installed OpenIDEA builds predating the native filter fix."""
+def normalize_spring_completion(message):
+    result = message.get("result")
+    # Spring resolves the complete edit and removes its fallback edit command.
+    # Older clients merge optional fields, retaining that command and editing twice.
+    if isinstance(result, dict) and isinstance(result.get("label"), str) and "textEdit" in result and "command" not in result:
+        result["command"] = {"title": "Resolved completion", "command": ""}
+    return message
+
+
+def forward_server(stream, engine="intellij"):
+    """Preserve server edits while adapting completion metadata for older clients."""
     while True:
         headers = {}
         while True:
@@ -38,7 +47,8 @@ def forward_server(stream):
         data = stream.read(size)
         if len(data) != size:
             raise ValueError("Incomplete language-server message")
-        message = normalize_completion_filters(json.loads(data))
+        message = json.loads(data)
+        message = normalize_spring_completion(message) if engine == "spring" else normalize_completion_filters(message)
         data = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode()
         sys.stdout.buffer.write(f"Content-Length: {len(data)}\r\n\r\n".encode() + data)
         sys.stdout.buffer.flush()
@@ -76,7 +86,7 @@ def run(path):
         if spec.get("importJavaHome"):
             env["JAVA_HOME"] = spec["importJavaHome"]
     try:
-        normalize = spec["engine"] == "intellij"
+        normalize = spec["engine"] in ["intellij", "spring"]
         child = subprocess.Popen(command, cwd=spec["project"], env=env, stdout=subprocess.PIPE if normalize else None)
         previous = {}
         def forward(signum, _frame):
@@ -86,7 +96,7 @@ def run(path):
             previous[signum] = signal.signal(signum, forward)
         try:
             if normalize:
-                forward_server(child.stdout)
+                forward_server(child.stdout, spec["engine"])
             return child.wait()
         finally:
             for signum, handler in previous.items():

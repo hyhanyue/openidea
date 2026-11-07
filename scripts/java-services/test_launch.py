@@ -11,6 +11,18 @@ import launch
 
 
 class LaunchTests(unittest.TestCase):
+    def test_resolved_spring_edit_clears_the_fallback_command_without_changing_the_edit(self):
+        resolved = {"label": "server.port", "textEdit": {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 9}}, "newText": "server.port="}}
+        response = launch.normalize_spring_completion({"id": 1, "result": copy.deepcopy(resolved)})
+        self.assertEqual(response["result"]["textEdit"], resolved["textEdit"])
+        self.assertEqual(response["result"]["command"]["command"], "")
+        self.assertNotIn("command", resolved)
+
+    def test_spring_initial_fallback_and_unrelated_messages_are_preserved(self):
+        item = {"label": "server.port", "textEdit": {"newText": "server.port"}, "command": {"command": "sts.vscode-spring-boot.commandList"}}
+        for message in [{"result": {"items": [item]}}, {"result": item}, {"method": "workspace/applyEdit", "params": {"edit": {}}}, {"result": None}]:
+            self.assertEqual(launch.normalize_spring_completion(copy.deepcopy(message)), message)
+
     def test_dot_filter_normalization_preserves_the_exact_server_edit(self):
         item = {"label": "findById", "filterText": ".findById", "insertTextFormat": 2,
                 "textEdit": {"range": {"start": {"line": 0, "character": 10}, "end": {"line": 0, "character": 12}},
