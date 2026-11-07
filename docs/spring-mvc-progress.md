@@ -38,7 +38,7 @@ The initial five new review regressions all failed against the imported WIP befo
 - `node_modules/.bin/tsrs --noEmit` and tsconfig.node/perf/scripts/smoke projects: passed.
 - `node_modules/.bin/tsc --noEmit && node_modules/.bin/vite build`: passed; existing chunk-size/dynamic-import warnings.
 - `node_modules/.bin/oxlint`: passed, existing warnings in unrelated BuildView/VCS/logcat/List/notebook modules. Targeted Spring lint is clean.
-- `node_modules/.bin/oxfmt --check`: all 2102 matched files passed after the final regression additions; `git diff --check` passed.
+- `node_modules/.bin/oxfmt --check`: all 2104 matched files passed after the final regression additions; `git diff --check` passed.
 - `node_modules/.bin/knip`: passed with one existing ignore-pattern configuration hint.
 - Shared toolchain `rustfmt --edition 2024` on the two owned Rust files: passed.
 - Broad frontend suite (four workers, begun before the late Runtime seam request): 656 files passed, 1 environment-restricted file failed; 7274 tests passed, 3 port tests failed, 6 skipped; 335.46 seconds. All 3 errors are `listen EPERM 127.0.0.1` in unchanged dev-session tests. That entire file passed all 5 tests with localhost access. The subsequent Runtime seam has a separate final HTTP regression run: 10 files / 72 tests passed. The earlier two-worker run was discarded because it spanned source changes and cached old modules against new fixture/tests; only this session's obsolete runner was stopped.
@@ -61,6 +61,8 @@ No native app runtime or E2E screenshot evidence is claimed. Per the parallel-se
 6. Keyboard-activate a gutter button; verify menu placement, localized labels and request insertion. Rapidly edit/switch/close documents and switch projects while a large scan runs; verify responsiveness and absence of stale icons/results. Capture before/after screenshots via the repository's verify workflow during unified acceptance.
 
 ## Runtime navigation metadata contract (late explicit scope addition)
+
+Code checkpoint: `5b843128640ce89621f62c7136a92c2dfe6b95ca`.
 
 The parent explicitly authorized the small `src/workbench/contributions.ts` interface addition. `EndpointEntry` gains two **optional** strings; other endpoint providers need no changes:
 
