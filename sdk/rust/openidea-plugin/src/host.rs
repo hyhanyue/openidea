@@ -149,6 +149,10 @@ mod imp {
         p.root().map_err(error)
     }
 
+    pub fn project_spring_beans(p: &ProjectRes, path: &str, context: &str) -> Result<Option<String>, Error> {
+        p.spring_beans(path, context).map_err(error)
+    }
+
     pub fn project_read(p: &ProjectRes, path: &str) -> Result<String, Error> {
         p.read_file(path).map_err(error)
     }
@@ -398,6 +402,11 @@ impl Project {
     /// unsaved editor contents win. Needs `project.read`.
     pub fn read_file(&self, path: &str) -> Result<String, Error> {
         imp::project_read(&self.inner, path)
+    }
+
+    /// Cached Spring model; none while JDT refreshes it in the background.
+    pub fn spring_beans(&self, path: &str, context: &str) -> Result<Option<String>, Error> {
+        imp::project_spring_beans(&self.inner, path, context)
     }
 
     /// The repository containing the project (`None`: not under git). Needs `vcs.read`.

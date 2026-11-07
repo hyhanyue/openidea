@@ -19,7 +19,7 @@ pub(super) fn problems(path: &str, world: &World, file: &spring_text::java::Java
         if inj.multiple
             || inj.optional
             || inj.ty.is_empty()
-            || world.context.state(owner) != crate::context::State::Active
+            || world.state(owner) != crate::context::State::Active
             || world.generics.uncertain(inj)
         {
             continue;
@@ -33,8 +33,8 @@ pub(super) fn problems(path: &str, world: &World, file: &spring_text::java::Java
         if file.imports.iter().any(|i| !i.is_static && i.path.ends_with(&suffix) && i.path != types[0].qualified) {
             continue;
         }
-        let possible: Vec<_> = world.beans().filter(|(_, b)| !b.is_abstract && world.is_a(&b.ty, &inj.ty)).collect();
-        if possible.iter().any(|(_, b)| world.context.state(b) == crate::context::State::Unknown) {
+        let possible: Vec<_> = world.beans().filter(|(_, b)| !b.is_abstract && world.matches(inj, b)).collect();
+        if possible.iter().any(|(_, b)| world.state(b) == crate::context::State::Unknown) {
             continue;
         }
         if possible.iter().any(|(_, b)| world.generics.matching(inj, b) == crate::generics::Match::Unknown) {
@@ -43,6 +43,7 @@ pub(super) fn problems(path: &str, world: &World, file: &spring_text::java::Java
         let display_type = model.generics.label(inj.range).unwrap_or_else(|| inj.ty.clone());
         let found = world.candidates(inj);
         let (code, message) = match found.len() {
+            0 if !world.dependencies.available || world.dependencies.incomplete => continue,
             0 => (
                 "missing-bean",
                 format!(

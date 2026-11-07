@@ -1,0 +1,1 @@
+package vendor; public abstract class BaseConfig { @org.springframework.context.annotation.Bean public java.time.Clock libraryClock() { return java.time.Clock.systemUTC(); } }

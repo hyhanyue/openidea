@@ -429,6 +429,21 @@ impl workspace::HostProject for StoreData {
         Ok(sandbox::read_text(&real).map_err(wit::Error::Failed))
     }
 
+    fn spring_beans(&mut self, this: Resource<ProjectRes>, path: String, context: String) -> Fallible<Option<String>> {
+        if let Err(e) = self.require(Capability::ProjectRead) {
+            return Ok(Err(e));
+        }
+        let root = self.table.get(&this)?.root.clone();
+        let path = match sandbox::resolve_in_root(&root, &path) {
+            Ok(p) => p,
+            Err(e) => return Ok(Err(wit::Error::Invalid(e))),
+        };
+        if context.len() > 512 {
+            return Ok(Err(wit::Error::Invalid("context too long".into())));
+        }
+        Ok(self.host.spring_beans(&root, &path, &context).map_err(to_wit))
+    }
+
     fn find_files(&mut self, this: Resource<ProjectRes>, glob: String, limit: u32) -> Fallible<Vec<String>> {
         if let Err(e) = self.require(Capability::ProjectRead) {
             return Ok(Err(e));
@@ -787,9 +802,13 @@ impl views::Host for StoreData {
         let Some(root) = self.invocation.workspace_root.clone() else {
             return Ok(Err(wit::Error::Invalid("no project is open in this window".into())));
         };
-        let real = match sandbox::resolve_in_root(&root, &path) {
-            Ok(real) => real,
-            Err(e) => return Ok(Err(wit::Error::Invalid(e))),
+        let real = if path.starts_with("jdt:") && self.host.spring_location_allowed(&root, &path) {
+            PathBuf::from(path)
+        } else {
+            match sandbox::resolve_in_root(&root, &path) {
+                Ok(real) => real,
+                Err(e) => return Ok(Err(wit::Error::Invalid(e))),
+            }
         };
         let client = self.invocation.client.clone();
         Ok(self.host.open_location(client.as_deref(), &real, line, column).map_err(to_wit))

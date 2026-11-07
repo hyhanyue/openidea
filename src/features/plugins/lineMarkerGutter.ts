@@ -7,6 +7,8 @@
 import { Compartment, RangeSet, StateEffect, StateField, type Extension, type Text } from "@codemirror/state";
 import { EditorView, GutterMarker, ViewPlugin, gutter, type ViewUpdate } from "@codemirror/view";
 import type { EditorDocContext } from "@/editor/api";
+import { onLspRefresh } from "@/editor/lsp/availability";
+import { isSpringBeansPlugin, springLabels } from "./springLabels";
 import { navigationButton } from "./navigationButton";
 import { pluginsBackend } from "./backend";
 import { usePluginSettingsRevision } from "./settingsRevision";
@@ -77,8 +79,9 @@ class PluginMarker extends GutterMarker {
   override toDOM(): Node {
     const el = this.marker.target ? navigationButton([this.marker.target], this.icon) : document.createElement("span");
     el.className = `${styles.marker} cm-plugin-mapping-button`;
-    el.title = this.marker.tooltip;
-    el.setAttribute("aria-label", this.marker.tooltip);
+    const tooltip = isSpringBeansPlugin(this.marker.pluginId) ? springLabels(this.marker.tooltip) : this.marker.tooltip;
+    el.title = tooltip;
+    el.setAttribute("aria-label", tooltip);
     el.innerHTML = gutterIconMarkup(this.icon) ?? "";
     return el;
   }
@@ -91,6 +94,7 @@ class MarkersPlugin {
   private off: () => void;
   private offIcons: () => void;
   private offSettings: () => void;
+  private offModel: () => void;
 
   constructor(
     private view: EditorView,
@@ -101,6 +105,7 @@ class MarkersPlugin {
       if (event.type !== "documentIndexesChanged") return;
       this.invalidate();
     });
+    this.offModel = onLspRefresh("codeLens", () => this.invalidate());
     this.offIcons = useFileIconRevision.subscribe(() => this.schedule());
     this.offSettings = usePluginSettingsRevision.subscribe(() => this.invalidate());
     this.schedule();
@@ -145,6 +150,7 @@ class MarkersPlugin {
 
   destroy() {
     this.off();
+    this.offModel();
     this.offIcons();
     this.offSettings();
     if (this.timer) clearTimeout(this.timer);

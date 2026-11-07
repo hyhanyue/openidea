@@ -75,11 +75,15 @@ try:
         time.sleep(.3)
     (work/'model.json').write_text(json.dumps(result,indent=2))
     byname={b['name']:b for b in result['beans']}
-    for n in ['libraryPort','token','scannedLibrary','autoMessage','legacyNumber']:
+    for n in ['libraryPort','token','scannedLibrary','autoMessage','legacyNumber','libraryClock','secondPort']:
         assert n in byname, (n, byname.keys())
         assert byname[n]['state']=='active', byname[n]
         assert byname[n]['origin']=='dependency', byname[n]
         assert byname[n]['location']['uri'].startswith('jdt:'), byname[n]
+    assert byname['libraryPort']['primary'], byname['libraryPort']
+    assert byname['libraryClock']['type']=='java.time.Clock', byname['libraryClock']
+    assert byname['other.Token']['type']=='other.Token', byname['other.Token']
+    assert byname['libraryPort']['dependencies']==['demo.api.Token'], byname['libraryPort']
     assert byname['moduleValue']['origin']=='source', byname['moduleValue']
     assert byname['moduleValue']['type']=='demo.api.ModuleValue', byname['moduleValue']
     assert byname['libraryPort']['type']=='demo.api.Port', byname['libraryPort']
@@ -88,6 +92,11 @@ try:
     assert not {'unscanned','absentNumber'} & byname.keys(), byname.keys()
     assert any(i['type']=='demo.api.Port' for i in result['injections']), result['injections']
     assert any(i['type']=='demo.api.Token' for i in result['injections']), result['injections']
+    for injection in result['injections']:
+        if injection['location']['uri'] != file.as_uri(): continue
+        r = injection['location']['range']; line = source.splitlines()[r['start']['line']]
+        selected = line.encode('utf-16-le')[r['start']['character']*2:r['end']['character']*2].decode('utf-16-le')
+        assert selected == injection['type'].rsplit('.',1)[-1], (selected, injection)
     contents=request('java/classFileContents',{'uri':byname['libraryPort']['location']['uri']})
     assert 'LibraryConfig' in contents and 'libraryPort' in contents, contents
     attached = request('workspace/executeCommand', {'command':'java.project.updateSourceAttachment','arguments':[{'classFileUri':byname['libraryPort']['location']['uri'],'attributes':{'jarPath':str(project/'lib/vendor.jar'),'sourceAttachmentPath':str(project/'lib/vendor-sources.jar'),'sourceAttachmentEncoding':'UTF-8'}}]})
@@ -122,7 +131,9 @@ try:
     after=query()
     assert not any(b['name']=='libraryPort' for b in after['beans']), after
     assert any(b['type']=='vendor.Unscanned' for b in after['beans']), after
-    # Cancellation reaches JDT's model traversal and lock wait through the request monitor.
+    plain_enable = source.replace('@SpringBootApplication', '@org.springframework.context.annotation.Configuration @org.springframework.boot.autoconfigure.EnableAutoConfiguration @org.springframework.context.annotation.ComponentScan("demo.app")')
+    send({'jsonrpc':'2.0','method':'textDocument/didChange','params':{'textDocument':{'uri':file.as_uri(),'version':3},'contentChanges':[{'text':plain_enable}]}})
+    assert any(b['name']=='autoMessage' for b in query()['beans'])
     send({'jsonrpc':'2.0','method':'textDocument/didClose','params':{'textDocument':{'uri':file.as_uri()}}})
     restored=query()
     assert any(b['name']=='libraryPort' for b in restored['beans']), restored

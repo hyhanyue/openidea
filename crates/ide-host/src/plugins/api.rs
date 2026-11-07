@@ -32,6 +32,12 @@ type ContextKey = (Option<String>, String, String);
 pub trait PluginWorkspace: Send + Sync {
     /// Roots of the open projects.
     fn projects(&self) -> Vec<PathBuf>;
+    fn spring_location_allowed(&self, _root: &Path, _uri: &str) -> bool {
+        false
+    }
+    fn spring_beans(&self, _root: &Path, _path: &Path, _context: &str) -> Result<Option<String>, HostError> {
+        Ok(None)
+    }
     /// Unsaved text of the open document at `path`.
     fn buffer_text(&self, path: &Path) -> Option<String>;
     /// Up to `limit` files of the project index below `root` whose root-relative path satisfies
@@ -552,6 +558,15 @@ impl HostApi for PluginApi {
     fn buffer_text(&self, path: &Path) -> Option<String> {
         self.shared.workspace()?.buffer_text(path)
     }
+    fn spring_location_allowed(&self, root: &Path, uri: &str) -> bool {
+        self.shared.workspace().is_some_and(|w| w.spring_location_allowed(root, uri))
+    }
+    fn spring_beans(&self, root: &Path, path: &Path, context: &str) -> Result<Option<String>, HostError> {
+        self.shared
+            .workspace()
+            .ok_or_else(|| HostError::NotFound("no workspace".into()))?
+            .spring_beans(root, path, context)
+    }
 
     fn document(&self, path: &Path) -> Option<(u64, String)> {
         self.shared.workspace()?.document(path)
@@ -935,6 +950,27 @@ impl PluginWorkspace for HostWorkspace {
 
     fn buffer_text(&self, path: &Path) -> Option<String> {
         HostWorkspace::projects(self).iter().find_map(|p| p.documents.text_of(path))
+    }
+
+    fn spring_location_allowed(&self, root: &Path, uri: &str) -> bool {
+        HostWorkspace::projects(self)
+            .into_iter()
+            .find(|p| p.root == root && p.is_trusted())
+            .is_some_and(|p| p.lsp.spring_beans_location_allowed(uri))
+    }
+    fn spring_beans(&self, root: &Path, path: &Path, context: &str) -> Result<Option<String>, HostError> {
+        let project = HostWorkspace::projects(self)
+            .into_iter()
+            .find(|p| p.root == root)
+            .ok_or_else(|| HostError::NotFound("project closed".into()))?;
+        if !project.is_trusted() {
+            return Err(HostError::Denied("project.trust".into()));
+        }
+        let path = path.canonicalize().map_err(|e| HostError::Invalid(e.to_string()))?;
+        if !path.starts_with(root) {
+            return Err(HostError::Denied("project.read".into()));
+        }
+        Ok(project.lsp.spring_beans_snapshot(&path, context))
     }
 
     fn indexed_files(&self, root: &Path, matches: &dyn Fn(&Path) -> bool, limit: usize) -> Option<Vec<PathBuf>> {

@@ -1,4 +1,8 @@
 {
+  "@Bean (dependency)": "@Bean（依赖 JAR）",
+  "@Component (dependency)": "@Component（依赖 JAR）",
+  "@Bean (module)": "@Bean（依赖模块）",
+  "@Component (module)": "@Component（依赖模块）",
   "Cannot copy reference": "无法复制引用",
   "Group actions": "分组操作",
   "New Project Group": "新建项目组",

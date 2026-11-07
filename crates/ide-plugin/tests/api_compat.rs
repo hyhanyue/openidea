@@ -272,3 +272,61 @@ fn a_later_minor_that_drops_a_function_does_not_link() {
     let err = linker.instantiate_pre(&component).err().unwrap_or_else(|| panic!("{iface} without {func} linked"));
     assert!(format!("{err:?}").contains(&func), "{err:?}");
 }
+
+#[test]
+fn released_13_component_calls_an_existing_interface_on_14() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use wasmtime::Store;
+    let engine = engine();
+    let bytes = wat::parse_str(
+        r#"(component
+        (import "openidea:plugin/ui@1.3.0" (instance $ui
+            (export "remove-status-item" (func (param "id" string)))))
+        (alias export $ui "remove-status-item" (func $remove))
+        (core module $memory (memory (export "memory") 1) (data (i32.const 0) "legacy"))
+        (core instance $memory (instantiate $memory))
+        (alias core export $memory "memory" (core memory $mem))
+        (core func $lower (canon lower (func $remove) (memory $mem)))
+        (core module $call
+            (import "host" "remove" (func $remove (param i32 i32)))
+            (func (export "invoke") (call $remove (i32.const 0) (i32.const 6))))
+        (core instance $call (instantiate $call (with "host" (instance (export "remove" (func $lower))))))
+        (func (export "invoke") (canon lift (core func $call "invoke")))
+    )"#,
+    )
+    .unwrap();
+    let component = Component::new(&engine, bytes).unwrap();
+    let called = Arc::new(AtomicBool::new(false));
+    let observed = called.clone();
+    let mut linker = Linker::<()>::new(&engine);
+    linker
+        .instance("openidea:plugin/ui@1.4.0")
+        .unwrap()
+        .func_new("remove-status-item", move |_, _, values, _| {
+            assert!(matches!(&values[0], wasmtime::component::Val::String(s) if s == "legacy"));
+            observed.store(true, Ordering::Release);
+            Ok(())
+        })
+        .unwrap();
+    let mut store = Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &component).unwrap();
+    instance.get_typed_func::<(), ()>(&mut store, "invoke").unwrap().call(&mut store, ()).unwrap();
+    assert!(called.load(Ordering::Acquire));
+}
+
+#[test]
+fn spring_dependency_manifest_requires_14_for_both_package_ids() {
+    let source = std::fs::read_to_string(repo().join("plugins/official/spring-beans/plugin.toml")).unwrap();
+    for source in [source.clone(), source.replacen("aritti.spring-beans", "hyhanyue.spring-beans", 1)] {
+        let manifest = ide_extension::Manifest::parse(&source).unwrap();
+        let required = semver::VersionReq::parse(&manifest.engine).unwrap();
+        assert!(required.matches(&v("1.4.0")));
+        assert!(!required.matches(&v("1.3.0")));
+    }
+    let engine = PluginEngine::new().unwrap();
+    let component = engine.compile(&repo().join("plugins/official/spring-beans/dist/plugin.wasm")).unwrap();
+    assert_eq!(engine.check_component(&component).unwrap(), Some(v("1.4.0")));
+}

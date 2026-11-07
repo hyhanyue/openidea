@@ -1,13 +1,14 @@
 //! Spring Beans Navigator for OpenIDEA: indexes the beans a project's Java,
 //! Kotlin and Spring XML files declare and links injection points, bean-name
 //! strings, SpEL `@bean` references and named pointcuts to them.
-//! Text-based: types match by simple name through the project's own type
-//! hierarchy; beans from libraries and auto-configuration aren't seen.
+//! Source context and generic matching are supplemented by bounded, resolved
+//! JDT models of Maven modules and dependency registrations.
 
 mod annotation_checks;
 mod aop;
 mod checks;
 mod context;
+mod dependencies;
 mod generics;
 mod injection_checks;
 mod kotlin;
@@ -47,7 +48,10 @@ struct World<'a> {
     files: &'a BTreeMap<String, FileModel>,
     generics: generics::Index<'a>,
     context: context::Index,
+    dependencies: dependencies::Snapshot,
     supers: BTreeMap<&'a str, Vec<&'a str>>,
+    injection_paths: BTreeMap<usize, &'a str>,
+    bean_paths: BTreeMap<usize, &'a str>,
     /// Every file has been read at least once.
     complete: bool,
 }
@@ -66,16 +70,71 @@ impl<'a> World<'a> {
             files: index.files(),
             generics: generics::Index::new(index.files().values()),
             context: context::Index::new(index.files()),
+            dependencies: {
+                let selected = host::setting_string("springBeans.applicationClass").unwrap_or_default();
+                let root = index
+                    .files()
+                    .iter()
+                    .find(|(_, m)| m.types.iter().any(|t| t.qualified == selected))
+                    .or_else(|| index.files().iter().find(|(_, m)| m.auto_configuration))
+                    .or_else(|| index.files().iter().find(|(p, _)| p.ends_with(".java")));
+                dependencies::Snapshot::load(root.map(|(p, _)| p.as_str()), index.files())
+            },
             supers,
+            injection_paths: index
+                .files()
+                .iter()
+                .flat_map(|(p, m)| m.injections.iter().map(move |i| (std::ptr::from_ref(i) as usize, p.as_str())))
+                .collect(),
+            bean_paths: index
+                .files()
+                .iter()
+                .flat_map(|(p, m)| m.beans.iter().map(move |b| (std::ptr::from_ref(b) as usize, p.as_str())))
+                .collect(),
             complete: index.complete(),
         }
     }
 
-    fn beans(&self) -> impl Iterator<Item = Found<'a>> + '_ {
+    fn beans(&self) -> impl Iterator<Item = Found<'_>> + '_ {
         self.files
             .iter()
             .flat_map(|(p, m)| m.beans.iter().map(move |b| (p.as_str(), b)))
-            .filter(|(_, b)| self.context.state(b) != context::State::Inactive)
+            .filter(|(_, b)| self.state(b) != context::State::Inactive)
+            .chain(self.dependencies.entries.iter().map(|e| (e.path.as_str(), &e.bean)))
+    }
+
+    fn state(&self, bean: &Bean) -> context::State {
+        self.dependencies.state(bean).unwrap_or_else(|| self.context.state(bean))
+    }
+
+    fn generic_matching(&self, inj: &Injection, bean: &Bean) -> generics::Match {
+        if self.dependencies.entry(bean).is_some() {
+            if self.dependencies.uncertain_for(
+                self.injection_paths.get(&(std::ptr::from_ref(inj) as usize)).copied(),
+                inj,
+                bean,
+            ) {
+                generics::Match::Unknown
+            } else {
+                generics::Match::Yes
+            }
+        } else {
+            self.generics.matching(inj, bean)
+        }
+    }
+
+    fn matches(&self, inj: &Injection, bean: &Bean) -> bool {
+        let path = self.injection_paths.get(&(std::ptr::from_ref(inj) as usize)).copied();
+        if self.dependencies.entry(bean).is_some() {
+            return path.and_then(|p| self.dependencies.matches(p, inj, bean)).unwrap_or(false);
+        }
+        if let Some(path) = path {
+            let bean_path = self.bean_paths.get(&(std::ptr::from_ref(bean) as usize)).copied();
+            if let Some(matching) = bean_path.and_then(|bp| self.dependencies.source_matches(path, bp, inj, bean)) {
+                return matching;
+            }
+        }
+        self.is_a(&bean.ty, &inj.ty)
     }
 
     /// Whether `ty` is `target` or one of its subtypes.
@@ -93,19 +152,19 @@ impl<'a> World<'a> {
         false
     }
 
-    fn named(&self, name: &str) -> Vec<Found<'a>> {
+    fn named(&self, name: &str) -> Vec<Found<'_>> {
         self.beans().filter(|(_, b)| b.answers_to(name)).collect()
     }
 
     /// The beans Spring would consider for `inj`: by type, then qualifier,
     /// `@Primary`, and the field or parameter name.
-    fn candidates(&self, inj: &Injection) -> Vec<Found<'a>> {
+    fn candidates(&self, inj: &Injection) -> Vec<Found<'_>> {
         if self
             .files
             .values()
             .find(|m| m.injections.iter().any(|i| std::ptr::eq(i, inj)))
             .and_then(|m| inj.owner.and_then(|o| m.beans.get(o)))
-            .is_some_and(|b| self.context.state(b) == context::State::Inactive)
+            .is_some_and(|b| self.state(b) == context::State::Inactive)
         {
             return vec![];
         }
@@ -117,16 +176,15 @@ impl<'a> World<'a> {
             .filter(|(_, b)| {
                 !b.is_abstract
                     && !b.ty.is_empty()
-                    && self.is_a(&b.ty, &inj.ty)
-                    && self.generics.matching(inj, b) != generics::Match::No
+                    && self.matches(inj, b)
+                    && (self.dependencies.entry(b).is_some() || self.generic_matching(inj, b) != generics::Match::No)
                     && inj.qualifier.as_ref().is_none_or(|q| b.answers_to(q))
             })
             .collect();
         if inj.multiple
             || typed.len() < 2
             || typed.iter().any(|(_, b)| {
-                self.generics.matching(inj, b) == generics::Match::Unknown
-                    || self.context.state(b) == context::State::Unknown
+                self.generic_matching(inj, b) == generics::Match::Unknown || self.state(b) == context::State::Unknown
             })
         {
             return typed;
@@ -147,7 +205,7 @@ impl<'a> World<'a> {
                 let maybe = if inj.ty.is_empty() {
                     inj.qualifier.as_deref().is_some_and(|q| bean.answers_to(q))
                 } else {
-                    !bean.ty.is_empty() && self.is_a(&bean.ty, &inj.ty)
+                    !bean.ty.is_empty() && self.matches(inj, bean)
                 };
                 if maybe && self.candidates(inj).iter().any(|(cp, b)| *cp == path && b.range == bean.range) {
                     let into = inj.owner.map_or_else(|| file_name(p).to_owned(), |o| m.beans[o].name.clone());
@@ -169,7 +227,7 @@ impl<'a> World<'a> {
 }
 
 fn file_name(path: &str) -> &str {
-    path.rsplit(['/', '\\']).next().unwrap_or(path)
+    path.split('?').next().unwrap_or(path).rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
 fn describe(b: &Bean) -> String {
@@ -437,7 +495,10 @@ impl Providers for Navigator {
                 let found = world.candidates(inj);
                 let Some((path, first)) = found.first() else { continue };
                 let tooltip = match found.as_slice() {
-                    [(_, one)] if world.context.state(one) == context::State::Unknown => {
+                    [(_, one)]
+                        if world.state(one) == context::State::Unknown
+                            || world.generic_matching(inj, one) == generics::Match::Unknown =>
+                    {
                         format!("Candidate bean (eligibility unknown): {}", describe(one))
                     }
                     [(_, one)] => format!("Injected bean: {}", describe(one)),
@@ -446,7 +507,9 @@ impl Providers for Navigator {
                         format!("{} candidate beans: {}", many.len(), names.join(", "))
                     }
                 };
-                let target = (found.len() == 1 && world.context.state(first) == context::State::Active)
+                let target = (found.len() == 1
+                    && world.state(first) == context::State::Active
+                    && world.generic_matching(inj, first) == generics::Match::Yes)
                     .then(|| Location { path: path.to_string(), range: first.range });
                 markers.push(LineMarker {
                     line: inj.range.start.line,
@@ -686,6 +749,19 @@ fn xml_code_actions(
     actions
 }
 
+fn bean_key(path: &str, bean: &Bean) -> String {
+    if path.starts_with("jdt:") {
+        format!(
+            "d:{}:{}:{}:{path}",
+            bean.range.start.line,
+            bean.range.start.character,
+            bean.name.replace('%', "%25").replace(':', "%3A")
+        )
+    } else {
+        location_key(path, bean.range)
+    }
+}
+
 fn location_key(path: &str, range: Range) -> String {
     format!("b:{}:{}:{path}", range.start.line, range.start.character)
 }
@@ -721,7 +797,7 @@ impl Navigator {
             items.push(TreeItem::new(&group, kind).icon(group_icon).detail(&beans.len().to_string()).expandable(true));
             for (path, b) in beans {
                 let mut detail = file_name(path).to_owned();
-                if world.context.state(b) == context::State::Unknown {
+                if world.state(b) == context::State::Unknown {
                     detail += " · eligibility unknown";
                 }
                 if b.primary {
@@ -730,9 +806,7 @@ impl Navigator {
                 if !b.profiles.is_empty() {
                     detail += &format!(" · {}", b.profiles.join(", "));
                 }
-                items.push(
-                    TreeItem::new(&location_key(path, b.range), &b.name).parent(&group).icon(item_icon).detail(&detail),
-                );
+                items.push(TreeItem::new(&bean_key(path, b), &b.name).parent(&group).icon(item_icon).detail(&detail));
             }
         }
         View::new(Body::Tree(items)).button(refresh).status(&format!(
@@ -752,17 +826,30 @@ impl Navigator {
             return View::message(if index.complete() { "No Spring beans found." } else { "Scanning…" })
                 .button(refresh);
         }
-        let node_of: BTreeMap<(&str, Range), usize> =
-            beans.iter().enumerate().map(|(i, (p, b))| ((*p, b.range), i)).collect();
+        let node_of: BTreeMap<(&str, Range, &str), usize> =
+            beans.iter().enumerate().map(|(i, (p, b))| ((*p, b.range, b.name.as_str()), i)).collect();
         let mut edges = BTreeSet::new();
         for (path, m) in world.files {
             for inj in &m.injections {
-                let Some(from) = inj.owner.and_then(|o| node_of.get(&(path.as_str(), m.beans[o].range))) else {
+                let Some(from) =
+                    inj.owner.and_then(|o| node_of.get(&(path.as_str(), m.beans[o].range, m.beans[o].name.as_str())))
+                else {
                     continue;
                 };
                 for (p, b) in world.candidates(inj) {
-                    if let Some(&to) = node_of.get(&(p, b.range)) {
+                    if let Some(&to) = node_of.get(&(p, b.range, b.name.as_str())) {
                         edges.insert((*from, to));
+                    }
+                }
+            }
+        }
+        for (from, (_, bean)) in beans.iter().enumerate() {
+            if let Some(entry) = world.dependencies.entry(bean) {
+                for ty in &entry.parameters {
+                    for (to, (path, target)) in beans.iter().enumerate() {
+                        if world.dependencies.has_type(path, target, ty) {
+                            edges.insert((from, to));
+                        }
                     }
                 }
             }
@@ -770,9 +857,7 @@ impl Navigator {
         let nodes: Vec<diagram::Node> = beans
             .iter()
             .map(|(p, b)| {
-                diagram::Node::new(&location_key(p, b.range), &b.name).detail(&if world.context.state(b)
-                    == context::State::Unknown
-                {
+                diagram::Node::new(&bean_key(p, b), &b.name).detail(&if world.state(b) == context::State::Unknown {
                     format!("{} · eligibility unknown", b.kind)
                 } else {
                     b.kind.clone()
@@ -834,6 +919,15 @@ impl Views for Navigator {
             ViewEvent::Activate(key) | ViewEvent::Message(key) => key,
             _ => return Ok(()),
         };
+        if let Some(key) = key.strip_prefix("d:") {
+            let mut parts = key.splitn(4, ':');
+            if let (Some(line), Some(col), Some(_name), Some(path)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            {
+                host::open_location(path, line.parse().unwrap_or(0), col.parse().unwrap_or(0))?;
+            }
+            return Ok(());
+        }
         let mut parts = key.splitn(4, ':');
         if let (Some("b"), Some(line), Some(col), Some(path)) = (parts.next(), parts.next(), parts.next(), parts.next())
         {

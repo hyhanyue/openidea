@@ -23,6 +23,7 @@ pub(crate) mod configuration;
 mod formatter;
 mod hierarchy;
 mod reserved_names;
+pub(crate) mod spring_beans;
 pub use formatter::configure_formatter;
 /// First start imports the Maven / Gradle model, which can take minutes.
 const READY_TIMEOUT: Duration = Duration::from_secs(240);
@@ -637,6 +638,7 @@ impl LspManager {
     /// so it re-imports their projects (e.g. after `~/.m2` gained an artifact it could
     /// not resolve). Best-effort: skipped while jdtls is not already running.
     pub async fn java_update_project_configs(&self, path: &Path, uris: Vec<String>) -> IdeResult<()> {
+        self.spring_beans_cache.lock().clear();
         if uris.is_empty() {
             return Ok(());
         }

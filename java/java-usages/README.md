@@ -109,6 +109,19 @@ export PATH=/path/to/jdk25/bin:$PATH
 python3 java/java-usages/build.py /path/to/jdtls
 ```
 
+## Spring dependency registrations (1.10.0)
+
+`openidea.java.spring.beans` takes `[sourceUri, applicationClass]`. It returns a
+bounded declarative Bean/injection snapshot from the selected module's resolved
+JDT classpath, including referenced Maven source modules, Java 8 dependency
+classes, factory methods and Boot 2.7 auto-configuration metadata. Application
+classes are never initialized. Unknown runtime conditions and generic qualifiers
+stay unknown. See `docs/spring-dependencies-progress.md` and the
+`fixtures/java-spring-dependencies` container oracle for the schema and boundaries.
+
+The reproducible 1.10.0 bundle SHA-256 is
+`c3af47b7db933ce8c1e26f1a67caf07a86f52058921f87b37b32cbfad8401d63`.
+
 ## Manual upgrades
 
 Rebuilding on a JDT LS upgrade is manual. Updating JDT LS or compiling the app does

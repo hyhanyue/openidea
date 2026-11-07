@@ -139,7 +139,7 @@ public final class BeansCommand implements IDelegateCommandHandler {
         final Map<String, Integer> scans = new LinkedHashMap<>();
         final List<IPackageFragmentRoot> binaries = new ArrayList<>();
         final Set<String> checkedBinaries = new HashSet<>();
-        long classBytes;
+        long classBytes, sourceCharacters;
         boolean incomplete;
         int units, visited;
         Builder(IJavaProject p, IProgressMonitor m) { project = p; monitor = m; }
@@ -158,7 +158,8 @@ public final class BeansCommand implements IDelegateCommandHandler {
             if (units >= MAX_UNITS) { incomplete = true; return; }
             units++;
             String source = unit.getSource();
-            if (source == null || source.length() > MAX_BYTES) { incomplete = true; return; }
+            if (source == null || source.length() > MAX_BYTES || sourceCharacters + source.length() > 16L * MAX_BYTES) { incomplete = true; return; }
+            sourceCharacters += source.length();
             ASTParser p = ASTParser.newParser(AST.getJLSLatest());
             p.setSource(unit); p.setResolveBindings(true); p.setBindingsRecovery(false);
             p.setWorkingCopyOwner(JavaLanguageServerPlugin.getInstance().getWorkingCopyOwner());
@@ -309,7 +310,7 @@ public final class BeansCommand implements IDelegateCommandHandler {
                     else if (archives > MAX_ARCHIVES) incomplete = true;
                 }
             }
-            List<String> boots = types.entrySet().stream().filter(e -> has(annotations(e.getValue().getAnnotations()), "org.springframework.boot.autoconfigure.SpringBootApplication")).map(Map.Entry::getKey).toList();
+            List<String> boots = types.entrySet().stream().filter(e -> has(annotations(e.getValue().getAnnotations()), "org.springframework.boot.autoconfigure.SpringBootApplication") || has(annotations(e.getValue().getAnnotations()), AUTO)).map(Map.Entry::getKey).toList();
             String root = selected.isEmpty() && boots.size() == 1 ? boots.get(0) : selected;
             ITypeBinding rootType = types.get(root);
             if (rootType == null) return Map.of("beans", List.of(), "injections", injections, "incomplete", true, "root", root);
@@ -425,13 +426,23 @@ public final class BeansCommand implements IDelegateCommandHandler {
             if (names.isEmpty()) names.add(fallback);
             Map<String, Object> record = new LinkedHashMap<>();
             record.put("name", names.get(0)); record.put("aliases", names.subList(1, names.size())); record.put("qualifiers", qualifiers);
-            record.put("type", name(ty)); record.put("generic", ty.isParameterizedType() || ty.isGenericType() || ty.isTypeVariable());
+            record.put("type", name(ty)); Set<String> genericTypes = new LinkedHashSet<>(); genericTypes(ty, new HashSet<>(), genericTypes, 0);
+            record.put("generic", !genericTypes.isEmpty()); record.put("genericTypes", genericTypes);
             record.put("dependencies", element instanceof IMethod method ? Arrays.stream(method.getParameterTypes()).map(signature -> Signature.toString(Signature.getTypeErasure(signature))).toList() : List.of());
             record.put("primary", has(as, "org.springframework.context.annotation.Primary"));
             record.put("state", state == 2 ? "active" : "unknown"); record.put("kind", kind);
             record.put("location", location); record.put("owner", name(owner)); record.put("origin", element instanceof IMember member && member.isBinary() ? "dependency" : origins.getOrDefault(name(owner), "source"));
             Set<String> supers = new LinkedHashSet<>(); supers(ty, supers, 0); record.put("supers", supers);
             out.add(record);
+        }
+        void genericTypes(ITypeBinding t, Set<String> seen, Set<String> out, int depth) {
+            check(monitor);
+            if (t == null) return;
+            if (depth >= 24) { out.add("*"); return; }
+            if (!seen.add(t.getKey())) return;
+            if (t.isParameterizedType() || t.isGenericType() || t.isTypeVariable()) out.add(name(t));
+            genericTypes(t.getSuperclass(), seen, out, depth + 1);
+            for (ITypeBinding iface : t.getInterfaces()) genericTypes(iface, seen, out, depth + 1);
         }
         void supers(ITypeBinding t, Set<String> out, int depth) {
             check(monitor);

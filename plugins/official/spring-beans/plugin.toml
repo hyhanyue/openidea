@@ -6,7 +6,7 @@ authors = ["Arnaud RITTI <arnaud.ritti@gmail.com>"]
 license = "MIT"
 change-notes = "0.2.0: Kotlin and XML bean configuration; bean names, aliases, @Qualifier, @Primary and @Profile; candidates through the whole type hierarchy; gutter icons from beans to their injection points; SpEL and AspectJ pointcut completion and navigation; Spring Bean Graph; Use constructor injection quick fix. 0.1.0 (first release): bean index, injection navigation, Spring Beans tool window, field injection warning."
 categories = ["frameworks"]
-engines.openidea = "^1.0"
+engines.openidea = "^1.4"
 wasm = "dist/plugin.wasm"
 activation = ["on-language:java", "on-language:kotlin", "on-language:xml", "on-event:file-opened", "on-event:file-saved"]
 

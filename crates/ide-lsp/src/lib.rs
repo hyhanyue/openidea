@@ -190,6 +190,7 @@ pub struct LspManager {
     execution_allowed: AtomicBool,
     java_usages_warned: AtomicBool,
     configuration_cache: Arc<Mutex<jdtls::configuration::ConfigurationCache>>,
+    spring_beans_cache: Mutex<jdtls::spring_beans::Cache>,
     spring: spring::Bridge,
     /// `window/showMessage` texts already surfaced; servers repeat them on every restart/reconfigure.
     shown_messages: Mutex<HashSet<(String, String)>>,
@@ -385,6 +386,7 @@ impl LspManager {
             execution_allowed: AtomicBool::new(true),
             java_usages_warned: AtomicBool::new(false),
             configuration_cache: Arc::new(Mutex::new(Default::default())),
+            spring_beans_cache: Mutex::new(Default::default()),
             spring: spring::Bridge::default(),
             shown_messages: Mutex::new(HashSet::new()),
             virtual_origins: Mutex::new(HashMap::new()),
@@ -925,6 +927,7 @@ impl LspManager {
     }
 
     pub fn did_change(&self, doc: DocId, version: u32, changes: &[AppliedChange], full_text: &dyn Fn() -> String) {
+        self.spring_beans_cache.lock().clear();
         let mut docs = self.docs.lock();
         let Some(d) = docs.get_mut(&doc) else { return };
         d.version = version as i32;
@@ -1017,6 +1020,7 @@ impl LspManager {
     }
 
     pub fn did_save(&self, doc: DocId, text: &str) {
+        self.spring_beans_cache.lock().clear();
         let mut docs = self.docs.lock();
         let Some(d) = docs.get_mut(&doc) else { return };
         if d.text.as_str() != text {
@@ -1042,6 +1046,7 @@ impl LspManager {
     }
 
     pub fn did_close(&self, doc: DocId) {
+        self.spring_beans_cache.lock().clear();
         let Some(d) = self.docs.lock().remove(&doc) else { return };
         for a in &d.servers {
             self.forget_pulled(&a.server, &d.path, a.server.running().as_ref());
@@ -2287,6 +2292,7 @@ impl LspManager {
         removed: &[PathBuf],
         excluded_dirs: &[PathBuf],
     ) {
+        self.spring_beans_cache.lock().clear();
         use file_watch::Change;
         let servers: Vec<Arc<Server>> = self.servers.lock().clone();
         for s in servers {
@@ -2821,6 +2827,9 @@ impl LspManager {
     pub fn set_execution_allowed(&self, allowed: bool) {
         let previous = self.execution_allowed.swap(allowed, Ordering::AcqRel);
         if !allowed {
+            self.spring_beans_cache.lock().clear();
+        }
+        if !allowed {
             for server in self.servers.lock().iter() {
                 server.start_token().cancel();
             }
@@ -3035,6 +3044,7 @@ impl LspManager {
     }
 
     pub async fn restart(&self, server: ide_core::ServerId) -> IdeResult<()> {
+        self.spring_beans_cache.lock().clear();
         let s = self
             .servers
             .lock()
@@ -3089,6 +3099,7 @@ impl LspManager {
 
     pub async fn shutdown_all(&self) {
         self.shutting_down.store(true, Ordering::Release);
+        self.spring_beans_cache.lock().clear();
         let servers: Vec<Arc<Server>> = self.servers.lock().clone();
         join_all(servers.iter().map(|s| self.stop_instance(s, true))).await;
     }

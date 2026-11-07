@@ -10,12 +10,12 @@ Spring bean support for Java, Kotlin and Spring XML files in OpenIDEA:
 - **AspectJ pointcuts** in `@Pointcut`/`@Before`/`@After…`/`@Around`: designator completion, named pointcut completion and navigation (`inApp()`, `Aspects.inApp()`), bean names in `bean(…)`.
 - **Spring Beans** tool window, grouped by kind, and a **Spring Bean Graph** of who depends on whom.
 - **Field injection** warning on `@Autowired`/`@Inject` fields, with a _Use constructor injection_ quick fix that adds the constructor, or extends the class's only one (not offered with several constructors, `@Autowired` setters or an unparsable body). XML `p:`/`c:` `*-ref` attributes (prefixes bound to the Spring `p`/`c` namespaces) are followed like `ref`; a Kotlin `@Bean fun x() = Foo(…)` is typed `Foo`.
-- **Bean inspections** on Java files, run on open, save and typing, each group switchable in the settings: `@Transactional`/`@Async`/`@Cacheable`-style annotations on private, final or static methods, `@Scheduled` methods with parameters, bean names shared by two beans of the project (profiles and `@Conditional*` considered), private or final `@Bean` methods in proxied `@Configuration` classes, bean names starting with a capital, and (off by default) self-invocation of such annotated methods. Text-based: annotations imported from a non-Spring package and computed names are left alone; beans from libraries are not seen.
-- **Unresolved references** (off by default, `springBeans.checkUnresolvedReferences`): a `@DependsOn("name")` no project bean defines (Java beans, `@Bean` methods, XML `<bean>`s and aliases all count), and a `@ComponentScan` package with no project source in it. Beans from libraries and auto-configuration are invisible to the plugin, so the check can over-report and stays off until you enable it. To keep it quiet: when the project declares `@SpringBootApplication` or `@EnableAutoConfiguration`, a `@DependsOn` name is only reported if it is project-shaped, meaning it equals (ignoring case) the name of a project class or bean (a typo, or a class never made a bean); a `@ComponentScan` is only checked for packages sharing their first two segments (`com.acme`) with project sources, and is skipped with `basePackageClasses`, placeholders or computed values.
+- **Bean inspections** on Java files, run on open, save and typing, each group switchable in the settings: `@Transactional`/`@Async`/`@Cacheable`-style annotations on private, final or static methods, `@Scheduled` methods with parameters, bean names shared by two beans of the project (profiles and `@Conditional*` considered), private or final `@Bean` methods in proxied `@Configuration` classes, bean names starting with a capital, and (off by default) self-invocation of such annotated methods. Text-based: annotations imported from a non-Spring package and computed names are left alone; resolved dependency registrations supplement the source model when JDT is ready.
+- **Unresolved references** (off by default, `springBeans.checkUnresolvedReferences`): a `@DependsOn("name")` no project bean defines (Java beans, `@Bean` methods, XML `<bean>`s and aliases all count), and a `@ComponentScan` package with no project source in it. Dependency and dynamic registrations can remain incomplete, so the check can over-report and stays off until you enable it. To keep it quiet: when the project declares `@SpringBootApplication` or `@EnableAutoConfiguration`, a `@DependsOn` name is only reported if it is project-shaped, meaning it equals (ignoring case) the name of a project class or bean (a typo, or a class never made a bean); a `@ComponentScan` is only checked for packages sharing their first two segments (`com.acme`) with project sources, and is skipped with `basePackageClasses`, placeholders or computed values.
 
 Endpoints, Spring Boot run configurations and `@Value` key navigation are built into the IDE.
 
-Matching is text-based, by simple type name. Beans from libraries and auto-configuration aren't seen, and conditions (`@ConditionalOn…`) are ignored, so the gutter may list beans that would not be active.
+Source matching uses the source context and generic model below. For Java, resolved JDT classpaths also contribute referenced Maven-module and dependency-JAR registrations. Binary matching uses fully qualified identities; unresolved generic qualifiers or runtime conditions remain candidates, and the gutter does not claim a unique injection for them.
 
 ```sh
 cargo test
@@ -68,3 +68,22 @@ unset value means unknown. Property overrides are `key=value` lines, with `!key`
 for a property known to be absent. Only mark the environment complete for a fully
 specified development launch with no inherited or external values. Native editor
 providers now read the owning project's settings, matching the tool windows.
+
+## Resolved Java dependencies (API 1.4)
+
+A trusted project's existing JDT build model supplies sibling Maven source roots,
+explicitly imported or scanned library components, configuration factory methods
+(including inherited methods), and candidates from Boot 2.7 auto-configuration
+metadata. Merely placing a `@Component` in a dependency does not activate it.
+Known missing-class conditions are excluded; property/profile/order-dependent
+conditions, dynamic registrars and unresolved generic qualifiers stay unknown.
+Definition, gutter, Bean tree and dependency graph share these candidates and
+show their module/JAR origin. Attached source navigation and the existing read-only
+decompiler are reused. Discovery runs in a cancellable background request with
+archive, entry, type and nesting limits; plugins gain no arbitrary `.m2` reads.
+
+Java 依赖模型要求 API 1.4：只使用受信任项目已经解析的 JDT 构建路径，补充 Maven
+依赖模块、扫描或导入的 JAR 组件、配置工厂方法和 Boot 2.7 自动配置候选。仅存在于
+依赖里的 `@Component` 不会自动生效。运行时条件、动态注册与尚未解析的泛型限定保持
+未知；定义、gutter、Bean 列表和依赖图共用候选并显示模块或 JAR 来源。发现工作在
+可取消的后台完成，不授予插件任意读取 `.m2` 的能力。

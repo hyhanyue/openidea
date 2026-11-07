@@ -9,6 +9,8 @@ const mock = vi.hoisted(() => ({
   markers: vi.fn(),
   event: undefined as ((event: PluginEvent) => void) | undefined,
   off: vi.fn(),
+  modelChanged: undefined as (() => void) | undefined,
+  offModel: vi.fn(),
 }));
 vi.mock(import("@/platform/ipc"), async (original) => {
   const actual = await original();
@@ -21,6 +23,12 @@ vi.mock("./backend", () => ({
       return mock.off;
     },
   }),
+}));
+vi.mock("@/editor/lsp/availability", () => ({
+  onLspRefresh: (_kind: string, fn: () => void) => {
+    mock.modelChanged = fn;
+    return mock.offModel;
+  },
 }));
 vi.mock("./navigationButton", () => ({ navigationButton: () => document.createElement("button") }));
 let view: EditorView | undefined;
@@ -128,4 +136,33 @@ it("drops a pending marker result when project plugin settings change", async ()
   await vi.advanceTimersByTimeAsync(450);
   expect(view.dom.querySelector(".cm-plugin-mapping-button")).toBeNull();
   expect(mock.markers).toHaveBeenCalledTimes(2);
+});
+
+it("refreshes library markers when the asynchronous Java model becomes ready", async () => {
+  vi.useFakeTimers();
+  mock.markers.mockResolvedValue({ status: "ok", data: [] });
+  view = new EditorView({
+    parent: document.body,
+    state: EditorState.create({ doc: "Port port", extensions: pluginLineMarkerGutter({ doc: 1 } as EditorDocContext) }),
+  });
+  await vi.advanceTimersByTimeAsync(450);
+  expect(view.dom.querySelector(".cm-openidea-gutter-pluginMarkers")).toBeNull();
+  mock.markers.mockResolvedValue({
+    status: "ok",
+    data: [
+      {
+        pluginId: "hyhanyue.spring-beans",
+        line: 0,
+        icon: "navigate",
+        tooltip: "Injected bean: libraryPort (@Bean (dependency))",
+        target: null,
+      },
+    ],
+  });
+  mock.modelChanged!();
+  await vi.advanceTimersByTimeAsync(450);
+  expect(view.dom.querySelector(".cm-openidea-gutter-pluginMarkers")).not.toBeNull();
+  view.destroy();
+  view = undefined;
+  expect(mock.offModel).toHaveBeenCalled();
 });

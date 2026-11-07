@@ -50,7 +50,7 @@ pub fn check_xml(path: &str, text: &str, world: &World, groups: Groups) -> Vec<F
 /// The project's beans under every name they answer to, as `World::named` finds them.
 type ByName<'a> = BTreeMap<&'a str, Vec<Found<'a>>>;
 
-fn beans_by_name<'a>(world: &World<'a>) -> ByName<'a> {
+fn beans_by_name<'a>(world: &'a World<'_>) -> ByName<'a> {
     let mut map = ByName::new();
     for (path, bean) in world.beans() {
         let keys: BTreeSet<&str> = names_of(bean).chain(bean.qualifiers.iter().map(String::as_str)).collect();

@@ -1,4 +1,4 @@
-package openidea:plugin@1.3.0;
+package openidea:plugin@1.4.0;
 
 interface workspace {
     use types.{error};
@@ -11,6 +11,10 @@ interface workspace {
         /// to the root); paths leaving the root are refused. Unsaved editor
         /// contents win over the disk. Requires `project.read`.
         read-file: func(path: string) -> result<string, error>;
+        /// Cached static Spring registrations from the project's resolved JDT build path.
+        /// Returns none while a cancellable background refresh runs. No build or arbitrary
+        /// file access is exposed. Requires project.read and a trusted open project.
+        spring-beans: func(path: string, context: string) -> result<option<string>, error>;
         /// Project files whose root-relative path matches `glob` (`**/*Mapper.xml`),
         /// at most `limit`, as absolute paths. Ignored and excluded files are
         /// skipped. Requires `project.read`.

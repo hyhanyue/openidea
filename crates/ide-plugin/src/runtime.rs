@@ -39,7 +39,7 @@ use views_bindings::exports::openidea::plugin::view_provider as wit_view;
 use views_bindings::openidea::plugin::view_types as wit_vt;
 
 /// The API version of the world above, `major.minor` of [`host_api`].
-pub const API_VERSION: &str = "1.3";
+pub const API_VERSION: &str = "1.4";
 const EPOCH_TICK: Duration = Duration::from_millis(10);
 pub(crate) const MAX_TEXT: usize = 1 << 20;
 pub(crate) const MAX_TITLE: usize = 256;
@@ -88,6 +88,12 @@ pub trait HostApi: Send + Sync {
     }
     /// Roots of the open projects.
     fn projects(&self) -> Vec<std::path::PathBuf>;
+    fn spring_location_allowed(&self, _root: &Path, _uri: &str) -> bool {
+        false
+    }
+    fn spring_beans(&self, _root: &Path, _path: &Path, _context: &str) -> Result<Option<String>, HostError> {
+        Ok(None)
+    }
     /// Unsaved text of an open editor's file.
     fn buffer_text(&self, path: &Path) -> Option<String>;
     /// Version and text of the open document at `path`.

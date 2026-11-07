@@ -2889,3 +2889,135 @@ fn real_java8_context_fixture_has_the_same_profile_candidates() {
         assert_eq!(found.iter().map(|x| x.0).collect::<Vec<_>>(), [target]);
     }
 }
+
+fn dependency_model(host: &MockHost, text: &str, state: &str, qualified: &str) {
+    let inj = model::parse(&format!("{ROOT}/Client.java"), text).unwrap().injections[0].range;
+    let pos = |p: Position| serde_json::json!({"line":p.line,"character":p.character});
+    host.set_setting("__spring_model", &serde_json::json!({
+        "incomplete": false,
+        "injections": [{"type":"com.acme.Port","location":{"path":format!("{ROOT}/Client.java"),"range":{"start":pos(inj.start),"end":pos(inj.end)}}}],
+        "beans": [{"name":"libraryPort","aliases":["portAlias"],"qualifiers":[],"type":qualified,"supers":[qualified],"generic":false,"primary":false,"state":state,"origin":"dependency","kind":"factory","location":{"path":"jdt://contents/vendor.jar/vendor/LibraryConfig.class?handle","range":{"start":{"line":3,"character":5},"end":{"line":3,"character":16}}}}]
+    }).to_string());
+}
+
+#[test]
+fn dependency_factory_is_shared_by_candidates_definition_gutter_and_graph() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Port.java", "package com.acme; interface Port {}");
+    let text = "package com.acme; @Service class Client { Client(Port port) {} }";
+    host.add_file("src/main/java/com/acme/Client.java", text);
+    dependency_model(&host, text, "active", "com.acme.Port");
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    let definitions = n.definition(&java("Client.java", text), after(text, "Por", 1));
+    assert_eq!(definitions.len(), 1);
+    assert!(definitions[0].path.starts_with("jdt://contents/vendor.jar/"));
+    let markers = n.line_markers(&java("Client.java", text));
+    assert!(
+        markers
+            .iter()
+            .any(|m| m.tooltip.contains("dependency") && m.target.as_ref().is_some_and(|l| l.path.starts_with("jdt:")))
+    );
+    let project = host.invocation().project().unwrap();
+    let index = n.indexes.get(&project, COMMAND_BUDGET);
+    let graph = format!("{:?}", Navigator::graph(index));
+    // View bodies are tested through their rendered graph, using the same World candidates.
+    assert!(format!("{:?}", Navigator::tree(index)).contains("libraryPort"));
+    assert!(graph.contains("libraryPort") && graph.contains("dependency"));
+}
+
+#[test]
+fn unknown_dependency_is_a_candidate_and_does_not_claim_unique_injection() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Port.java", "package com.acme; interface Port {}");
+    let text = "package com.acme; @Service class Client { Client(Port port) {} }";
+    dependency_model(&host, text, "unknown", "com.acme.Port");
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert!(
+        n.line_markers(&java("Client.java", text))
+            .iter()
+            .any(|m| m.tooltip.contains("eligibility unknown") && m.target.is_none())
+    );
+}
+
+#[test]
+fn dependency_types_never_match_another_packages_simple_name() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Port.java", "package com.acme; interface Port {}");
+    let text = "package com.acme; @Service class Client { Client(Port port) {} }";
+    dependency_model(&host, text, "active", "another.Port");
+    let mut n = Navigator::default();
+    assert!(n.definition(&java("Client.java", text), after(text, "Por", 1)).is_empty());
+}
+
+#[test]
+fn unresolved_build_model_never_reports_missing_library_registrations() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Port.java", "package com.acme; interface Port {}");
+    host.set_setting("__spring_model", "null");
+    let text = "package com.acme; @Service class Client { Client(Port port) {} }";
+    assert!(findings(&host, &mut Navigator::default(), "Client.java", text).is_empty());
+}
+
+#[test]
+fn binary_beans_without_source_ranges_keep_distinct_graph_and_tree_identities() {
+    let host = MockHost::install();
+    let text = "package com.acme; @Service class Client { Client(Port port) {} }";
+    host.add_file("src/main/java/com/acme/Client.java", text);
+    dependency_model(&host, text, "active", "com.acme.Port");
+    let mut value: serde_json::Value = serde_json::from_str(&host::setting("__spring_model").unwrap()).unwrap();
+    let mut token = value["beans"][0].clone();
+    token["name"] = serde_json::json!("token");
+    token["type"] = serde_json::json!("com.acme.Token");
+    token["supers"] = serde_json::json!(["com.acme.Token"]);
+    value["beans"][0]["dependencies"] = serde_json::json!(["com.acme.Token"]);
+    value["beans"].as_array_mut().unwrap().push(token);
+    host.set_setting("__spring_model", &value.to_string());
+    let mut navigator = Navigator::default();
+    let project = host.invocation().project().unwrap();
+    let index = navigator.indexes.get(&project, COMMAND_BUDGET);
+    let tree = Navigator::tree(index);
+    let Body::Tree(items) = tree.body else { panic!("tree") };
+    let keys: BTreeSet<_> = items.iter().filter(|i| i.key.starts_with("d:")).map(|i| &i.key).collect();
+    assert_eq!(keys.len(), 2);
+    let graph = format!("{:?}", Navigator::graph(index));
+    assert!(graph.contains("2 dependencies")); // Client -> factory -> Token.
+}
+
+#[test]
+fn known_binary_primary_is_selected_but_unknown_binary_candidates_remain_visible() {
+    let host = MockHost::install();
+    let text = "package com.acme; @Service class Client { Client(Port port) {} }";
+    host.add_file("src/main/java/com/acme/Client.java", text);
+    dependency_model(&host, text, "active", "com.acme.Port");
+    let mut value: serde_json::Value = serde_json::from_str(&host::setting("__spring_model").unwrap()).unwrap();
+    let mut secondary = value["beans"][0].clone();
+    secondary["name"] = serde_json::json!("secondPort");
+    secondary["location"]["path"] = serde_json::json!("jdt://contents/other.jar/vendor/OtherConfig.class?other");
+    value["beans"][0]["primary"] = serde_json::json!(true);
+    value["beans"].as_array_mut().unwrap().push(secondary);
+    host.set_setting("__spring_model", &value.to_string());
+    let mut n = Navigator::default();
+    assert_eq!(n.definition(&java("Client.java", text), after(text, "Por", 1)).len(), 1);
+    value["beans"][1]["state"] = serde_json::json!("unknown");
+    host.set_setting("__spring_model", &value.to_string());
+    assert_eq!(n.definition(&java("Client.java", text), after(text, "Por", 1)).len(), 2);
+}
+
+#[test]
+fn unresolved_binary_generic_qualifiers_never_claim_a_unique_injected_bean() {
+    let host = MockHost::install();
+    let text = "package com.acme; @Service class Client { Client(Port<String> port) {} }";
+    host.add_file("src/main/java/com/acme/Client.java", text);
+    dependency_model(&host, text, "active", "com.acme.Port");
+    let mut value: serde_json::Value = serde_json::from_str(&host::setting("__spring_model").unwrap()).unwrap();
+    value["beans"][0]["generic"] = serde_json::json!(true);
+    host.set_setting("__spring_model", &value.to_string());
+    let mut n = Navigator::default();
+    assert!(
+        n.line_markers(&java("Client.java", text))
+            .iter()
+            .any(|m| m.tooltip.contains("eligibility unknown") && m.target.is_none())
+    );
+}

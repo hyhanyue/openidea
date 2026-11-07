@@ -505,6 +505,18 @@ pub mod current {
         })
     }
 
+    pub fn project_spring_beans(_p: &ProjectRes, _path: &str, _context: &str) -> Result<Option<String>, Error> {
+        with(|s| {
+            require(s, "project.read")?;
+            Ok(Some(
+                s.settings
+                    .get("__spring_model")
+                    .cloned()
+                    .unwrap_or_else(|| r#"{"beans":[],"injections":[],"incomplete":false}"#.into()),
+            ))
+        })
+    }
+
     pub fn project_read(p: &ProjectRes, path: &str) -> Result<String, Error> {
         with(|s| {
             require(s, "project.read")?;

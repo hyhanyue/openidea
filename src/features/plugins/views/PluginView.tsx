@@ -18,6 +18,7 @@ import {
 } from "react";
 import type { View, ViewEvent, ViewField, ViewTable, ViewTreeItem, Viewport } from "@/bindings";
 import { tx } from "@/platform/i18n";
+import { onLspRefresh } from "@/editor/lsp/availability";
 import {
   Checkbox,
   EmptyState,
@@ -30,6 +31,7 @@ import {
   showContextMenu,
   type MenuItem,
 } from "@/ui";
+import { isSpringBeansPlugin, springLabels } from "../springLabels";
 import { pluginsBackend } from "../backend";
 import { usePluginSettingsRevision } from "../settingsRevision";
 import { subscribeTheme, themeKey } from "@/platform/themeWatch";
@@ -61,6 +63,11 @@ export function PluginView({ pluginId, view, doc = null, revision = 0, label, it
   const pluginRevision = useViewRevision(pluginId, view);
   const settingsRevision = usePluginSettingsRevision((s) => s.revision);
   const seq = useRef(0);
+  const [modelRevision, setModelRevision] = useState(0);
+  useEffect(() => {
+    if (!isSpringBeansPlugin(pluginId)) return;
+    return onLspRefresh("codeLens", () => setModelRevision((value) => value + 1));
+  }, [pluginId]);
 
   useEffect(() => {
     const mine = ++seq.current;
@@ -77,7 +84,7 @@ export function PluginView({ pluginId, view, doc = null, revision = 0, label, it
           setError(e instanceof Error ? e.message : String(e));
         },
       );
-  }, [pluginId, view, doc, viewport, revision, pluginRevision, settingsRevision]);
+  }, [pluginId, view, doc, viewport, revision, pluginRevision, settingsRevision, modelRevision]);
 
   const send = useCallback(
     (event: ViewEvent) => {
@@ -161,7 +168,17 @@ function Body({ content, send, pluginId, view, onViewport, itemMenu }: BodyProps
     case "message":
       return <EmptyState className={styles.empty} title={body.value} />;
     case "tree":
-      return <TreeBody items={body.value} send={send} itemMenu={itemMenu} />;
+      return (
+        <TreeBody
+          items={
+            isSpringBeansPlugin(pluginId)
+              ? body.value.map((item) => ({ ...item, label: springLabels(item.label) }))
+              : body.value
+          }
+          send={send}
+          itemMenu={itemMenu}
+        />
+      );
     case "list":
       return (
         <ul className={styles.list} role="listbox">
@@ -195,7 +212,14 @@ function Body({ content, send, pluginId, view, onViewport, itemMenu }: BodyProps
     case "table":
       return <TableBody table={body.value} send={send} onViewport={onViewport} />;
     case "html":
-      return <HtmlBody html={body.value} send={send} pluginId={pluginId} view={view} />;
+      return (
+        <HtmlBody
+          html={isSpringBeansPlugin(pluginId) ? springLabels(body.value) : body.value}
+          send={send}
+          pluginId={pluginId}
+          view={view}
+        />
+      );
   }
 }
 

@@ -1,4 +1,8 @@
 {
+  "@Bean (dependency)": "@Bean (dependency)",
+  "@Component (dependency)": "@Component (dependency)",
+  "@Bean (module)": "@Bean (module)",
+  "@Component (module)": "@Component (module)",
   "Cannot reveal in {fileManager}": "Cannot reveal in {fileManager}",
   "This SSH project has no local filesystem mapping.": "This SSH project has no local filesystem mapping.",
   "Maven project import failed": "Maven project import failed",
