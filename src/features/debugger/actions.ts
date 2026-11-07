@@ -14,7 +14,13 @@ import { downloadJdkActions } from "@/platform/jdk";
 import { useProject } from "@/platform/project";
 import { activeEditor } from "@/editor/api";
 import type { EditorView } from "@codemirror/view";
-import { maybeEditorService, notifications, showStatusInfo, toolWindowService } from "@/workbench/contributions";
+import {
+  maybeEditorService,
+  notifications,
+  provideJavaAgentDebugger,
+  showStatusInfo,
+  toolWindowService,
+} from "@/workbench/contributions";
 import { classFileBreakpointReason } from "@/platform/classFiles";
 import { lineHasCode } from "./breakpoints/codeLines";
 import { canPlaceBreakpoint } from "./breakpoints/languages";
@@ -353,6 +359,38 @@ async function warnWithoutXdebug(launch: LaunchConfig) {
 }
 
 export function registerDebugActions(): () => void {
+  const offAgentDebugger = provideJavaAgentDebugger({
+    async prepare(config, module) {
+      const root = useProject.getState().project?.root;
+      if (!root) throw new Error(tx("No project is open"));
+      // Starting the DAP server probes the actual JDT bundle before a JVM is suspended.
+      let prepared: LaunchConfig | null = await javaAttachConfig(
+        { name: config.name, module, hostName: "127.0.0.1", port: 0 },
+        root,
+      );
+      return {
+        async attach(port, process, signal) {
+          signal.throwIfAborted();
+          const base =
+            prepared ?? (await javaAttachConfig({ name: config.name, module, hostName: "127.0.0.1", port }, root));
+          prepared = null;
+          signal.throwIfAborted();
+          const launch = {
+            ...base,
+            extraJson: JSON.stringify({ ...JSON.parse(base.extraJson ?? "{}"), port }),
+          };
+          return (
+            (await startSession(launch, {
+              process: process as RunId,
+              runConfig: config,
+              rerunnable: false,
+              signal,
+            })) !== null
+          );
+        },
+      };
+    },
+  });
   const paused = "debugSessionPaused";
   const step = (id: string, title: string, kind: "over" | "into" | "out", icon: string): Action => ({
     id,
@@ -370,7 +408,7 @@ export function registerDebugActions(): () => void {
     },
   });
 
-  return registerActions([
+  const offActions = registerActions([
     {
       id: "debug.startConfig",
       title: "Debug…",
@@ -791,4 +829,8 @@ export function registerDebugActions(): () => void {
       run: () => toolWindowService().show("debug", true),
     },
   ]);
+  return () => {
+    offActions();
+    offAgentDebugger();
+  };
 }

@@ -35,7 +35,7 @@ import { isUpdatable } from "./updatePolicies";
 import { configIcon } from "./configs";
 import styles from "./Run.module.css";
 import { tx } from "@/platform/i18n";
-import { springBootStatus } from "./springBootStatus";
+import { debugAttachmentStatus, springBootStatus } from "./springBootStatus";
 
 function failed(s: RunSession): boolean {
   return s.status === "failed" || (s.status === "finished" && s.exitCode !== 0 && !s.stopped);
@@ -92,9 +92,9 @@ export function SessionPanel({
 
   const consoleColumn = (
     <div className={styles.consoleColumn}>
-      {session.springBoot && (
+      {(session.springBoot || (session.debugAttachment && session.debugAttachment !== "attached")) && (
         <div className={styles.notice} role="status">
-          {springBootStatus(session.springBoot)}
+          {debugAttachmentStatus(session) ?? (session.springBoot && springBootStatus(session.springBoot))}
         </div>
       )}
       {rt.console.dropped > 0 && !testModel && (

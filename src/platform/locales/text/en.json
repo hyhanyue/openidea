@@ -157,5 +157,11 @@
   "Invalid JavaBean accessor name": "Invalid JavaBean accessor name",
   "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. JavaBean property aliases are included only when uniquely resolved. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, environment-variable aliases and string-based MyBatis calls are not resolved.": "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. JavaBean property aliases are included only when uniquely resolved. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, environment-variable aliases and string-based MyBatis calls are not resolved.",
   "Invalid Java rename range": "Invalid Java rename range",
-  "Java rename edit refinement changed the result": "Java rename edit refinement changed the result"
+  "Java rename edit refinement changed the result": "Java rename edit refinement changed the result",
+  "Debugger attachment failed; JVM is still running": "Debugger attachment failed; JVM is still running",
+  "Debugger attachment failed": "Debugger attachment failed",
+  "Debugger attachment cancelled": "Debugger attachment cancelled",
+  "Debugger attachment failed. Stopping this launch's JVM.": "Debugger attachment failed. Stopping this launch's JVM.",
+  "Waiting for debugger attachment": "Waiting for debugger attachment",
+  "This JVM is still running. Stop it before retrying Debug.": "This JVM is still running. Stop it before retrying Debug."
 }

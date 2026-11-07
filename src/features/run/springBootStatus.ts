@@ -30,3 +30,16 @@ export function springBootStatus(state: SpringBootLifecycle): string {
       }
   }
 }
+
+export function debugAttachmentStatus(session: {
+  debugAttachment?: "waiting" | "attached" | "failed";
+  status: string;
+  stopped?: boolean;
+}): string | null {
+  if (!session.debugAttachment || session.debugAttachment === "attached") return null;
+  const running = session.status === "starting" || session.status === "running";
+  if (session.debugAttachment === "failed")
+    return running ? tx("Debugger attachment failed; JVM is still running") : tx("Debugger attachment failed");
+  if (running && session.stopped) return null;
+  return running ? tx("Waiting for debugger attachment") : tx("Debugger attachment cancelled");
+}

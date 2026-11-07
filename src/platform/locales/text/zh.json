@@ -6522,5 +6522,11 @@
   "Invalid JavaBean accessor name": "JavaBean 访问器名称无效",
   "Spring/MyBatis source scope: the nearest Maven/Gradle module's conventional Java and resource roots. Only listed edits are included. JavaBean property aliases are included only when uniquely resolved. Dynamic bean lookups, SpEL, name-based autowiring, external configuration, environment-variable aliases and string-based MyBatis calls are not resolved.": "Spring/MyBatis 源码范围：最近的 Maven/Gradle 模块中的常规 Java 与资源目录。只包含预览列出的修改。仅在唯一解析后包含 JavaBean 属性别名。动态 Bean 查找、SpEL、按名称自动注入、外部配置、环境变量别名以及通过字符串调用 MyBatis 的引用尚未解析。",
   "Invalid Java rename range": "Java 重命名范围无效",
-  "Java rename edit refinement changed the result": "Java 重命名修改分解后的结果不一致"
+  "Java rename edit refinement changed the result": "Java 重命名修改分解后的结果不一致",
+  "Debugger attachment cancelled": "调试器连接已取消",
+  "Waiting for debugger attachment": "正在等待调试器连接",
+  "Debugger attachment failed; JVM is still running": "调试器连接失败；JVM 仍在运行",
+  "Debugger attachment failed. Stopping this launch's JVM.": "调试器连接失败，正在停止本次启动的 JVM。",
+  "Debugger attachment failed": "调试器连接失败",
+  "This JVM is still running. Stop it before retrying Debug.": "此 JVM 仍在运行，请停止后再重试调试。"
 }

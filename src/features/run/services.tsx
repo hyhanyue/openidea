@@ -58,7 +58,7 @@ import {
   type ServiceOrder,
 } from "./serviceOrder";
 import styles from "./RunServices.module.css";
-import { springBootStatus } from "./springBootStatus";
+import { debugAttachmentStatus, springBootStatus } from "./springBootStatus";
 
 export const RUN_PROVIDER = "runConfigurations";
 const TYPE_PREFIX = "run:type:";
@@ -221,6 +221,8 @@ export function sessionStatus(s: RunSession | undefined): string | undefined {
 
 /** A node's grey text: the HTTP port of a running web application, else the state. */
 export function sessionDetail(s: RunSession | undefined): string | undefined {
+  const attachment = s && debugAttachmentStatus(s);
+  if (attachment) return attachment;
   if (s?.springBoot)
     return (
       springBootStatus(s.springBoot) +

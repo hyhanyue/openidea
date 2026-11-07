@@ -566,6 +566,8 @@ export async function startSession(
   launch: LaunchConfig,
   options: {
     runConfig?: RunConfig;
+    /** Cancellation of an owned Run JVM waiting for attach, without a debugger preparation tab. */
+    signal?: AbortSignal;
     preparation?: { id: DebugSessionId; signal: AbortSignal };
     /** A process started for this session (e.g. Maven with a JDWP agent): Stop ends it too. */
     process?: RunId | null;
@@ -573,6 +575,7 @@ export async function startSession(
     rerunnable?: boolean;
   } = {},
 ): Promise<DebugSessionId | null> {
+  const signal = options.signal ?? options.preparation?.signal;
   if (!isTauri()) {
     notifications().notify({ group: "run", level: "warning", title: "Debugging needs the desktop app" });
     return null;
@@ -590,13 +593,13 @@ export async function startSession(
   pendingStarts++;
   try {
     await flushBreakpoints();
-    options.preparation?.signal.throwIfAborted();
+    signal?.throwIfAborted();
     const adapterStarted = performance.now();
     const id = await call(commands.debugStart(launch));
     console.info("Debug adapter started", { name: launch.name, ms: performance.now() - adapterStarted });
     owned.add(id);
     if (afterDetach) dropFinished();
-    if (options.preparation?.signal.aborted) {
+    if (signal?.aborted) {
       await call(commands.debugStop(id)).catch(() => undefined);
       settleStart(id);
       if (useDebug.getState().sessions[id]) markTerminated(id);
@@ -655,7 +658,7 @@ export async function startSession(
       publishContext();
       return null;
     }
-    if (options.preparation?.signal.aborted || isCancelled(e)) return null;
+    if (signal?.aborted || isCancelled(e)) return null;
     if (options.preparation)
       appendConsole(options.preparation.id, "stderr", (e instanceof Error ? e.message : String(e)) + "\n");
     const missing = missingAdapter(launch.adapter, e);

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { executeAction } from "@/platform/actions";
 import { useProject } from "@/platform/project";
-import { provideNotificationService, useDebugRunSessions } from "@/workbench/contributions";
-import type { RunConfig } from "@/platform/ipc";
+import { javaAgentDebugger, provideNotificationService, useDebugRunSessions } from "@/workbench/contributions";
+import { IpcError, type RunConfig } from "@/platform/ipc";
 import { registerDebugActions } from "../actions";
 import { useDebug } from "../state";
 
@@ -10,7 +10,7 @@ const ipc = vi.hoisted(() => ({
   javaResolveLaunch: vi.fn(),
   cancelRequest: vi.fn(async () => undefined),
   javaDebugServer: vi.fn(async () => ({ status: "ok", data: 5005 })),
-  debugStart: vi.fn(async () => ({ status: "ok", data: 42 })),
+  debugStart: vi.fn(async (_config?: unknown) => ({ status: "ok", data: 42 })),
   debugStop: vi.fn(async () => ({ status: "ok", data: null })),
   fsReadDir: vi.fn(async () => ({ status: "ok", data: [] })),
 }));
@@ -201,5 +201,41 @@ it.each(["success", "failure"])("handles a late DAP %s after preparation was can
   await starting;
   if (outcome === "success") expect(ipc.debugStop).toHaveBeenCalledWith(42);
   expect(notify).not.toHaveBeenCalled();
+  expect(useDebugRunSessions.getState().sessions).toEqual([]);
+});
+
+it("preflights the actual Java debugger and offers install before an owned JVM exists", async () => {
+  ipc.javaDebugServer.mockRejectedValueOnce(
+    new IpcError({ kind: "unavailable", message: "java-debug not loaded into jdtls" }),
+  );
+  await expect(javaAgentDebugger()!.prepare(config, "")).rejects.toThrow("java-debug not loaded");
+  expect(ipc.debugStart).not.toHaveBeenCalled();
+  expect(notify).toHaveBeenCalledWith(
+    expect.objectContaining({
+      title: "The Java debugger is not installed",
+      actions: [expect.objectContaining({ label: "Install" })],
+    }),
+  );
+});
+
+it("cancels a late native attach and disposes its actual debug session", async () => {
+  let respond!: (value: Awaited<ReturnType<typeof ipc.debugStart>>) => void;
+  ipc.debugStart.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        respond = resolve;
+      }),
+  );
+  const prepared = await javaAgentDebugger()!.prepare(config, "");
+  expect(ipc.debugStart).not.toHaveBeenCalled();
+  const controller = new AbortController();
+  const attaching = prepared.attach(64947, 99, controller.signal);
+  await vi.waitFor(() => expect(ipc.debugStart).toHaveBeenCalled());
+  const launch = vi.mocked(ipc.debugStart).mock.calls[0]![0] as unknown as { extraJson: string };
+  expect(JSON.parse(launch.extraJson)).toMatchObject({ debugServer: 5005, port: 64947 });
+  controller.abort();
+  respond({ status: "ok", data: 42 });
+  expect(await attaching).toBe(false);
+  expect(ipc.debugStop).toHaveBeenCalledWith(42);
   expect(useDebugRunSessions.getState().sessions).toEqual([]);
 });

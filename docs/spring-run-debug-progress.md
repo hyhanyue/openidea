@@ -92,3 +92,12 @@ Official references checked: [Spring Boot Maven plugin 2.7.18](https://docs.spri
 - Final source-text catalog: **20 passed, 6 skipped**; the skipped tests are existing conditional checks. The obsolete draft error key was removed from both en/zh catalogs.
 - Final native Clippy after the unknown-context fallback: passed in 8.25s. Final native config/bridge tests: 15 passed. Final Vite build, TypeScript, Oxlint, Oxfmt and diff whitespace checks passed.
 - No release, push, app replacement or native GUI launch was performed. Only this session's own Cargo targets are eligible for cleanup; the fixture's small Java target is retained for unified acceptance.
+
+## Increment 1 — missing debugger / failed owned attach cleanup
+
+Main's Mac preview found a missing-java-debug case after the initial isolated-env Run+JDWP launch: the JVM suspended successfully but action-dispatched attach failed without returning an outcome to its owner. This increment replaces that fire-and-forget boundary with `JavaAgentDebugger` in contributions.
+
+- `prepare` probes the actual Java attach configuration / JDT debug server before spawning the owned JVM. Existing Microsoft java-debug install guidance remains available; no JVM starts when this preflight fails.
+- Attach returns success/failure. Failure, cancellation or a 30-second attach timeout stops only the captured session + RunId. A later result cannot stop a restarted tab's newer process or another configuration. Stop during attach aborts its preparation and disposes a late-created native debug session.
+- Run/Services explicitly show waiting for attach, failed attach with a still-live JVM, or historical attach failure/cancellation. Stop acknowledgment alone does not claim exit. Failed Stop leaves the run live with Stop/retry controls and an explicit message.
+- Focused frontend regression: 73 passed, 6 existing catalog skips; includes real service preflight error handling, cancelled late native debug session, attach false/error/cancel/timeout, duplicate JDWP announcements, failed Stop retry and stale RunId isolation. TypeScript/Oxlint passed. No native build, UI control, installed app change or original demo was used for this increment.

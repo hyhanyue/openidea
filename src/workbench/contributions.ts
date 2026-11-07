@@ -1456,6 +1456,24 @@ export function showStatusInfo(text: string, ms = 8000) {
   }, ms);
 }
 
+/** Prepares the adapter before an owned JVM is suspended; attach reports its actual outcome. */
+export interface JavaAgentDebugger {
+  prepare(
+    config: RunConfig,
+    module: string,
+  ): Promise<{
+    attach(port: number, process: number, signal: AbortSignal): Promise<boolean>;
+  }>;
+}
+let agentDebugger: JavaAgentDebugger | null = null;
+export function provideJavaAgentDebugger(service: JavaAgentDebugger): () => void {
+  agentDebugger = service;
+  return () => {
+    if (agentDebugger === service) agentDebugger = null;
+  };
+}
+export const javaAgentDebugger = (): JavaAgentDebugger | null => agentDebugger;
+
 /** Live debugger roots exposed to the run toolbar without coupling feature stores. */
 export interface DebugRunSession {
   id: number;

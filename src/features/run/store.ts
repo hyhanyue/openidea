@@ -89,6 +89,7 @@ export interface RunSession {
   /** The HTTP port the application's embedded web server reported it started on. */
   httpPort?: number;
   springBoot?: SpringBootLifecycle;
+  debugAttachment?: "waiting" | "attached" | "failed";
 }
 
 interface SessionRuntime {
@@ -739,6 +740,7 @@ export async function startRun(
       stdinClosed: false,
       stopped: false,
       httpPort: undefined,
+      debugAttachment: undefined,
       springBoot: isSpringBootLaunch(config) ? { phase: "preparing" } : undefined,
     };
     const updated = session;
@@ -975,6 +977,22 @@ async function resolveJvmApplication(sessionId: string, config: RunConfig): Prom
   } finally {
     if (rt.resolveRequest === request) delete rt.resolveRequest;
   }
+}
+
+/** Only the attach attempt owning this exact RunId may change its status or console. */
+export function setDebugAttachment(
+  sessionId: string,
+  runId: number,
+  debugAttachment: NonNullable<RunSession["debugAttachment"]>,
+  message?: string,
+) {
+  const session = getSession(sessionId);
+  if (!session || session.runId !== runId) return;
+  if (message) {
+    enqueue(sessionId, { kind: "stderr", text: message + "\n" });
+    flush(sessionId);
+  }
+  patchSession(sessionId, { debugAttachment });
 }
 
 /** Exit codes that arrived before `runStart` resolved (keyed by run id). */
