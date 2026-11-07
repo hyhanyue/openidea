@@ -59,7 +59,7 @@ async fn pom_definitions_follow_the_effective_parent_and_open_buffers() {
     let pom = root.join("pom.xml");
     let child = root.join("child/pom.xml");
     let repository = base.join("repository");
-    let cached = repository.join("org/example/parent/1/parent-1.pom");
+    let cached = repository.join("org").join("example").join("parent").join("1").join("parent-1.pom");
     write(&pom, PARENT);
     write(&child, CHILD);
     write(&cached, PARENT);
