@@ -1,0 +1,197 @@
+[ {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$AnyMethod",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$AnyMethod",
+  "methodName" : "any",
+  "paths" : [ "/any" ],
+  "methods" : [ ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$AnyMethod",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$AnyMethod",
+  "methodName" : "any",
+  "paths" : [ "/any" ],
+  "methods" : [ ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "alias",
+  "paths" : [ "/api/alias" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "alias",
+  "paths" : [ "/api/alias" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "defaultPath",
+  "paths" : [ "/api/default" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "defaultPath",
+  "paths" : [ "/api/default" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "fixed",
+  "paths" : [ "/api" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "fixed",
+  "paths" : [ "/api" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "list",
+  "paths" : [ "/api/items", "/api/products" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "list",
+  "paths" : [ "/api/items", "/api/products" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "published",
+  "paths" : [ "/api/public" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "published",
+  "paths" : [ "/api/public" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "staticFixed",
+  "paths" : [ "/api/fixed" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Catalog",
+  "methodName" : "staticFixed",
+  "paths" : [ "/api/fixed" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Child",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Base",
+  "methodName" : "send",
+  "paths" : [ "/base/send" ],
+  "methods" : [ "POST" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Child",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Base",
+  "methodName" : "send",
+  "paths" : [ "/base/send" ],
+  "methods" : [ "POST" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$ContractController",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$ContractController",
+  "methodName" : "search",
+  "paths" : [ "/contract/search" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$ContractController",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$ContractController",
+  "methodName" : "search",
+  "paths" : [ "/contract/search" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$SingleAliasController",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$SingleAliasController",
+  "methodName" : "single",
+  "paths" : [ "/single" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$SingleAliasController",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$SingleAliasController",
+  "methodName" : "single",
+  "paths" : [ "/single" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$TransitiveController",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$TransitiveController",
+  "methodName" : "transitive",
+  "paths" : [ "/transitive" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$TransitiveController",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$TransitiveController",
+  "methodName" : "transitive",
+  "paths" : [ "/transitive" ],
+  "methods" : [ "GET" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Verbs",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Verbs",
+  "methodName" : "union",
+  "paths" : [ "/verbs/union" ],
+  "methods" : [ "GET", "POST", "PUT" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.MappingSamples$Verbs",
+  "declaringClass" : "dev.openidea.mappings.MappingSamples$Verbs",
+  "methodName" : "union",
+  "paths" : [ "/verbs/union" ],
+  "methods" : [ "GET", "POST", "PUT" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.web.CrossController",
+  "declaringClass" : "dev.openidea.mappings.web.CrossController",
+  "methodName" : "save",
+  "paths" : [ "/cross/save", "/cross/write", "/v2/save", "/v2/write" ],
+  "methods" : [ "POST", "PUT" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.web.CrossController",
+  "declaringClass" : "dev.openidea.mappings.web.CrossController",
+  "methodName" : "save",
+  "paths" : [ "/cross/save", "/cross/write", "/v2/save", "/v2/write" ],
+  "methods" : [ "POST", "PUT" ]
+}, {
+  "stack" : "mvc",
+  "qualifiedController" : "dev.openidea.mappings.web.InheritedController",
+  "declaringClass" : "dev.openidea.mappings.api.GenericBase",
+  "methodName" : "send",
+  "paths" : [ "/parent/send" ],
+  "methods" : [ "POST" ]
+}, {
+  "stack" : "webflux",
+  "qualifiedController" : "dev.openidea.mappings.web.InheritedController",
+  "declaringClass" : "dev.openidea.mappings.api.GenericBase",
+  "methodName" : "send",
+  "paths" : [ "/parent/send" ],
+  "methods" : [ "POST" ]
+} ]

@@ -52,7 +52,7 @@ describe("the Spring endpoint provider", () => {
     scanSources.mockResolvedValue({ status: "ok", data: [source()] });
     expect(await routeIndex(null)).toEqual([]);
     const first = await routeIndex("/p");
-    expect(first).toEqual([
+    expect(first).toMatchObject([
       {
         method: "POST",
         url: "/deeplink/menu/search",

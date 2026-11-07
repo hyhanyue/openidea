@@ -23,7 +23,7 @@
 
 ## Final audit checkpoint
 
-The reviewed mapping/model implementation is committed as `be7c77ec` after the imported WIP. A subsequent small audit fixes constant reuse across concatenation branches (reproduced as a failing test first), refreshes gutter choices before opening them, abandons request generation if its document/project changed during the scan, and releases overlays on project switches. The final HTTP suite has 65 passing tests, including the new generation race and project-switch cases. A final real-framework fixture also checks that explicitly writing an empty alias default does not conflict with a non-default peer; the framework output is byte-identical to the previous ground truth. The parser normalizes defaults before alias conflict checks. Full-suite validation began on the reviewed checkpoint; the final changed modules were re-run separately afterward.
+The reviewed mapping/model implementation is committed as `be7c77ec` after the imported WIP. A subsequent small audit fixes constant reuse across concatenation branches (reproduced as a failing test first), refreshes gutter choices before opening them, abandons request generation if its document/project changed during the scan, and releases overlays on project switches. The final pre-seam HTTP suite had 65 passing tests; after the requested Runtime metadata seam it has 72 passing tests, including the new generation race and project-switch cases. A final real-framework fixture also checks that explicitly writing an empty alias default does not conflict with a non-default peer; the framework output is byte-identical to the previous ground truth. The parser normalizes defaults before alias conflict checks. Final changed modules were re-run separately after each audit fix, followed by a fresh full-suite run after code freeze.
 
 ## Evidence and reproduction
 
@@ -33,7 +33,7 @@ The initial five new review regressions all failed against the imported WIP befo
 
 ## Validation completed
 
-- `node_modules/.bin/vitest run src/features/http-client`: 8 files, 65 tests passed.
+- `node_modules/.bin/vitest run src/features/http-client`: 10 files, 72 tests passed.
 - Real JDK8 Maven fixture: 10 tests passed, 0 failures/errors. Ground-truth evidence regenerated after the final fixture extension.
 - `node_modules/.bin/tsrs --noEmit` and tsconfig.node/perf/scripts/smoke projects: passed.
 - `node_modules/.bin/tsc --noEmit && node_modules/.bin/vite build`: passed; existing chunk-size/dynamic-import warnings.
@@ -41,13 +41,13 @@ The initial five new review regressions all failed against the imported WIP befo
 - `node_modules/.bin/oxfmt --check`: all 2102 matched files passed after the final regression additions; `git diff --check` passed.
 - `node_modules/.bin/knip`: passed with one existing ignore-pattern configuration hint.
 - Shared toolchain `rustfmt --edition 2024` on the two owned Rust files: passed.
-- Full frontend suite: running (two workers to limit contention); final result will be appended.
+- Broad frontend suite (four workers, begun before the late Runtime seam request): 656 files passed, 1 environment-restricted file failed; 7274 tests passed, 3 port tests failed, 6 skipped; 335.46 seconds. All 3 errors are `listen EPERM 127.0.0.1` in unchanged dev-session tests. That entire file passed all 5 tests with localhost access. The subsequent Runtime seam has a separate final HTTP regression run: 10 files / 72 tests passed. The earlier two-worker run was discarded because it spanned source changes and cached old modules against new fixture/tests; only this session's obsolete runner was stopped.
 
 Dependency setup: offline pnpm lacked cached tarballs, so this session copied the installed node_modules into its own checkout and invoked local binaries. Public Maven dependencies were downloaded into this session's isolated cache. No shared target or dependency installation was mutated.
 
 ## Full-suite environment check
 
-The sandboxed full run reported three timeouts in unchanged `scripts/dev-session.test.ts`; these tests listen on localhost ports. Re-running that entire file with localhost access passed all 5 tests in 717 ms. This confirms the port sandbox restriction rather than a change to the launcher. The full sandboxed suite is still running; final aggregate counts will be appended.
+The sandboxed full run reported three timeouts in unchanged `scripts/dev-session.test.ts`; these tests listen on localhost ports. Re-running that entire file with localhost access passed all 5 tests in 717 ms. This confirms the port sandbox restriction rather than a change to the launcher. The completed four-worker sandboxed broad run passed 7274 tests and failed only those 3 port tests, with 6 skips (657 files total). The earlier run mixed transformed modules from before the final fixes with newly extended tests, so its Spring failures are not a valid result for the final tree.
 
 ## Required unified Mac/native acceptance (not performed here)
 
@@ -60,10 +60,38 @@ No native app runtime or E2E screenshot evidence is claimed. Per the parallel-se
 5. Edit Layer.routes and Contract paths without saving; all open consumer menus/gutters and route search should follow the overlay. Save, modify externally, rename/delete the dependency, then undo/restore and verify rescans. Confirm no fake root route for a dynamic property/SpEL or unresolved annotation expression.
 6. Keyboard-activate a gutter button; verify menu placement, localized labels and request insertion. Rapidly edit/switch/close documents and switch projects while a large scan runs; verify responsiveness and absence of stale icons/results. Capture before/after screenshots via the repository's verify workflow during unified acceptance.
 
+## Runtime navigation metadata contract (late explicit scope addition)
+
+The parent explicitly authorized the small `src/workbench/contributions.ts` interface addition. `EndpointEntry` gains two **optional** strings; other endpoint providers need no changes:
+
+- `qualifiedController`: the actual source controller type's unique fully qualified **JVM binary name**, matching `Class.getName()`. Example: `dev.openidea.mappings.MappingSamples$Child`.
+- `declaringClass`: the class/interface that declares the source method at `path/line/col`, using the same binary-name convention. For the inherited Child method it is `dev.openidea.mappings.MappingSamples$Base`; for a concrete override of an interface method it is the overriding controller class, not the annotation-bearing interface.
+
+Identity is assigned inside each exact source-model revision, including unsaved replacements. Duplicate source identities (including binary-name collisions) omit the uncertain field. Unknown library parents do not create invented inherited endpoints. The provider retains separate controller rows when two same-simple-name controllers inherit the same method/coordinate; consumers must not collapse them by target coordinate before applying their identity/candidate rules. Existing real declaration/implementation `path/line/col` remain unchanged and UTF16.
+
+`fixtures/java-spring-mappings/navigation-identities.json` records real MVC **and** WebFlux `HandlerMethod.getBeanType().getName()` and `getMethod().getDeclaringClass().getName()` alongside mapping keys. `navigationGroundTruth.test.ts` compares all 28 framework handler rows to static identities; `navigationIdentity.test.ts` covers cross-file inheritance coordinates, concrete generic overrides, unsaved revisions, same-name different-package consumers, nested binary names, duplicate FQN omission and unavailable library contracts. The real Java8 fixture remains 10/10; its prior mapping JSON is byte-identical after adding the identity evidence.
+
+Runtime integration acceptance (Runtime session owns its actual Actuator consumer fixture):
+
+1. Actuator reports the concrete InheritedController class: match `qualifiedController` plus exact method name, HTTP method and route; navigate to GenericBase.java at the inherited method's original coordinate.
+2. Actuator reports the declaring GenericBase class: match `declaringClass` with the same route/method constraints and strict unique-candidate/source-target checks; do not require the target path to equal the controller source path.
+3. Concrete CrossController interface override: both fields name CrossController and coordinates remain at its implementation, not Contract.java.
+4. Nested fixture types use `$` in both fields. Any runtime canonical-name handling must be explicit; do not treat arbitrary proxy suffixes or simple-name equality as identity evidence.
+5. Duplicate FQNs, same-simple-name candidates in different packages, multiple candidates, unknown dependency types and proxies remain unresolved under Runtime's conservative rules. Without the optional fields, retain the existing same-source-file fallback. Other providers with neither field must continue to typecheck and behave as before.
+
+No Runtime navigation implementation or other session's fixture was modified. The additional shared-file diff is exactly the four interface lines; the parent will merge it with unrelated workbench changes. No chat messages were sent to the Runtime session.
+
+## Official references
+
+- [Spring MVC 5.3.31 request mapping](https://docs.spring.io/spring-framework/docs/5.3.31/reference/html/web.html#mvc-ann-requestmapping)
+- [Spring WebFlux 5.3.31 request mapping](https://docs.spring.io/spring-framework/docs/5.3.31/reference/html/web-reactive.html#webflux-ann-requestmapping)
+- [Spring AliasFor 5.3.31 requirements](https://docs.spring.io/spring-framework/docs/5.3.31/javadoc-api/org/springframework/core/annotation/AliasFor.html)
+
 ## Explicit limitations and integration notes
 
 - This is source-static annotated-controller assistance for MVC and WebFlux. Functional RouterFunction DSLs, programmatic registrations, runtime bean activation/conditions/proxies and annotations/contracts only present in dependency JARs are not resolved. Dynamic placeholders/SpEL are deliberately omitted. Missing/ambiguous declarations do not establish that a running server has no route.
 - The frontend retains the existing project-root source boundary; external content roots returned by the host are filtered until the endpoint-provider API can express their ownership. This pre-existing API limitation remains for integration planning.
 - Full Java compiler overload/type inference (wildcards, raw/bounded/method type variables, type-use syntax, arbitrary annotation value evaluation) is outside this source reader. Covered generic source contracts and their concrete overloads are proven by real Spring fixtures; unsupported forms need additional evidence before extension.
+- Request generation preserves the existing first-media-condition choice; it is not a general solver for contradictory/negated params, headers or media predicates.
 - Request skeleton generation remains a shallow source-based preview; it does not evaluate runtime Jackson configuration or arbitrary serializers.
 - No other session's feature files were changed. The shared entrypoints are `controllersForSource`, `knownControllers`, `updateRouteSource`, `onRouteIndexChanged` and `routeIndex` within the owned Spring folder. IPC types/bindings are unchanged; native command remains background-dispatched.

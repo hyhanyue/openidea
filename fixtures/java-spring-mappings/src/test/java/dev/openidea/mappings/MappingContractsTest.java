@@ -20,6 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class MappingContractsTest {
     private static final List<Map<String, Object>> evidence = new ArrayList<>();
+    private static final List<Map<String, Object>> identities = new ArrayList<>();
     @Configuration @EnableWebMvc static class Mvc {}
 
     private GenericWebApplicationContext context(Class<?> controller) {
@@ -38,6 +39,7 @@ class MappingContractsTest {
             row.put("consumes", info.getConsumesCondition().getConsumableMediaTypes().stream().map(Object::toString).sorted().collect(Collectors.toList()));
             row.put("produces", info.getProducesCondition().getProducibleMediaTypes().stream().map(Object::toString).sorted().collect(Collectors.toList()));
             evidence.add(row);
+            saveIdentity("mvc", handler, row);
         });
         return context;
     }
@@ -145,6 +147,7 @@ class MappingContractsTest {
                     row.put("produces", info.getProducesCondition().getProducibleMediaTypes().stream().map(Object::toString).sorted().collect(Collectors.toList()));
                     row.put("stack", "webflux");
                     evidence.add(row);
+                    saveIdentity("webflux", handler, row);
                 });
             }
         }
@@ -161,8 +164,22 @@ class MappingContractsTest {
         }
     }
 
+    private static void saveIdentity(String stack, HandlerMethod handler, Map<String, Object> mapping) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("stack", stack);
+        row.put("qualifiedController", handler.getBeanType().getName());
+        row.put("declaringClass", handler.getMethod().getDeclaringClass().getName());
+        row.put("methodName", handler.getMethod().getName());
+        row.put("paths", mapping.get("paths"));
+        row.put("methods", mapping.get("methods"));
+        identities.add(row);
+    }
+
     @AfterAll static void saveEvidence() throws Exception {
         evidence.sort(Comparator.comparing(row -> row.get("controller") + "." + row.get("methodName") + "." + row.get("stack")));
+        identities.sort(Comparator.comparing(row -> row.get("qualifiedController") + "." + row.get("methodName") + "." + row.get("stack")));
+        String identityOutput = System.getProperty("mapping.identityEvidence");
+        if (identityOutput != null) new ObjectMapper().writerWithDefaultPrettyPrinter().writeValue(Paths.get(identityOutput).toFile(), identities);
         String output = System.getProperty("mapping.evidence");
         if (output != null) new ObjectMapper().writerWithDefaultPrettyPrinter().writeValue(Paths.get(output).toFile(), evidence);
     }

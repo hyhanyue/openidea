@@ -191,11 +191,23 @@ async function scan(root: string, signal: AbortSignal): Promise<Index> {
         const at = lineCol(files.get(path)?.text ?? source.text, endpoint.origin?.offset ?? endpoint.offset);
         for (const method of endpoint.httpMethods.length ? endpoint.httpMethods : ["*"])
           for (const url of endpoint.paths) {
-            const key = JSON.stringify([controller.name, endpoint.methodName, method, url, path, at.line, at.col]);
+            const key = JSON.stringify([
+              source.path,
+              endpoint.qualifiedController,
+              controller.name,
+              endpoint.methodName,
+              method,
+              url,
+              path,
+              at.line,
+              at.col,
+            ]);
             if (seen.has(key)) continue;
             seen.add(key);
             if (routes.length >= 20000) return { project, routes };
             routes.push({
+              ...(endpoint.qualifiedController ? { qualifiedController: endpoint.qualifiedController } : {}),
+              ...(endpoint.declaringClass ? { declaringClass: endpoint.declaringClass } : {}),
               method,
               url,
               controller: controller.name,

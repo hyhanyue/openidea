@@ -13,6 +13,8 @@ export interface QueryParam {
 }
 
 export interface Endpoint {
+  qualifiedController?: string;
+  declaringClass?: string;
   className: string;
   methodName: string;
   /** Offset of the method name (gutter line). */
@@ -107,7 +109,11 @@ function endpoint(controller: MappedController, mapped: MappedMethod): Endpoint 
     else if (name) headers.push({ name, value });
   }
   const inherited = mapped.owner.cls !== cls;
+  const qualifiedController = controller.owner.qualifiedName,
+    declaringClass = mapped.owner.qualifiedName;
   return {
+    ...(qualifiedController ? { qualifiedController } : {}),
+    ...(declaringClass ? { declaringClass } : {}),
     className: cls.name,
     methodName: method.name,
     offset: inherited ? cls.nameStart : method.nameStart,

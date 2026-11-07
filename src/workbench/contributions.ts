@@ -1403,6 +1403,10 @@ export function runAnythingProviderList(): RunAnythingProvider[] {
 // Project endpoints supplied by framework features for request-path search.
 
 export interface EndpointEntry {
+  /** Actual source controller's fully qualified JVM name (nested classes use `$`), when unique. */
+  qualifiedController?: string;
+  /** Class/interface declaring the source method at path/line/col; same JVM-name convention. */
+  declaringClass?: string;
   /** `GET`, `POST`, … */
   method: string;
   /** Class-level and method-level mapping joined; `{var}` kept. */

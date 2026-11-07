@@ -20,6 +20,8 @@ export interface Declaration {
   cls: ClassDecl;
   name: string;
   constants: Constants;
+  /** Unique JVM binary name within this source model. */
+  qualifiedName?: string;
 }
 
 const WEB = "org.springframework.web.bind.annotation.";
@@ -141,6 +143,17 @@ export class MappingProject {
         this.types.set(declaration.name, group);
       }
     }
+    const identities = new Map<string, Declaration[]>();
+    for (const group of this.types.values())
+      for (const owner of group) {
+        const pkg = owner.source.file.packageName;
+        const local = pkg ? owner.name.slice(pkg.length + 1) : owner.name;
+        const binaryName = [pkg, local.replace(/\./g, "$")].filter(Boolean).join(".");
+        const matches = identities.get(binaryName) ?? [];
+        matches.push(owner);
+        identities.set(binaryName, matches);
+      }
+    for (const [name, group] of identities) if (group.length === 1) group[0]!.qualifiedName = name;
   }
 
   private find(name: string, owner: Declaration): Declaration | null {
