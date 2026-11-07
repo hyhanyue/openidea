@@ -37,7 +37,7 @@ export async function refresh() {
   pending = request;
   useRuntime.setState({ phase: "connecting", snapshot: null });
   try {
-    // Independent adapter while the unified native build regenerates the shared bindings.
+    // Keep runtime credentials in this Mac process, including in remote-development windows.
     const snapshot = await invokeLocal<Snapshot>("spring_runtime_snapshot", { request, base, ...credentials });
     if (generation === token) useRuntime.setState({ snapshot, phase: "connected" });
   } catch {

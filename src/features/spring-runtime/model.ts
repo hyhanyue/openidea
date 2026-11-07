@@ -1,41 +1,18 @@
+import type {
+  SpringRuntimeRow_Serialize,
+  SpringRuntimeState,
+  SpringRuntimeData_Serialize,
+  SpringRuntimeSnapshot_Serialize,
+} from "@/bindings";
 import { sameClassName } from "./classIdentity";
 import type { EndpointEntry, OpenOptions } from "@/workbench/contributions";
 
 export const endpoints = ["beans", "conditions", "env", "configprops", "mappings"] as const;
 export type Endpoint = (typeof endpoints)[number];
-export interface RuntimeRow {
-  name: string;
-  context: string;
-  detail: string;
-  className?: string;
-  methodName?: string;
-  descriptor?: string;
-  dependencies?: string[];
-  methods?: string[];
-  paths?: string[];
-  outcome?: "matched" | "notMatched" | "unconditional";
-  masked?: boolean;
-}
-export type RuntimeState =
-  | "ok"
-  | "unauthorized"
-  | "forbidden"
-  | "disabled"
-  | "redirect"
-  | "httpError"
-  | "timeout"
-  | "unreachable"
-  | "tooLarge"
-  | "invalidResponse"
-  | "incompatible"
-  | "cancelled";
-export interface RuntimeData {
-  state: RuntimeState;
-  rows: RuntimeRow[];
-  limited?: boolean;
-  status?: number;
-}
-export type Snapshot = Record<Endpoint, RuntimeData>;
+export type RuntimeRow = SpringRuntimeRow_Serialize;
+export type RuntimeState = SpringRuntimeState;
+export type RuntimeData = SpringRuntimeData_Serialize;
+export type Snapshot = SpringRuntimeSnapshot_Serialize;
 export interface SourceTarget {
   path: string;
   selection: OpenOptions["selection"];

@@ -1210,6 +1210,8 @@ export const commands = {
 	ghPrComment: (repo: string | null, number: number, body: string) => typedError<null, IdeError>(__TAURI_INVOKE("gh_pr_comment", { repo, number, body })),
 	/**  Fetches what is missing to diff a pull request locally; returns the revisions to compare. */
 	ghPrPrepareDiff: (repo: string | null, request: RequestId, number: number, headOid: string, baseOid: string, baseRef: string, nameWithOwner: string, onOutput: Channel<string>) => typedError<PrDiffRevisions, IdeError>(__TAURI_INVOKE("gh_pr_prepare_diff", { repo, request, number, headOid, baseOid, baseRef, nameWithOwner, onOutput })),
+	/**  Local-only, ephemeral, sanitized Actuator snapshot; never recorded in HTTP history. */
+	springRuntimeSnapshot: (request: RequestId, base: string, user: string, password: string) => typedError<SpringRuntimeSnapshot_Serialize, IdeError>(__TAURI_INVOKE("spring_runtime_snapshot", { request, base, user, password })),
 	/**  The requests of an `.http` file (gutter run icons, Run All). */
 	httpRequests: (text: string) => __TAURI_INVOKE<HttpRequestBlock[]>("http_requests", { text }),
 	/**  Environment names from the `http-client(.private).env.json` files that apply to `path`. */
@@ -7281,6 +7283,74 @@ export type SpellingSettings = {
 	/**  Custom dictionaries: plain word lists or Hunspell `.dic` files. */
 	customDictionaries?: string[],
 };
+
+export type SpringRuntimeData = SpringRuntimeData_Serialize | SpringRuntimeData_Deserialize;
+
+export type SpringRuntimeData_Deserialize = {
+	state: SpringRuntimeState,
+	rows: SpringRuntimeRow_Deserialize[],
+	limited?: boolean | null,
+	status?: number | null,
+};
+
+export type SpringRuntimeData_Serialize = {
+	state: SpringRuntimeState,
+	rows: SpringRuntimeRow_Serialize[],
+	limited?: boolean | null,
+	status?: number | null,
+};
+
+export type SpringRuntimeOutcome = "matched" | "notMatched" | "unconditional";
+
+export type SpringRuntimeRow = SpringRuntimeRow_Serialize | SpringRuntimeRow_Deserialize;
+
+export type SpringRuntimeRow_Deserialize = {
+	name: string,
+	context: string,
+	detail: string,
+	className?: string | null,
+	methodName?: string | null,
+	descriptor?: string | null,
+	dependencies?: string[] | null,
+	methods?: string[] | null,
+	paths?: string[] | null,
+	outcome?: SpringRuntimeOutcome | null,
+	masked?: boolean | null,
+};
+
+export type SpringRuntimeRow_Serialize = {
+	name: string,
+	context: string,
+	detail: string,
+	className?: string | null,
+	methodName?: string | null,
+	descriptor?: string | null,
+	dependencies?: string[] | null,
+	methods?: string[] | null,
+	paths?: string[] | null,
+	outcome?: SpringRuntimeOutcome | null,
+	masked?: boolean | null,
+};
+
+export type SpringRuntimeSnapshot = SpringRuntimeSnapshot_Serialize | SpringRuntimeSnapshot_Deserialize;
+
+export type SpringRuntimeSnapshot_Deserialize = {
+	beans: SpringRuntimeData_Deserialize,
+	conditions: SpringRuntimeData_Deserialize,
+	env: SpringRuntimeData_Deserialize,
+	configprops: SpringRuntimeData_Deserialize,
+	mappings: SpringRuntimeData_Deserialize,
+};
+
+export type SpringRuntimeSnapshot_Serialize = {
+	beans: SpringRuntimeData_Serialize,
+	conditions: SpringRuntimeData_Serialize,
+	env: SpringRuntimeData_Serialize,
+	configprops: SpringRuntimeData_Serialize,
+	mappings: SpringRuntimeData_Serialize,
+};
+
+export type SpringRuntimeState = "ok" | "unauthorized" | "forbidden" | "disabled" | "redirect" | "httpError" | "timeout" | "unreachable" | "tooLarge" | "invalidResponse" | "incompatible" | "cancelled";
 
 export type SqlStatement = {
 	/**
