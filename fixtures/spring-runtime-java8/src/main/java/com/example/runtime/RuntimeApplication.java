@@ -17,7 +17,11 @@ import org.springframework.web.bind.annotation.RestController;
 @EnableConfigurationProperties(RuntimeApplication.DemoProperties.class)
 @RestController
 public class RuntimeApplication {
-    public static void main(String[] args) { SpringApplication.run(RuntimeApplication.class, args); }
+    public static void main(String[] args) {
+        SpringApplication application = new SpringApplication(RuntimeApplication.class);
+        application.addInitializers(new FixtureSources());
+        application.run(args);
+    }
     @GetMapping("/runtime-fixture")
     public String fixture() { return "fixture"; }
     @Bean

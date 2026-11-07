@@ -43,6 +43,63 @@ fn push(rows: &mut Vec<Value>, row: Value) {
     }
 }
 
+fn metadata_name(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|c| c.is_ascii_alphanumeric() || "._-$".contains(c))
+}
+
+fn local_path(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains("://")
+        && !value.contains("${")
+        && value.chars().all(|c| !c.is_control() && !"@?#=\"'".contains(c))
+}
+
+fn local_resource(value: &str) -> bool {
+    ["class path resource [", "file ["]
+        .iter()
+        .any(|prefix| value.strip_prefix(prefix).and_then(|path| path.strip_suffix(']')).is_some_and(local_path))
+}
+
+fn source_name(value: &str, index: usize) -> String {
+    if matches!(
+        value,
+        "systemProperties"
+            | "systemEnvironment"
+            | "commandLineArgs"
+            | "server.ports"
+            | "random"
+            | "defaultProperties"
+            | "spring.application.json"
+            | "servletContextInitParams"
+            | "servletConfigInitParams"
+    ) {
+        return value.into();
+    }
+    if let Some(url) = value.strip_prefix("configserver:")
+        && let Ok(url) = reqwest::Url::parse(url)
+        && matches!(url.scheme(), "http" | "https")
+    {
+        return format!("configserver:{}", url.origin().ascii_serialization());
+    }
+    if let Some(resource) = value.strip_prefix("Config resource '")
+        && let Some((resource, location)) = resource.split_once("' via location '")
+        && local_resource(resource)
+    {
+        let location = location.strip_suffix('\'').unwrap_or("");
+        let location = location.strip_prefix("optional:").unwrap_or(location);
+        if ["classpath:", "file:"].iter().any(|prefix| location.strip_prefix(prefix).is_some_and(local_path)) {
+            return value.into();
+        }
+        return resource.into();
+    }
+    if let Some(path) = value.strip_prefix("applicationConfig: [").and_then(|path| path.strip_suffix(']'))
+        && ["classpath:", "file:"].iter().any(|prefix| path.strip_prefix(prefix).is_some_and(local_path))
+    {
+        return value.into();
+    }
+    format!("#{index}")
+}
+
 fn keys(rows: &mut Vec<Value>, value: &Value, prefix: &str, context: &str, source: &str) {
     if rows.len() >= MAX_ROWS {
         return;
@@ -76,9 +133,10 @@ pub fn project(endpoint: &str, data: &Value) -> Value {
     if endpoint == "env" {
         if let Some(sources) = data["propertySources"].as_array() {
             recognized = true;
-            for source in sources {
+            for (index, source) in sources.iter().enumerate() {
+                let name = source_name(s(&source["name"]), index + 1);
                 for (key, _) in entries(&source["properties"]) {
-                    push(&mut rows, json!({"name":key,"context":"","detail":s(&source["name"]),"masked":true}));
+                    push(&mut rows, json!({"name":key,"context":"","detail":name,"masked":true}));
                 }
             }
         }
@@ -101,29 +159,39 @@ pub fn project(endpoint: &str, data: &Value) -> Value {
                         if value[field].is_object() {
                             recognized = true;
                         }
-                        for (name, conditions) in entries(&value[field]) {
+                        for (index, (name, conditions)) in entries(&value[field]).enumerate() {
+                            let source = if name.split('#').all(metadata_name) {
+                                name.clone()
+                            } else {
+                                format!("#{}", index + 1)
+                            };
                             let conditions = if conditions.is_array() { conditions } else { &conditions["notMatched"] };
                             let names: Vec<_> = conditions
                                 .as_array()
                                 .into_iter()
                                 .flatten()
                                 .filter_map(|c| c["condition"].as_str())
+                                .filter(|name| metadata_name(name))
                                 .collect();
                             push(
                                 &mut rows,
-                                json!({"name":name,"context":context,"detail":names.join(", "),"outcome":outcome}),
+                                json!({"name":source,"context":context,"detail":names.join(", "),"outcome":outcome}),
                             );
                         }
                     }
-                    for name in strings(&value["unconditionalClasses"]) {
-                        push(&mut rows, json!({"name":name,"context":context,"detail":"","outcome":"unconditional"}));
+                    for (index, name) in strings(&value["unconditionalClasses"]).into_iter().enumerate() {
+                        let source = if metadata_name(name) { name.to_owned() } else { format!("#{}", index + 1) };
+                        push(&mut rows, json!({"name":source,"context":context,"detail":"","outcome":"unconditional"}));
                     }
                 }
                 "configprops" => {
                     if value["beans"].is_object() {
                         recognized = true;
-                        for (name, bean) in entries(&value["beans"]) {
-                            keys(&mut rows, &bean["properties"], s(&bean["prefix"]), context, name);
+                        for (index, (name, bean)) in entries(&value["beans"]).enumerate() {
+                            let source = if metadata_name(name) { name.clone() } else { format!("#{}", index + 1) };
+                            let prefix = s(&bean["prefix"]);
+                            let prefix = if metadata_name(prefix) { prefix } else { "" };
+                            keys(&mut rows, &bean["properties"], prefix, context, &source);
                         }
                     }
                 }
@@ -382,9 +450,52 @@ mod tests {
         assert!(has("conditions", "name", "enabledFixture"));
         assert!(has("conditions", "outcome", "notMatched"));
         assert!(has("env", "name", "fixture.demo.value"));
+        assert!(has("env", "detail", "application.properties"));
         assert!(has("configprops", "name", "fixture.demo.value"));
         assert!(has("mappings", "methodName", "fixture"));
+        for (path, expected_class) in [
+            ("/runtime-child/inherited", "com.example.runtime.base.BaseController"),
+            ("/runtime-nested/inherited", "com.example.runtime.base.BaseController"),
+            ("/runtime-override/override", "com.example.runtime.OverrideController"),
+        ] {
+            let mapping = data["mappings"]["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["paths"].as_array().is_some_and(|paths| paths.iter().any(|p| p == path)))
+                .expect("fixture mapping required");
+            assert_eq!(mapping["className"], expected_class);
+            assert_eq!(mapping["methodName"], "inherited");
+            assert!(mapping["methods"].as_array().unwrap().iter().any(|method| method == "GET"));
+        }
+        assert!(has("beans", "className", "com.example.runtime.NestedFixture$InnerBean"));
+        assert!(has("beans", "className", "com.example.runtime.NestedFixture$InnerController"));
+        let nested = data["mappings"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| {
+                row["paths"].as_array().is_some_and(|paths| paths.iter().any(|p| p == "/runtime-nested/mapping"))
+            })
+            .expect("nested controller mapping required");
+        assert_eq!(nested["className"], "com.example.runtime.NestedFixture.InnerController");
+        assert_eq!(nested["methodName"], "nested");
         assert!(!data.to_string().contains("RUNTIME_TEST_VALUE_MUST_NOT_CROSS_IPC"));
+        assert!(!data.to_string().contains("SYNTHETIC_SOURCE_AUTH_MUST_NOT_CROSS_IPC"));
+        let external = data["env"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "fixture.external-origin")
+            .expect("external source required");
+        assert_eq!(external["detail"], "configserver:https://config.example.test");
+        let programmatic = data["env"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "fixture.programmatic-origin")
+            .expect("programmatic source required");
+        assert!(programmatic["detail"].as_str().unwrap().starts_with('#'));
     }
 }
 
@@ -450,5 +561,62 @@ mod limit_tests {
         });
         assert_eq!(fetch(&runtime_client().unwrap(), url, "beans", "", "", &cancel).await["state"], "cancelled");
         server.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod source_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn sanitizes_external_and_programmatic_sources_without_losing_local_file_origins() {
+        let marker = "SYNTHETIC_SOURCE_AUTH_MUST_NOT_CROSS_IPC";
+        let local =
+            "Config resource 'file [/tmp/runtime/application.properties]' via location 'optional:file:/tmp/runtime/'";
+        let classpath = "Config resource 'class path resource [application.yml]' via location 'optional:classpath:/'";
+        let legacy = "applicationConfig: [classpath:/application.properties]";
+        let names = [
+            format!("configserver:https://user:{marker}@config.example.test/app/path?token={marker}#{marker}"),
+            format!("programmatic value={marker}"),
+            local.into(),
+            classpath.into(),
+            legacy.into(),
+            "systemEnvironment".into(),
+            format!(
+                "Config resource 'class path resource [application.yml]' via location 'https://user:{marker}@example.test/?token={marker}'"
+            ),
+        ];
+        let data = json!({"propertySources": names.iter().map(|name| json!({"name":name,"properties":{"demo.key":{"value":marker}}})).collect::<Vec<_>>()});
+        let projected = project("env", &data);
+        assert!(!projected.to_string().contains(marker));
+        assert_eq!(projected["rows"][0]["detail"], "configserver:https://config.example.test");
+        assert_eq!(projected["rows"][1]["detail"], "#2");
+        assert_eq!(projected["rows"][2]["detail"], local);
+        assert_eq!(projected["rows"][3]["detail"], classpath);
+        assert_eq!(projected["rows"][4]["detail"], legacy);
+        assert_eq!(projected["rows"][5]["detail"], "systemEnvironment");
+        assert_eq!(projected["rows"][6]["detail"], "class path resource [application.yml]");
+    }
+
+    #[test]
+    fn rejects_free_form_non_key_metadata_in_conditions_and_configprops() {
+        let marker = "SYNTHETIC_SOURCE_AUTH_MUST_NOT_CROSS_IPC";
+        let conditions = project(
+            "conditions",
+            &json!({"contexts":{"app":{"positiveMatches":{"Config":[{"condition":format!("user:{marker}@host?token={marker}"),"message":marker}]},"negativeMatches":{}}}}),
+        );
+        let properties = project(
+            "configprops",
+            &json!({"contexts":{"app":{"beans":{format!("bean value={marker}"):{"prefix":format!("https://user:{marker}@host?token={marker}"),"properties":{"safe-key":marker},"inputs":{"safe-key":{"value":marker,"origin":marker}}}}}}}),
+        );
+        let condition_source = project(
+            "conditions",
+            &json!({"contexts":{"app":{"positiveMatches":{format!("https://user:{marker}@host?token={marker}"):[{"condition":"OnBeanCondition"}]}}}}),
+        );
+        assert!(!condition_source.to_string().contains(marker));
+        assert!(!conditions.to_string().contains(marker));
+        assert!(!properties.to_string().contains(marker));
+        assert_eq!(properties["rows"][0]["detail"], "#1");
+        assert_eq!(properties["rows"][0]["name"], "safe-key");
     }
 }

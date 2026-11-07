@@ -14,3 +14,11 @@ chooses unused loopback ports, creates ephemeral credentials only in child-proce
 verifies real Spring Security 401/403 and a disabled env endpoint (404), and stops its children.
 Fixture security is opt-in (`fixture.secured=true`); default security auto-configuration is excluded
 so no generated passwords are logged. No real credentials belong in this fixture.
+
+
+The open fixture also verifies inherited and overridden handler methods, a nested static
+controller (including an inherited method), and nested Beans. Boot 2.7.18 reports the
+method declaration class for an inherited mapping, dotted canonical names for nested
+mapping classes, and dollar binary names for nested Bean types. The verifier asserts the
+actual strings. Synthetic config-server/programmatic source names exercise origin-label
+redaction; they do not connect to an external configuration service.

@@ -14,7 +14,7 @@ Independent Cargo target; no main checkout edits, application launch, release, p
 - Source inspected: https://github.com/spring-projects/spring-tools/tree/main/headless-services/spring-boot-language-server/src/main/java/org/springframework/ide/vscode/boot/java/livehover/v2 (`SpringProcessCommandHandler.java`, `HttpActuatorConnection.java`, `SpringProcessLiveDataExtractorOverHttp.java`, `SpringProcessConnectorRemote.java`).
 - Boot 2.7.18 response contract: https://docs.spring.io/spring-boot/docs/2.7.18/actuator-api/htmlsingle/
 
-Phase 1 commit: `f23b71002adf5724402aff7aef71cafd7c6cd801`. Phase 2 is the following commit on this branch (use `git log -2`).
+Phase 1 commit: `f23b71002adf5724402aff7aef71cafd7c6cd801`. Phase 2 commit: `b0d89de3f40ad92f371ca555609df8e7a2479316`.
 
 ## Phase 1: transport and fixture
 
@@ -42,7 +42,7 @@ Implemented and focused checks complete:
 - Spring Runtime action opens a Services tab. Explicit connection form, optional memory-only Basic authentication, refresh/disconnect, endpoint selector, filter, 100-row paging, context and dependency facts.
 - Disconnect/project switch cancels requests, discards stale responses, clears runtime facts and credentials. Draft credential inputs reset on project changes and clear on disconnect. New IPC stays local even when remote routing exists; remote projects are explicitly rejected by the adapter.
 - Links reuse registered Spring Beans / Bean Graph source tool windows. They are labelled source views and are disabled when unavailable; runtime dependencies are shown from the connected application.
-- Source navigation requires one exact fully qualified Java class in the current project. Mapping navigation additionally reuses the existing HTTP endpoint provider, requiring matching method/path and a unique source position in the same class file. Proxy classes, unknown identities, ambiguous packages/overloads and absent source return an unresolved status instead of jumping.
+- Source navigation requires one exact fully qualified Java class in the current project. Mapping navigation additionally reuses the existing HTTP endpoint provider, requiring matching method/path and a unique source position. Complete controller/declaration metadata permits a parent-file target; older providers retain the same-file rule. Proxy classes, unknown identities, ambiguous packages/overloads and absent source return an unresolved status instead of jumping.
 - All new text in en/zh; CSS Modules use existing design tokens. No protected MVC/route/navigation files changed.
 - Frontend focused tests: 29 passed, 6 pre-existing locale skips; typecheck (all five configurations), knip, lint (existing unrelated warnings only), changed-file format checks and Vite production bundle passed. Final focused tests passed after the last UI edit. `git diff --check` passed.
 
@@ -79,3 +79,85 @@ pnpm build
 Frontend commands were executed using this checkout's `node_modules/.bin/*` tools to avoid pnpm automatically reinstalling shared dependencies. Equivalent typecheck configurations were executed individually; `vite build` plus the typechecks covers `pnpm build`. `pnpm format:check` was scoped to changed frontend files; full Rust formatting passed. Full app/workspace Rust checks and UI e2e were not run. Existing unrelated React lint and Vite chunk/dynamic-import warnings remain outside this task's scope.
 
 Only code, fixture source and this report are committed. No fixture jars, logs, dependency caches, raw Actuator responses, screenshots or credentials are included. Native compilation and generated bindings remain explicit integration work, not a tested claim.
+
+## Follow-up: MVC metadata, nested names, and source-name redaction
+
+Follow-up implementation completed after integration review. Runtime consumes optional
+`qualifiedController?: string` and `declaringClass?: string` through a local structural
+extension of `EndpointEntry`; MVC owns the actual contribution interface and provider
+population. No workbench/MVC source files are edited here. Complete metadata plus exact
+project symbols and a unique method/verb/path permits navigation to the declaration in a
+parent Java file. Missing metadata retains the same-file fallback. Contradictory identities,
+multiple candidates, proxy names and external/unknown source stay unresolved.
+
+JVM binary nested names are compared with Java source nested names only after raw FQN
+matching. Normalization does not rewrite dollar signs in package segments, and ambiguous
+normalized identities remain unresolved. A runtime role must also resolve to the same
+exact class location as its MVC controller or declaration metadata.
+
+Fixture additions: inherited BaseController method, overridden controller method, nested
+static controller and nested Bean. Real Actuator class-name checks and source-name
+redaction regression tests passed. Source names now use an allowlist: ordinary local
+file sources are retained, known config-server URLs show a safe origin, and unknown
+programmatic names use an index. Configprops bean/prefix and condition-name metadata
+reject free-form URI/message text; configuration values/input origins remain omitted.
+
+
+### Observed Java 8 / Boot 2.7.18 identities
+
+| Fixture mapping / bean | Actual runtime identity | MVC metadata / target |
+| --- | --- | --- |
+| GET `/runtime-child/inherited` | mappings `com.example.runtime.base.BaseController` | controller `com.example.runtime.ChildController`, declaration `com.example.runtime.base.BaseController`, target `base/BaseController.java` |
+| GET `/runtime-nested/inherited` | mappings `com.example.runtime.base.BaseController` | controller `com.example.runtime.NestedFixture.InnerController`, declaration BaseController, target `base/BaseController.java` |
+| GET `/runtime-override/override` | mappings `com.example.runtime.OverrideController` | controller and declaration OverrideController, target `OverrideController.java` |
+| GET `/runtime-nested/mapping` | mappings `com.example.runtime.NestedFixture.InnerController` | source FQN `com.example.runtime.NestedFixture.InnerController`, target `NestedFixture.java` |
+| Nested controller and Bean | beans `com.example.runtime.NestedFixture$InnerController` / `NestedFixture$InnerBean` | canonical source nested FQN, unique class position in `NestedFixture.java` |
+
+Boot 2.7.18 actually uses canonical dotted names for these nested **mapping** className
+fields, and binary dollar names for the **beans** type fields. Both were asserted from the
+real responses; no assumption that mappings must return a dollar name is made. Unit tests
+also cover a mapping response using a binary nested name and a runtime handler reporting
+the controller FQN instead of the declaration FQN.
+
+### Follow-up verification
+
+- Frontend/navigation/text catalog: **40 passed**, 6 existing locale skips. Tests include
+  both inherited handler class identities, nested controller inheritance, raw FQN priority,
+  ambiguous normalized symbols, package dollar names, same-name/different-package classes,
+  multiple provider identities/targets, incomplete metadata fallback, unrelated files,
+  proxies and unknown/library classes. Bare or relative symbol names never bypass their
+  reported package/container identity.
+- Full ide-http module suite: **31 passed**, 2 fixture-only tests ignored in the default
+  run. Both ignored fixture tests explicitly passed via `verify.py` after the final changes.
+- The live fixture also adds synthetic external and programmatic property-source names.
+  Userinfo/query authentication markers never appear in projected IPC; config-server
+  detail is its scheme/host origin, unknown source detail is an index. Actual local
+  `application.properties` source detail remains available. Condition source/condition/
+  unconditional-class strings and configprops bean/prefix identifiers are constrained;
+  free-form URI/message metadata is omitted/indexed. Input value/origin/message fields
+  remain excluded.
+- Java 8 offline Maven package, typecheck, targeted lint/format, knip and frontend Vite build
+  passed. Final `cargo clippy -p ide-http --all-targets --offline -- -D warnings` and `cargo fmt --all --check` passed.
+
+### Integration scenarios for the main session
+
+1. Integrate the MVC contribution fields exactly as optional strings. `qualifiedController`
+   identifies the actual mapped controller source FQN; `declaringClass` identifies the
+   method owner represented by path/line/col. No required fields were added by Runtime,
+   and no other feature/provider files were changed here.
+2. With both contributions present, connect the Java 8 fixture and locate the inherited
+   method from ChildController and from the nested controller. Both should open the
+   actual declaration in `base/BaseController.java`, with existing UTF-16 coordinates.
+3. Locate the nested controller mapping and nested Beans; verify the correct class or
+   method position in `NestedFixture.java`. Same-name classes in another package, duplicate
+   normalized candidates and `$$`/JDK proxy names must remain unresolved. Raw exact FQN
+   matches take priority over normalized aliases.
+4. Repeat with either metadata field absent: parent-file navigation must remain unresolved,
+   while the legacy unambiguous same-file mapping still opens. Verify no source jump for
+   external/unknown declaration or controller identities.
+5. The fixture's external/programmatic property sources must show only safe origin/index,
+   no synthetic authentication marker; ordinary local source detail remains visible.
+
+Native compilation, generated bindings and macOS GUI/end-to-end acceptance remain pending
+for unified integration, unchanged from the original delivery. No GUI screenshots or
+native navigation acceptance are claimed by the fixture/module checks.
