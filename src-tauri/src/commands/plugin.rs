@@ -76,12 +76,11 @@ fn schedule_remote_sync(app: &AppHandle) {
 /// Creates the host over `<app-data>/plugins` and loads installed plugins in
 /// the background (no Wasm is instantiated until an activation event).
 pub fn create_host(app: &AppHandle, data_dir: &Path, project_host: &Arc<ide_host::Host>) -> IdeResult<Arc<PluginHost>> {
-    if let Ok(resources) = app.path().resource_dir() {
-        if let Err(error) =
+    if let Ok(resources) = app.path().resource_dir()
+        && let Err(error) =
             ide_host::fork_defaults::bind_resources(&project_host.local_data_dir, &resources.join("fork-defaults"))
-        {
-            tracing::warn!(%error, "cannot bind fork resources");
-        }
+    {
+        tracing::warn!(%error, "cannot bind fork resources");
     }
     let projects = Arc::downgrade(project_host);
     let app = app.clone();
