@@ -32,8 +32,19 @@ MyBatis `@Mapper` interfaces. An ambiguous gutter has no arbitrary first target;
 Go to Definition lists the candidates. Optional/provider/collection injections,
 library types and profile/condition-dependent candidates are not diagnosed.
 This is a conservative source index, not a complete Spring application context:
-programmatic registration, component scan boundaries, generic type arguments and
-auto-configuration can require runtime verification.
+programmatic registration, component scan boundaries and auto-configuration can
+require runtime verification.
+
+Concrete Java generic qualifiers now narrow candidates before primary/name
+selection, including `@Bean` return types, nested arguments and substitutions
+through project-defined generic superclasses/interfaces. Collections and
+providers use the same generic candidates as navigation, reverse references and
+the dependency graph. Explicitly imported or qualified argument names are
+preserved. Raw types, wildcards, unresolved variables and unavailable library
+hierarchy retain uncertain candidates and suppress resolution warnings; they do
+not implement Spring's complete runtime fallback/type inference. Kotlin and XML
+generic inference is unchanged. See `docs/spring-boot-parity-java8.md` in the
+source repository for verified cases and remaining parity gaps.
 
 The checked-in Spring gutter icons are independently drawn. The local Mac
 preview can substitute original assets from the user's IDEA installation; those

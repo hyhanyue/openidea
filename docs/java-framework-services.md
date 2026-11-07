@@ -137,9 +137,12 @@ list multiple candidates. Optional, provider and collection injection, library
 types, and profile/condition-dependent cases are excluded from these warnings.
 `springBeans.checkInjectionResolution` controls this new check.
 
-This source scanner is not a complete Spring context evaluator: generic type
-arguments, component-scan boundaries, programmatic registration and conditional
-auto-configuration need further work. It reports project-index warnings, not
+The Java source scanner now resolves concrete generic qualifiers, including
+project-defined inheritance substitutions and factory return signatures; see
+[specific checks and limits](spring-boot-parity-java8.md). It is not a complete
+Spring context evaluator: wildcard/raw fallback inference, component-scan
+boundaries, programmatic registration and conditional auto-configuration need
+further work. It reports project-index warnings, not
 proof that a runtime application will fail.
 
 The Mac setup keeps IntelliJ for Java and JDT for run/debug plus Spring's Java

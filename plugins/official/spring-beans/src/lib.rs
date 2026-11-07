@@ -7,6 +7,7 @@
 mod annotation_checks;
 mod aop;
 mod checks;
+mod generics;
 mod injection_checks;
 mod kotlin;
 mod kotlin_build;
@@ -43,6 +44,7 @@ const MAX_CLASSES: usize = 200;
 /// The project's models, with the type hierarchy for lookups.
 struct World<'a> {
     files: &'a BTreeMap<String, FileModel>,
+    generics: generics::Index<'a>,
     supers: BTreeMap<&'a str, Vec<&'a str>>,
     /// Every file has been read at least once.
     complete: bool,
@@ -58,7 +60,12 @@ impl<'a> World<'a> {
                 supers.entry(&t.name).or_default().extend(t.supers.iter().map(String::as_str));
             }
         }
-        Self { files: index.files(), supers, complete: index.complete() }
+        Self {
+            files: index.files(),
+            generics: generics::Index::new(index.files().values()),
+            supers,
+            complete: index.complete(),
+        }
     }
 
     fn beans(&self) -> impl Iterator<Item = Found<'a>> + '_ {
@@ -96,10 +103,14 @@ impl<'a> World<'a> {
                 !b.is_abstract
                     && !b.ty.is_empty()
                     && self.is_a(&b.ty, &inj.ty)
+                    && self.generics.matching(inj, b) != generics::Match::No
                     && inj.qualifier.as_ref().is_none_or(|q| b.answers_to(q))
             })
             .collect();
-        if inj.multiple || typed.len() < 2 {
+        if inj.multiple
+            || typed.len() < 2
+            || typed.iter().any(|(_, b)| self.generics.matching(inj, b) == generics::Match::Unknown)
+        {
             return typed;
         }
         let primary: Vec<Found> = typed.iter().copied().filter(|(_, b)| b.primary).collect();

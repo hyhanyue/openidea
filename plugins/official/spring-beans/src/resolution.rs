@@ -16,7 +16,13 @@ pub(super) fn problems(path: &str, world: &World, file: &spring_text::java::Java
     let mut out = Vec::new();
     for inj in &model.injections {
         let Some(owner) = inj.owner.and_then(|i| model.beans.get(i)) else { continue };
-        if inj.multiple || inj.optional || inj.ty.is_empty() || owner.conditional || !owner.profiles.is_empty() {
+        if inj.multiple
+            || inj.optional
+            || inj.ty.is_empty()
+            || owner.conditional
+            || !owner.profiles.is_empty()
+            || world.generics.uncertain(inj)
+        {
             continue;
         }
         // Never diagnose library/auto-configuration types or ambiguous simple type names.
@@ -32,13 +38,17 @@ pub(super) fn problems(path: &str, world: &World, file: &spring_text::java::Java
         if possible.iter().any(|(_, b)| b.conditional || !b.profiles.is_empty()) {
             continue;
         }
+        if possible.iter().any(|(_, b)| world.generics.matching(inj, b) == crate::generics::Match::Unknown) {
+            continue;
+        }
+        let display_type = model.generics.label(inj.range).unwrap_or_else(|| inj.ty.clone());
         let found = world.candidates(inj);
         let (code, message) = match found.len() {
             0 => (
                 "missing-bean",
                 format!(
                     "No project Bean matches '{}'{}; check its registration or qualifier. Library and programmatic registrations are not indexed.",
-                    inj.ty,
+                    display_type,
                     inj.qualifier.as_ref().map_or(String::new(), |q| format!(" with qualifier '{q}'"))
                 ),
             ),
@@ -47,7 +57,7 @@ pub(super) fn problems(path: &str, world: &World, file: &spring_text::java::Java
                 "ambiguous-bean",
                 format!(
                     "Multiple project Beans match '{}': {}. Select one with @Qualifier or @Primary.",
-                    inj.ty,
+                    display_type,
                     found.iter().map(|(_, b)| b.name.as_str()).collect::<Vec<_>>().join(", ")
                 ),
             ),

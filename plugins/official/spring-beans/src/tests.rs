@@ -2555,3 +2555,223 @@ fn saved_kotlin_file_publishes_field_injection() {
     Navigator::default().handle_events(&[Event::FileSaved(path.into())], &host.invocation());
     assert!(host.diagnostics()[path].iter().any(|d| d.code.as_deref() == Some("field-injection")));
 }
+
+#[test]
+fn generic_qualifiers_filter_before_primary_and_name() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
+    host.add_file(
+        "src/main/java/com/acme/TextStore.java",
+        "package com.acme; @Service class TextStore implements Store<String> {}",
+    );
+    host.add_file(
+        "src/main/java/com/acme/NumberStore.java",
+        "package com.acme; @Service @Primary class NumberStore implements Store<Integer> {}",
+    );
+    let text = "package com.acme; @Service class Client { Client(Store<String> numberStore) {} }";
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Store", 1))[0].0, "TextStore.java");
+    let list = text.replace("Store<String>", "List<Store<String>>");
+    assert_eq!(
+        n_definition(&mut n, &java("Client.java", &list), after(&list, "Store", 1))
+            .iter()
+            .map(|x| x.0)
+            .collect::<Vec<_>>(),
+        ["TextStore.java"]
+    );
+}
+
+#[test]
+fn generic_factory_signatures_and_wrappers_share_navigation_candidates() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
+    host.add_file("src/main/java/com/acme/Config.java", "package com.acme; @Configuration class Config { @Bean Store<String> text() { return null; } @Bean @Primary Store<Integer> number() { return null; } }");
+    let mut n = Navigator::default();
+    for ty in [
+        "Store<String>",
+        "List<Store<String>>",
+        "Map<String, Store<String>>",
+        "Store<String>[]",
+        "Optional<Store<String>>",
+        "ObjectProvider<Store<String>>",
+    ] {
+        let text = format!("package com.acme; @Service class Client {{ Client({ty} number) {{}} }}");
+        assert!(findings(&host, &mut n, "Client.java", &text).is_empty(), "{ty}");
+        let found = n_definition(&mut n, &java("Client.java", &text), after(&text, "Store", 1));
+        assert_eq!(found.len(), 1, "{ty}: {found:?}");
+        assert_eq!(found[0].0, "Config.java");
+        let locations = n.definition(&java("Client.java", &text), after(&text, "Store", 1));
+        assert_eq!(locations[0].range.start.character, 68);
+    }
+}
+
+#[test]
+fn generic_arguments_substitute_through_nested_multilevel_hierarchy() {
+    let host = MockHost::install();
+    for (name, source) in [
+        ("Store", "interface Store<T> {}"),
+        ("Base", "abstract class Base<T> implements Store<java.util.List<T>> {}"),
+        ("Middle", "abstract class Middle<U> extends Base<U> {}"),
+        ("TextStore", "@Service class TextStore extends Middle<String> {}"),
+        ("NumberStore", "@Service @Primary class NumberStore extends Middle<Integer> {}"),
+    ] {
+        host.add_file(&format!("src/main/java/com/acme/{name}.java"), &format!("package com.acme; {source}"));
+    }
+    let text =
+        "package com.acme; import java.util.List; @Service class Client { Client(Store<List<String>> numberStore) {} }";
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Store", 1))[0].0, "TextStore.java");
+    let markers =
+        n.line_markers(&java("TextStore.java", "package com.acme; @Service class TextStore extends Middle<String> {}"));
+    assert!(markers.iter().any(|m| m.tooltip.contains("client")));
+    let markers = n.line_markers(&java(
+        "NumberStore.java",
+        "package com.acme; @Service @Primary class NumberStore extends Middle<Integer> {}",
+    ));
+    assert!(!markers.iter().any(|m| m.tooltip.contains("client")));
+}
+
+#[test]
+fn concrete_generic_missing_and_ambiguous_injections_are_reported() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
+    host.add_file(
+        "src/main/java/com/acme/One.java",
+        "package com.acme; @Service class One implements Store<String> {}",
+    );
+    host.add_file(
+        "src/main/java/com/acme/Two.java",
+        "package com.acme; @Service class Two implements Store<String> {}",
+    );
+    let mut n = Navigator::default();
+    let text = "package com.acme; @Service class Client { Client(Store<String> store) {} }";
+    let found = findings(&host, &mut n, "Client.java", text);
+    assert!(found.iter().any(|(code, message)| code == "ambiguous-bean" && message == "Store"));
+    let text = text.replace("String", "Integer");
+    let found = findings(&host, &mut n, "Client.java", &text);
+    assert!(found.iter().any(|(code, message)| code == "missing-bean" && message == "Store"));
+    let text = "package com.acme; @Service class Client { Client(@Qualifier(\"two\") Store<String> store) {} }";
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Store", 1))[0].0, "Two.java");
+}
+
+#[test]
+fn raw_wildcard_and_unresolved_generic_candidates_stay_conservative() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
+    host.add_file("src/main/java/com/acme/Config.java", "package com.acme; @Configuration class Config { @Bean Store<String> text() { return null; } @Bean @Primary <T> Store<T> unresolved() { return null; } }");
+    let mut n = Navigator::default();
+    for ty in ["Store<String>", "Store<?>", "Store<? extends Number>", "Store<? super Integer>"] {
+        let text = format!("package com.acme; @Service class Client {{ Client({ty} store) {{}} }}");
+        assert!(findings(&host, &mut n, "Client.java", &text).is_empty(), "{ty}");
+        assert_eq!(n_definition(&mut n, &java("Client.java", &text), after(&text, "Store", 1)).len(), 2, "{ty}");
+    }
+    host.add_file("src/main/java/com/acme/Config.java", "package com.acme; @Configuration class Config { @Bean Store<String> text() { return null; } @Bean @Primary Store raw() { return null; } }");
+    n.indexes.reset();
+    let text = "package com.acme; @Service class Client { Client(Store<String> store) {} }";
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Store", 1)).len(), 2);
+}
+
+#[test]
+fn generic_argument_imports_distinguish_same_simple_name() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
+    host.add_file(
+        "src/main/java/com/acme/One.java",
+        "package com.acme; import first.User; @Service class One implements Store<User> {}",
+    );
+    host.add_file(
+        "src/main/java/com/acme/Two.java",
+        "package com.acme; import second.User; @Service @Primary class Two implements Store<User> {}",
+    );
+    let text = "package com.acme; import first.User; @Service class Client { Client(Store<User> store) {} }";
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Store", 1))[0].0, "One.java");
+}
+
+#[test]
+fn unresolved_generic_target_without_candidates_is_not_diagnosed() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
+    let mut n = Navigator::default();
+    for source in [
+        "package com.acme; @Service class Client<T> { Client(Store<T> store) {} }",
+        "package com.acme; @Service class Client { @Autowired <T> void set(Store<T> store) {} }",
+        "package com.acme; @Service class Client { Client(Store<?> store) {} }",
+    ] {
+        assert!(findings(&host, &mut n, "Client.java", source).is_empty(), "{source}");
+    }
+}
+
+#[test]
+fn generic_array_arguments_and_parameter_order_are_preserved() {
+    let host = MockHost::install();
+    for (name, source) in [
+        ("Pair", "interface Pair<A, B> {}"),
+        ("Base", "abstract class Base<A, B> implements Pair<B, A> {}"),
+        ("One", "@Service class One extends Base<Integer, String[]> {}"),
+        ("Two", "@Service @Primary class Two extends Base<String[], Integer> {}"),
+    ] {
+        host.add_file(&format!("src/main/java/com/acme/{name}.java"), &format!("package com.acme; {source}"));
+    }
+    let source = "package com.acme; @Service class Client { Client(Pair<String[], Integer> two) {} }";
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", source).is_empty());
+    assert_eq!(n_definition(&mut n, &java("Client.java", source), after(source, "Pair", 1))[0].0, "One.java");
+}
+
+#[test]
+fn generic_array_dimensions_do_not_turn_single_injection_into_collection() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
+    host.add_file(
+        "src/main/java/com/acme/One.java",
+        "package com.acme; @Service class One implements Store<String[]> {}",
+    );
+    host.add_file(
+        "src/main/java/com/acme/Two.java",
+        "package com.acme; @Service @Primary class Two implements Store<String[][]> {}",
+    );
+    let text = "package com.acme; @Service class Client { Client(Store<String[]> store) {} }";
+    assert!(!parse("Client.java", text).unwrap().injections[0].multiple);
+    let mut n = Navigator::default();
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Store", 1))[0].0, "One.java");
+    let missing = text.replace("String[]", "Long[]");
+    assert!(findings(&host, &mut n, "Client.java", &missing).iter().any(|(code, _)| code == "missing-bean"));
+}
+
+#[test]
+fn unsupported_wildcard_argument_imports_do_not_report_false_missing_beans() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
+    host.add_file(
+        "src/main/java/com/acme/One.java",
+        "package com.acme; import first.*; @Service class One implements Store<User> {}",
+    );
+    let text = "package com.acme; import first.User; @Service class Client { Client(Store<User> store) {} }";
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Store", 1))[0].0, "One.java");
+}
+
+#[test]
+fn nested_raw_generic_arguments_remain_uncertain() {
+    let host = MockHost::install();
+    host.add_file("src/main/java/com/acme/Store.java", "package com.acme; interface Store<T> {}");
+    host.add_file(
+        "src/main/java/com/acme/One.java",
+        "package com.acme; @Service class One implements Store<java.util.List<String>> {}",
+    );
+    host.add_file(
+        "src/main/java/com/acme/Two.java",
+        "package com.acme; @Service @Primary class Two implements Store<java.util.List<Integer>> {}",
+    );
+    let text = "package com.acme; @Service class Client { Client(Store<java.util.List> store) {} }";
+    let mut n = Navigator::default();
+    assert!(findings(&host, &mut n, "Client.java", text).is_empty());
+    assert_eq!(n_definition(&mut n, &java("Client.java", text), after(text, "Store", 1)).len(), 2);
+}

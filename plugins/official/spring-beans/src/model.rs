@@ -108,6 +108,7 @@ pub struct Pointcut {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileModel {
+    pub generics: crate::generics::Model,
     pub beans: Vec<Bean>,
     pub injections: Vec<Injection>,
     pub types: Vec<TypeInfo>,
@@ -139,8 +140,8 @@ fn values(annotations: &[Annotation], names: &[&str]) -> Vec<String> {
 }
 
 /// The type an injection point of type `ty` asks for, and whether it takes every candidate.
-fn unwrap(ty: &TypeRef) -> (&TypeRef, bool) {
-    if ty.array {
+pub(super) fn unwrap(ty: &TypeRef) -> (&TypeRef, bool) {
+    if crate::generics::array_dimensions(ty) > 0 {
         return (ty, true);
     }
     match ty.args.last() {
@@ -362,6 +363,7 @@ fn java_model(text: &str) -> FileModel {
             }
         }
     }
+    out.generics = crate::generics::Model::java(text, &file, &out);
     out
 }
 
