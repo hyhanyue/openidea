@@ -8,6 +8,9 @@
     <delegateCommandHandler class="ai.openidea.build.BuildCommand">
       <command id="openidea.java.build"/>
     </delegateCommandHandler>
+    <delegateCommandHandler class="ai.openidea.usages.CoveredFilesCommand">
+      <command id="openidea.workspace.coveredFiles"/>
+    </delegateCommandHandler>
     <delegateCommandHandler class="ai.openidea.usages.UsagesCommand">
       <command id="openidea.java.usages"/>
     </delegateCommandHandler>

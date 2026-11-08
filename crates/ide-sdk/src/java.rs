@@ -438,6 +438,12 @@ pub fn configure_jdtls(
         // Eclipse retains registered VMs in the workspace even after they disappear from
         // initialization options. A removed or unusable runtime must not carry over.
         key.push_str(&format!("-runtimes-{}", text_key(&json!(runtimes).to_string())));
+        if let Some(output) = cfg.settings.as_ref().and_then(|s| s.pointer("/java/project/outputPath")) {
+            key.push_str(&format!("-out-{}", text_key(&output.to_string())));
+        }
+        if let Some(libs) = cfg.settings.as_ref().and_then(|s| s.pointer("/java/project/referencedLibraries")) {
+            key.push_str(&format!("-libs-{}", text_key(&libs.to_string())));
+        }
         let dir = data_dir.join("lsp").join("jdtls").join(key);
         cfg.args.extend(["-data".to_owned(), dir.to_string_lossy().into_owned()]);
     }
@@ -788,6 +794,17 @@ mod tests {
         settings.languages.java.jdk = "jdks/bad8".into();
         let err = crate::apply::jdtls_project_jdk(root, &settings).unwrap_err();
         assert!(err.contains("Project JDK") && err.contains("bad8/bin/java -version"), "{err}");
+
+        settings.project_structure.modules.insert(
+            "module".into(),
+            ide_core::settings::ModuleStructureSettings { jdk: "jdks/good8".into(), ..Default::default() },
+        );
+        let module = root.join("module");
+        std::fs::create_dir_all(&module).unwrap();
+        let selected = crate::apply::jdtls_module_jdk(root, &module, &settings).unwrap().unwrap();
+        assert_eq!(selected, jdks[0], "the valid module SDK overrides the broken project SDK");
+        settings.project_structure.modules.get_mut("module").unwrap().jdk = "jdks/bad8".into();
+        assert!(crate::apply::jdtls_module_jdk(root, &module, &settings).unwrap_err().contains("bad8/bin/java"));
 
         std::fs::remove_dir_all(&good.home).unwrap();
         rescan_jdks();
@@ -1296,7 +1313,7 @@ mod kotlin_bridge_bundle_tests {
 
 /// Installs the app-owned JDT LS command bundle, falling back to ordinary LSP on IO failure.
 pub fn usages_bundle(data_dir: &Path) -> Option<PathBuf> {
-    let extension = data_dir.join("java-usages-1.10.0.jar");
+    let extension = data_dir.join("java-usages-1.11.0.jar");
     let bytes = include_bytes!("../../../java/java-usages/openidea-java-usages.jar");
     if std::fs::read(&extension).is_ok_and(|old| old == bytes) {
         clean_usages_bundles(data_dir, &extension);

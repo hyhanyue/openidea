@@ -58,6 +58,9 @@ const ICONS = {
   "gradle-project": "gradle/gradle",
   "gradle-module": "gradle/gradleSubproject",
   "spring-boot": "openidea/runConfigurations/springBoot",
+  tomcat: "openidea/runConfigurations/tomcat",
+  server: "openidea/runConfigurations/tomcat",
+  visualgc: "openidea/runConfigurations/visualgc",
   file: "fileTypes/text",
   "file-unknown": "fileTypes/unknown",
   "file-code": "fileTypes/anyType",
@@ -65,6 +68,7 @@ const ICONS = {
   "file-json": "fileTypes/json",
   "file-md": "fileTypes/markdown",
   "file-image": "fileTypes/image",
+  paperclip: "openidea/general/paperclip",
   "file-config": "fileTypes/config",
   "file-python": "fileTypes/python",
   "file-jupyter": "fileTypes/jupyter",
@@ -226,6 +230,7 @@ const ICONS = {
   "search-history": "inline/searchHistory",
   filter: "general/filter",
   refresh: "general/refresh",
+  quote: "openidea/general/quote",
   settings: "general/settings",
   help: "openidea/general/help",
   "page-first": "openidea/general/pageFirst",
@@ -249,6 +254,9 @@ const ICONS = {
   "window-maximize": "openidea/general/windowMaximize",
   "window-restore": "openidea/general/windowRestore",
   "window-close": "openidea/general/windowClose",
+  "mac-window-close": "openidea/general/macWindowClose",
+  "mac-window-minimize": "openidea/general/macWindowMinimize",
+  "mac-window-exit-full-screen": "openidea/general/macWindowExitFullScreen",
   hide: "general/hide",
   pin: "general/pin",
   eye: "general/show",
@@ -577,8 +585,11 @@ function iconPath(name: string): string | undefined {
   const themed = fileIconTheme?.icon?.(name);
   if (themed && EXTERNAL.has(themed)) return themed;
   if (name.startsWith(EXTERNAL_PREFIX)) return EXTERNAL.has(name) ? name : undefined;
-  if (name.startsWith("symbol-")) return SYMBOL_ICONS[name.slice(7) as SymbolKind];
-  return (ICONS as Record<string, string>)[name];
+  if (name.startsWith("symbol-")) {
+    const kind = name.slice(7);
+    return Object.hasOwn(SYMBOL_ICONS, kind) ? SYMBOL_ICONS[kind as SymbolKind] : undefined;
+  }
+  return Object.hasOwn(ICONS, name) ? (ICONS as Record<string, string>)[name] : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,7 +1014,7 @@ const EXT_ICONS = table({
   "file-perl": "pl pm pod psgi cgi",
   "file-c": "c",
   "file-h": "h hpp hh hxx h++",
-  "file-cpp": "cpp cc cxx c++ ipp tpp inl ixx cppm",
+  "file-cpp": "cpp cc cxx c++ ipp tpp inl ixx cppm ino",
   "file-objc": "m",
   "file-objcpp": "mm",
   "file-csharp": "cs csx",

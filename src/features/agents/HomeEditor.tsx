@@ -11,11 +11,21 @@ import { defaultTaskProject } from "./project";
 import { maybeEditorService, type EditorInput } from "@/workbench/contributions";
 import { Composer } from "./Composer";
 import { SubmitButton } from "./SubmitButton";
-import { canSend, draftSettings, emptyDraft } from "./composerModel";
+import { canSend, emptyDraft } from "./composerModel";
 import { ConfigPickers } from "./ConfigPickers";
 import { providerIcon } from "./model";
 import { ADD_AGENT, providerOptions as agentOptions } from "./providerOptions";
-import { HOME, NO_COMMANDS, refreshProviders, startTask, updateDraft, useAgentCommands, useAgents } from "./store";
+import {
+  HOME,
+  NO_COMMANDS,
+  draftConfig,
+  refreshProviders,
+  setDraftOption,
+  startTask,
+  updateDraft,
+  useAgentCommands,
+  useAgents,
+} from "./store";
 import styles from "./Home.module.css";
 
 export function HomeEditor({ docked = false }: { docked?: boolean; input?: EditorInput }) {
@@ -67,7 +77,6 @@ export function HomeEditor({ docked = false }: { docked?: boolean; input?: Edito
   }, [root, project?.workspace]);
 
   const provider = providers.find((p) => p.id === draft.provider) ?? providers[0];
-  const settings = draftSettings(provider?.config ?? [], draft.config);
   const probe = useProbe(provider?.installed ? provider.id : null, provider?.command);
   const agentCommands = useAgentCommands(provider?.id, null, provider?.commands ?? NO_COMMANDS);
   const providerOptions: SelectOption[] = agentOptions(providers, tx, providerIcon);
@@ -86,10 +95,7 @@ export function HomeEditor({ docked = false }: { docked?: boolean; input?: Edito
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setStarting(false));
   };
-  const setOption = (id: string, value: string) => {
-    const values = { ...settings.values, [id]: value };
-    updateDraft({ config: draftSettings(provider?.config ?? [], values).values });
-  };
+  const config = draftConfig(provider, draft);
 
   return (
     <div className={clsx(styles.home, docked && styles.docked)}>
@@ -99,45 +105,7 @@ export function HomeEditor({ docked = false }: { docked?: boolean; input?: Edito
             <T>What should the agent do?</T>
           </h1>
         )}
-        <Composer
-          id={HOME}
-          autoFocus
-          placeholder={
-            docked
-              ? "Describe a task…"
-              : "Describe a task for the agent. @ references a file or folder, / runs a command"
-          }
-          root={root}
-          projectRoot={root}
-          commands={agentCommands}
-          history={history}
-          config={settings.config}
-          onConfig={setOption}
-          onSubmit={start}
-          disabled={!canStart}
-          toolbar={
-            <>
-              <Select
-                variant="ghost"
-                aria-label="Agent"
-                value={provider?.id ?? null}
-                options={providerOptions}
-                onChange={(id) =>
-                  id === ADD_AGENT ? void executeAction("agents.addAgent") : updateDraft({ provider: id, config: {} })
-                }
-              />
-              <ConfigPickers config={settings.config} values={settings.values} onChange={setOption} />
-            </>
-          }
-          actions={
-            <SubmitButton
-              label={starting ? "Starting…" : "Start"}
-              pending={starting}
-              disabled={!canStart}
-              onClick={start}
-            />
-          }
-        />
+        {/* Above the box, like the running session's state line. */}
         <div className={styles.where}>
           {members.length > 1 ? (
             <Select
@@ -206,6 +174,45 @@ export function HomeEditor({ docked = false }: { docked?: boolean; input?: Edito
             </>
           )}
         </div>
+        <Composer
+          id={HOME}
+          autoFocus
+          placeholder={
+            docked
+              ? "Describe a task…"
+              : "Describe a task for the agent. @ references a file or folder, / runs a command"
+          }
+          root={root}
+          projectRoot={root}
+          commands={agentCommands}
+          history={history}
+          config={config}
+          onConfig={setDraftOption}
+          onSubmit={start}
+          disabled={!canStart}
+          toolbar={
+            <>
+              <Select
+                variant="ghost"
+                aria-label="Agent"
+                value={provider?.id ?? null}
+                options={providerOptions}
+                onChange={(id) =>
+                  id === ADD_AGENT ? void executeAction("agents.addAgent") : updateDraft({ provider: id, config: {} })
+                }
+              />
+              <ConfigPickers config={config} onChange={setDraftOption} />
+            </>
+          }
+          actions={
+            <SubmitButton
+              label={starting ? "Starting…" : "Start"}
+              pending={starting}
+              disabled={!canStart}
+              onClick={start}
+            />
+          }
+        />
         {probe && (!docked || probe.error) && (
           <p className={probe.error ? styles.warning : styles.note}>
             {probe.error
