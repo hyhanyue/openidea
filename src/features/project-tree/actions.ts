@@ -156,7 +156,8 @@ export function registerProjectActions(): () => void {
     id,
     title,
     category: "Project View",
-    when: OPEN,
+    when: "projectOpen || textEditorActive",
+    keyWhen: FOCUS,
     keywords: ["path", "clipboard"],
     run: ({ arg }) => copyPaths(kind, nodesFrom(arg)),
   });
@@ -165,7 +166,8 @@ export function registerProjectActions(): () => void {
     id: `project.option.${key}`,
     title: tx`Project View: ${label}`,
     category: "View",
-    keywords: ["project", "tree", "toggle"],
+    // IDEA's former name of Always Select Opened File.
+    keywords: ["project", "tree", "toggle", ...(key === "autoscrollFromSource" ? ["autoscroll from source"] : [])],
     toggled: () => useProjectTree.getState().options[key],
     run: () => setViewOption(key, !useProjectTree.getState().options[key]),
   }));
@@ -382,6 +384,7 @@ export function registerProjectActions(): () => void {
     copyPath("absolute", "project.copyAbsolutePath", "Copy Absolute Path"),
     copyPath("relative", "project.copyRelativePath", "Copy Path From Content Root"),
     copyPath("name", "project.copyFileName", "Copy File Name"),
+    copyPath("source", "project.copySourceRootPath", "Copy Path From Source Root"),
     {
       id: "project.revealInFinder",
       title: tx`Reveal in ${revealLabel()}`,

@@ -88,23 +88,32 @@ function pytestArgs(base: string[], paths: string[][]): string[] | null {
   return [...kept, ...ids];
 }
 
-function goArgs(base: string[], paths: string[][]): string[] | null {
+function goArgs(base: string[], paths: string[][], file?: string): string[] | null {
   const pkgs = unique(paths.map((p) => p[0]!).filter(Boolean));
-  if (!pkgs.length) return null;
-  const tests = paths.filter((p) => p.length > 1);
+  if (pkgs.length !== 1) return null;
   const parts = goTestParts(base);
-  const top = unique(tests.map((p) => p[1]!));
-  const pattern =
-    tests.length === 1 && tests[0]!.length > 2
-      ? tests[0]!
+  const targets = file ? [file] : pkgs.includes("command-line-arguments") ? parts.targets : pkgs;
+  if (paths.some((path) => path.length === 1)) return ["test", ...parts.flags, ...targets, ...parts.program];
+  const pattern = (selected: string[][]) =>
+    unique(
+      selected.map((path) =>
+        path
           .slice(1)
           .map((name) => `^${escapeRegExp(name)}$`)
-          .join("/")
-      : `^(${top.map(escapeRegExp).join("|")})$`;
-  const run = top.length ? ["-run", pattern] : [];
-  // A file-scoped run is reported under this synthetic import path; keep its file targets.
-  const targets = pkgs.includes("command-line-arguments") ? parts.targets : pkgs;
-  return ["test", ...withoutGoSelection(parts.flags), ...run, ...targets, ...parts.program];
+          .join("/"),
+      ),
+    ).join("|");
+  const benchmarks = paths.filter((path) => path[1]?.startsWith("Benchmark"));
+  const tests = paths.filter((path) => !path[1]?.startsWith("Benchmark"));
+  return [
+    "test",
+    ...withoutGoSelection(parts.flags),
+    "-run",
+    tests.length ? pattern(tests) : "^$",
+    ...(benchmarks.length ? ["-bench", pattern(benchmarks)] : []),
+    ...targets,
+    ...withoutGoSelection(parts.program),
+  ];
 }
 
 function jvmTests(paths: string[][]) {
@@ -188,8 +197,35 @@ export function leafTestPaths(nodes: readonly TestNode[]): string[][] {
 
 /** Config running only `paths` (failed test paths from the results tree), or null when unsupported. */
 export function rerunFailedConfig(config: RunConfig, paths: string[][], results?: TestResults): RunConfig | null {
+  const configs = rerunFailedConfigs(config, paths, results);
+  return configs.length === 1 ? configs[0]! : null;
+}
+
+export function rerunFailedConfigs(config: RunConfig, paths: string[][], results?: TestResults): RunConfig[] {
   const baseName = config.name.replace(/^Failed: /, "");
-  return testsConfig(config, paths, `Failed: ${baseName}`, results, true);
+  return testsConfigs(config, paths, `Failed: ${baseName}`, results, true);
+}
+
+/** Go filters apply to every package in an invocation, so each package keeps its own selection. */
+export function testsConfigs(
+  config: RunConfig,
+  paths: string[][],
+  name: string,
+  results?: TestResults,
+  failedOnly = false,
+): RunConfig[] {
+  const groups = new Map<string, string[][]>();
+  for (const path of paths) {
+    const key = frameworkFor(config) === "go" ? (path[0] ?? "") : "";
+    const group = groups.get(key) ?? [];
+    group.push(path);
+    groups.set(key, group);
+  }
+  return [...groups].flatMap(([pkg, selected]) => {
+    const derived = testsConfig(config, selected, groups.size > 1 ? `${name} (${pkg})` : name, results, failedOnly);
+    if (!derived) return [];
+    return [{ ...derived, id: groups.size > 1 ? `context:tests:${config.id}:${pkg}` : derived.id }];
+  });
 }
 
 /** Config running only the tests at `paths` (test tree paths), named `name`; null when unsupported. */
@@ -222,7 +258,7 @@ export function testsConfig(
       args = phpunitArgs(config.args, { filter: phpunitFilter(paths) });
       break;
     case "go":
-      args = goArgs(config.args, paths);
+      args = goArgs(config.args, paths, config.params?.scope === "file" ? config.params.target : undefined);
       break;
     case "jvm":
       if (config.kind === "maven" || /^(mvnw?|mvnd)$/i.test(commandName(config.command))) {
@@ -248,10 +284,11 @@ export function testsConfig(
             config.params.scope === "file"
               ? {
                   ...config.params,
-                  pattern: args[args.indexOf("-run") + 1] ?? "",
-                  toolArgs: formatArgs(withoutGoSelection(goTestParts(args).flags)),
+                  pattern: args.includes("-run") ? args[args.indexOf("-run") + 1]! : "",
+                  toolArgs: formatArgs(dropFlag(goTestParts(args).flags, ["-run", "-test.run"])),
+                  programArgs: formatArgs(goTestParts(args).program.slice(1)),
                 }
-              : { module: config.params.module ?? "", useTags: config.params.useTags ?? "false" },
+              : { module: config.params.module ?? "", useTags: config.params.useTags ?? "true" },
         }
       : {}),
   };

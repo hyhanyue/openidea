@@ -36,6 +36,7 @@ it("routes the actual call to the enabled stable fork ID and clears only transie
     expect.any(String),
     null,
     [],
+    "project",
   );
   expect(JSON.parse(command.mock.calls.at(-1)![2] as string).context.launch.profiles.values).toEqual(["dev"]);
   expect(command.mock.calls.at(-1)![2]).not.toContain("never-transfer");
@@ -48,6 +49,7 @@ it("routes the actual call to the enabled stable fork ID and clears only transie
     JSON.stringify({ projectRoot: "/project", context: null }),
     null,
     [],
+    "project",
   );
   usePlugins.setState({ plugins: [plugin("aritti.spring-beans")] });
   await syncSpringLaunchContext();
@@ -57,6 +59,7 @@ it("routes the actual call to the enabled stable fork ID and clears only transie
     JSON.stringify({ projectRoot: "/project", context: null }),
     null,
     [],
+    "project",
   );
   usePlugins.setState({ plugins: [plugin("hyhanyue.spring-beans-local")] });
   await syncSpringLaunchContext();
@@ -66,6 +69,7 @@ it("routes the actual call to the enabled stable fork ID and clears only transie
     JSON.stringify({ projectRoot: "/project", context: null }),
     null,
     [],
+    "project",
   );
   const count = command.mock.calls.length;
   usePlugins.setState({ plugins: [plugin("other.spring-beans")] });
@@ -109,6 +113,7 @@ it("replaces rejected launch facts with unknown instead of retaining another pro
     JSON.stringify({ projectRoot: "/fallback", context: { version: 1, launch: null } }),
     null,
     [],
+    "project",
   );
   useProject.setState({ project: null });
   usePlugins.setState({ plugins: [] });

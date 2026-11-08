@@ -78,7 +78,7 @@ export function jdwpLaunch(config: RunConfig): RunConfig | null {
 }
 
 /** Runs an owned JVM only after the adapter is available; failed attach releases that exact process. */
-export async function debugWithAgent(config: RunConfig): Promise<boolean> {
+export async function debugWithAgent(config: RunConfig, show?: boolean): Promise<boolean> {
   const launch = jdwpLaunch(config);
   if (!launch) return false;
   let prepared;
@@ -148,7 +148,7 @@ export async function debugWithAgent(config: RunConfig): Promise<boolean> {
     }, 30_000);
     timers.add(timer);
     try {
-      if (!(await prepared.attach(port, ownedRunId!, controller.signal))) await release();
+      if (!(await prepared.attach(port, ownedRunId!, controller.signal, show))) await release();
       else if (!controller.signal.aborted && current()) {
         mark("attached");
         offOutput ??= observeRunOutput(sessionId!, ownedRunId!, (chunk) => prepared.output(ownedRunId!, chunk));
@@ -162,6 +162,7 @@ export async function debugWithAgent(config: RunConfig): Promise<boolean> {
   };
   const session = await startRun(config, undefined, undefined, {
     launch,
+    show,
     captureOutput: true,
     onExit: dispose,
     onLine: (line) => {

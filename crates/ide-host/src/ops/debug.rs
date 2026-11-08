@@ -40,9 +40,11 @@ pub async fn debug_start(host: &Host, window: &str, mut config: LaunchConfig) ->
         let settings = settings.clone();
         config = host
             .blocking(move || {
-                ide_sdk::go::debug_environment(&root, &settings, &mut config.env);
+                ide_sdk::go::configure_environment(&root, &settings, &mut config.env);
                 ide_sdk::go::apply_to_debug(
                     &mut config.env,
+                    &mut config.program,
+                    &mut config.args,
                     &mut config.extra_json,
                     &settings.languages.go.build_tags,
                 )?;

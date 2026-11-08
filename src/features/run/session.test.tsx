@@ -10,6 +10,7 @@ import {
   registerMenuGroup,
   type ToolWindowService,
 } from "@/workbench/contributions";
+import * as navigate from "./navigate";
 import { ConsoleModel } from "./console";
 import { ConsoleView, type ConsoleInput } from "./ConsoleView";
 import { buildRows, mnemonics } from "./ConfigChooser";
@@ -94,15 +95,18 @@ describe("single-instance runs", () => {
 });
 
 describe("restart", () => {
-  it("does not overwrite a live process after the stop timeout", async () => {
+  it("does not overwrite a live process while waiting beyond the former stop timeout", async () => {
     vi.useFakeTimers();
     const stop = vi.spyOn(commands, "runStop").mockResolvedValue({ status: "ok", data: null });
     const app = config("slow-stop");
     useRun.setState({ sessions: [running("run1", app, 7)] });
-    const rerun = startRun(app, "run1");
+    let restarted = false;
+    const rerun = startRun(app, "run1").then(() => (restarted = true));
     await vi.advanceTimersByTimeAsync(10_100);
-    expect(await rerun).toBeNull();
-    expect(useRun.getState().sessions[0]).toMatchObject({ runId: 7, status: "running", stopped: true });
+    expect(restarted).toBe(false);
+    expect(useRun.getState().sessions[0]).toMatchObject({ runId: 7, status: "stopping", stopped: true });
+    useRun.setState((s) => ({ sessions: s.sessions.map((x) => ({ ...x, status: "finished" as const })) }));
+    await rerun;
     stop.mockRestore();
     vi.useRealTimers();
   });
@@ -133,6 +137,38 @@ describe("HTTP port", () => {
     await startRun(app, session.id);
     expect(useRun.getState().sessions[0]!.httpPort).toBeUndefined();
   });
+});
+
+describe("Tomcat browser launch", () => {
+  it.each([
+    ["true", undefined, "http://localhost:18080/demo/"],
+    ["true", "https://example.test/custom", "https://example.test/custom"],
+    ["false", undefined, null],
+  ] as const)(
+    "opens the configured URL once after startup (openBrowser=%s)",
+    async (openBrowser, browserUrl, expected) => {
+      const open = vi.spyOn(navigate, "openUrl").mockResolvedValue();
+      try {
+        const app = config("tomcat", {
+          kind: "tomcat",
+          params: { openBrowser, httpPort: "18080", contextPath: "/demo", ...(browserUrl ? { browserUrl } : {}) },
+        });
+        const session = (await startRun(app))!;
+        const console = runtime(session.id)!.console;
+        console.append({ kind: "stdout", text: "Starting service Catalina\n" });
+        expect(open).not.toHaveBeenCalled();
+        console.append({ kind: "stdout", text: "Server startup in [800] milliseconds\n" });
+        console.append({ kind: "stdout", text: "Server startup in [900] milliseconds\n" });
+        expect(useRun.getState().sessions[0]!.httpPort).toBe(18080);
+        if (expected) {
+          expect(open).toHaveBeenCalledOnce();
+          expect(open).toHaveBeenCalledWith(expected);
+        } else expect(open).not.toHaveBeenCalled();
+      } finally {
+        open.mockRestore();
+      }
+    },
+  );
 });
 
 describe("closing a Run tab", () => {

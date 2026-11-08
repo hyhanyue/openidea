@@ -24,6 +24,7 @@ const { LspPopups, DocumentationWindow } = await import("./Popups");
 const { closePopup, openPopup, useLspPopup } = await import("./popupStore");
 const { useDocWindow, pushHistory, stepHistory, hoverCandidates } = await import("./docs");
 import popupStyles from "./Popups.module.css";
+import { registerImportsOnPasteActions } from "./importsOnPaste";
 
 const loc = (path: string, line: number): Location => ({
   path,
@@ -65,6 +66,40 @@ it("shows exact replacement coordinates and cancels a framework preview without 
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(apply).not.toHaveBeenCalled();
   expect(useLspPopup.getState().popup).toBeNull();
+});
+
+describe("imports on paste dialog", () => {
+  it("checks all imports by default and applies only the selected ones through its action", () => {
+    const dispose = registerImportsOnPasteActions();
+    const onApply = vi.fn();
+    openPopup({
+      kind: "importsOnPaste",
+      imports: ["Import java.util.List", "Import java.util.Map"],
+      onApply,
+      onClose: vi.fn(),
+    });
+    render(<LspPopups />);
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes).toHaveLength(2);
+    boxes.forEach((box) => expect(box).toBeChecked());
+    fireEvent.click(boxes[1]!);
+    fireEvent.click(screen.getByRole("button", { name: "Add Imports" }));
+    expect(onApply).toHaveBeenCalledWith([0]);
+    fireEvent.click(boxes[0]!);
+    expect(screen.getByRole("button", { name: "Add Imports" })).toBeDisabled();
+    dispose();
+  });
+
+  it("Cancel dismisses the dialog without applying imports", () => {
+    const onClose = vi.fn();
+    const onApply = vi.fn();
+    openPopup({ kind: "importsOnPaste", imports: ["Import java.util.List"], onApply, onClose });
+    render(<LspPopups />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(useLspPopup.getState().popup).toBeNull();
+  });
 });
 
 describe("list popup", () => {

@@ -15,6 +15,7 @@ import { usePluginSettingsRevision } from "./settingsRevision";
 import { syncSpringLaunchContext } from "./springLaunchContext";
 import { commands, type LineMarkerInfo } from "@/platform/ipc";
 import { gutterIconMarkup, isIconName, useFileIconRevision } from "@/ui";
+import { onMarkerIconsChanged, resolveMarkerIcon } from "./markerIcons";
 import styles from "@/editor/navigation/LineMarkers.module.css";
 
 const DEBOUNCE_MS = 400;
@@ -36,7 +37,8 @@ export function markerIcon(icon: string | null, pluginId?: string): string {
     if (isIconName(name)) return name;
   }
   const builtin = icon ?? "navigate";
-  return Object.hasOwn(ICONS, builtin) ? ICONS[builtin]! : ICONS.navigate!;
+  if (builtin.startsWith("ext:fileIcon/")) return ICONS.navigate!;
+  return Object.hasOwn(ICONS, builtin) ? ICONS[builtin]! : isIconName(builtin) ? builtin : ICONS.navigate!;
 }
 
 interface Placed {
@@ -102,12 +104,22 @@ class MarkersPlugin {
     private doc: number,
     private column: Compartment,
   ) {
-    this.off = pluginsBackend().onEvent((event) => {
+    const offBackend = pluginsBackend().onEvent((event) => {
       if (event.type !== "documentIndexesChanged") return;
       this.invalidate();
     });
+    this.off = offBackend;
     this.offModel = onLspRefresh("codeLens", () => this.invalidate());
-    this.offIcons = useFileIconRevision.subscribe(() => this.schedule());
+    const changed = () => {
+      this.generation++;
+      this.schedule();
+    };
+    const offFiles = useFileIconRevision.subscribe(changed);
+    const offMarkers = onMarkerIconsChanged(changed);
+    this.offIcons = () => {
+      offFiles();
+      offMarkers();
+    };
     this.offSettings = usePluginSettingsRevision.subscribe(() => this.invalidate());
     this.schedule();
   }
@@ -138,7 +150,14 @@ class MarkersPlugin {
       const markers = await commands.pluginLineMarkers(this.doc);
       if (gen !== this.generation || this.view.state.doc !== text || !this.view.dom.isConnected) return;
       if (markers.status !== "ok") return;
-      const placed = placeMarkers(text, markers.data);
+      const resolved = await Promise.all(
+        markers.data.map(async (marker) => ({
+          ...marker,
+          icon: await resolveMarkerIcon(marker.pluginId, marker.icon),
+        })),
+      );
+      if (gen !== this.generation || this.view.state.doc !== text || !this.view.dom.isConnected) return;
+      const placed = placeMarkers(text, resolved);
       if (!placed.length && !this.view.state.field(markersField).length) return;
       const effects: StateEffect<unknown>[] = [setMarkers.of(placed)];
       if (placed.length > 0 !== this.shown) {

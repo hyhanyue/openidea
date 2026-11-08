@@ -82,8 +82,14 @@ it("attaches successfully once per port and retains the owned JVM", async () => 
   announce();
   announce();
   await vi.waitFor(() => expect(current().debugAttachment).toBe("attached"));
-  expect(attach).toHaveBeenCalledExactlyOnceWith(64947, 99, expect.any(AbortSignal));
+  expect(attach).toHaveBeenCalledExactlyOnceWith(64947, 99, expect.any(AbortSignal), undefined);
   expect(ipc.runStop).not.toHaveBeenCalled();
+});
+it("keeps Services launches in place when attaching the prepared debugger", async () => {
+  await debugWithAgent(config, false);
+  announce();
+  await vi.waitFor(() => expect(current().debugAttachment).toBe("attached"));
+  expect(attach).toHaveBeenCalledExactlyOnceWith(64947, 99, expect.any(AbortSignal), false);
 });
 it.each(["false", "error", "cancel"])("stops only the owned RunId on attach %s", async (mode) => {
   useRun.setState({

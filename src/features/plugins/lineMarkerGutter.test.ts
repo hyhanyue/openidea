@@ -5,8 +5,11 @@ import type { EditorDocContext } from "@/editor/api";
 import { addFileIconProvider, registerExternalIcons } from "@/ui";
 import type { PluginEvent } from "@/bindings";
 import { markerIcon, pluginLineMarkerGutter } from "./lineMarkerGutter";
+import { pluginIconName } from "./pluginIcon";
+import { projectMarkerIcon } from "./markerIcons";
 const mock = vi.hoisted(() => ({
   markers: vi.fn(),
+  assets: vi.fn(),
   event: undefined as ((event: PluginEvent) => void) | undefined,
   off: vi.fn(),
   modelChanged: undefined as (() => void) | undefined,
@@ -18,6 +21,7 @@ vi.mock(import("@/platform/ipc"), async (original) => {
 });
 vi.mock("./backend", () => ({
   pluginsBackend: () => ({
+    assets: mock.assets,
     onEvent: (fn: (event: PluginEvent) => void) => {
       mock.event = fn;
       return mock.off;
@@ -165,4 +169,59 @@ it("refreshes library markers when the asynchronous Java model becomes ready", a
   view.destroy();
   view = undefined;
   expect(mock.offModel).toHaveBeenCalled();
+});
+
+it("renders ordinary and custom registered icons alongside legacy marker aliases", async () => {
+  vi.useFakeTimers();
+  const icon = pluginIconName("markers", {
+    light: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>',
+    dark: null,
+  });
+  mock.markers.mockResolvedValue({
+    status: "ok",
+    data: ["run", "database", icon].map((icon, line) => ({
+      pluginId: "markers",
+      line,
+      icon,
+      tooltip: `marker ${line}`,
+      target: null,
+    })),
+  });
+  view = new EditorView({
+    parent: document.body,
+    state: EditorState.create({
+      doc: "legacy\nordinary\ncustom",
+      extensions: pluginLineMarkerGutter({ doc: 1 } as EditorDocContext),
+    }),
+  });
+  await vi.advanceTimersByTimeAsync(450);
+  const markers = view.dom.querySelectorAll(".cm-plugin-mapping-button");
+  expect(markers).toHaveLength(3);
+  expect([...markers].map((el) => el.getAttribute("aria-label"))).toEqual(["marker 0", "marker 1", "marker 2"]);
+  expect(markers[0]!.innerHTML).not.toBe(markers[1]!.innerHTML);
+  expect(markers[2]!.querySelector("circle")).not.toBeNull();
+});
+
+it("refreshes a fallback when the package icon declaration arrives after its markers", async () => {
+  vi.useFakeTimers();
+  mock.markers.mockResolvedValue({
+    status: "ok",
+    data: [{ pluginId: "late", line: 0, icon: "icons/late.svg", tooltip: "late icon", target: null }],
+  });
+  view = new EditorView({
+    parent: document.body,
+    state: EditorState.create({ doc: "late", extensions: pluginLineMarkerGutter({ doc: 1 } as EditorDocContext) }),
+  });
+  await vi.advanceTimersByTimeAsync(450);
+  expect(view.dom.querySelector(".cm-plugin-mapping-button circle")).toBeNull();
+  mock.assets.mockResolvedValue([
+    ["markerIcon/late/light", '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>'],
+  ]);
+  const remove = projectMarkerIcon("late", { id: "late", icon: "icons/late.svg" });
+  try {
+    await vi.advanceTimersByTimeAsync(450);
+    expect(view.dom.querySelector(".cm-plugin-mapping-button circle")).not.toBeNull();
+  } finally {
+    remove();
+  }
 });
