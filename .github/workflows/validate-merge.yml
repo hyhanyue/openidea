@@ -2,6 +2,7 @@ name: Validate upstream merge and compile macOS
 on:
   push:
     branches: [codex/build-openidea-20261108]
+  workflow_dispatch:
 
 permissions:
   contents: read
