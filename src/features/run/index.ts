@@ -67,11 +67,13 @@ import {
   setBeforeLaunchRunner,
   loadConfigs,
   failedTests,
+  baseConfigOf,
   onRunExited,
   rerunFailed,
   rerunSession,
   resetRuns,
   runningSessions,
+  runtime,
   saveUserConfigs,
   dropStaleContextConfigs,
   selectConfig,
@@ -83,9 +85,43 @@ import {
   useRun,
   isLive,
 } from "./store";
+import { rerunFailedConfigs } from "./testing/rerun";
 import { compoundTargets, selectedTarget } from "./sessionTargets";
 import { tx } from "@/platform/i18n";
 import { publishSpringLaunchContext } from "@/platform/springLaunchContext";
+
+function trackFailedTestSelection(): () => void {
+  let signature = "";
+  let generation = 0;
+  const update = () => {
+    const state = useRun.getState();
+    const id =
+      (state.activeSession && failedTests(state.activeSession).length ? state.activeSession : null) ??
+      [...state.sessions].reverse().find((s) => failedTests(s.id).length > 0)?.id;
+    const session = state.sessions.find((s) => s.id === id);
+    const base = session && baseConfigOf(session);
+    const paths = id ? failedTests(id) : [];
+    const next = JSON.stringify([id, session?.status, base, paths, id ? state.versions[id] : 0]);
+    if (next === signature) return;
+    signature = next;
+    const request = ++generation;
+    setContext("run.canRerunFailed", false);
+    if (!session || isLive(session) || !base) return;
+    const selection = rerunFailedConfigs(base, paths, runtime(session.id)?.tests ?? undefined);
+    if (selection instanceof Promise) {
+      void selection.then((configs) => {
+        if (request === generation) setContext("run.canRerunFailed", configs.length > 0);
+      });
+    } else setContext("run.canRerunFailed", selection.length > 0);
+  };
+  const stop = useRun.subscribe(update);
+  update();
+  return () => {
+    generation++;
+    stop();
+    setContext("run.canRerunFailed", false);
+  };
+}
 
 function hasProject() {
   return !!useProject.getState().project;
@@ -384,6 +420,7 @@ export function activate(): () => void {
     activateStackTrace(),
     listenForApplicationDeactivation(),
     trackRecentConfigurations(),
+    trackFailedTestSelection(),
     useDebugRunSessions.subscribe(() => setContext("run.updatableRunning", updatableSessions().length > 0)),
     // A removed workspace member (or a closed project) takes its sessions,
     // temporary configurations and Services groups with it.
@@ -564,14 +601,14 @@ export function activate(): () => void {
         title: "Rerun Failed Tests",
         category: "Run",
         icon: "rerun-failed-tests",
-        when: "projectOpen",
+        when: "projectOpen && run.canRerunFailed",
         keywords: ["failed tests", "rerun"],
-        run: () => {
+        run: async () => {
           const s = useRun.getState();
           const id =
             (s.activeSession && failedTests(s.activeSession).length ? s.activeSession : null) ??
             [...s.sessions].reverse().find((x) => failedTests(x.id).length > 0)?.id;
-          if (!id || !rerunFailed(id))
+          if (!id || !(await rerunFailed(id)))
             notifications().notify({
               group: "run",
               level: "info",

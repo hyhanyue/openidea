@@ -510,7 +510,7 @@ java.lang.AssertionError: from an unreported module
     expect(tests.counts()).toMatchObject({ passed: 2, failed: expected });
   });
 
-  it("reruns only the plugin that reported the failure for a method run by both plugins", () => {
+  it("reruns only the plugin that reported the failure for a method run by both plugins", async () => {
     const tests = new TestResults();
     const shared = {
       module: "beta",
@@ -527,15 +527,15 @@ java.lang.AssertionError: from an unreported module
       { ...shared, mavenPlugin: "failsafe", status: "failed" },
     ]);
     expect(tests.at(paths[0]!)?.own).toBe("failed");
-    expect(rerunFailedConfig(run, paths, tests)?.mavenTestSelection).toEqual({
+    expect((await rerunFailedConfig(run, paths, tests))?.mavenTestSelection).toEqual({
       beta: { failsafe: "demo.SharedTest#same" },
     });
-    expect(testsConfig(run, paths, "both plugins", tests)?.mavenTestSelection).toEqual({
+    expect((await testsConfig(run, paths, "both plugins", tests))?.mavenTestSelection).toEqual({
       beta: { surefire: "demo.SharedTest#same", failsafe: "demo.SharedTest#same" },
     });
     applyJvmReports(tests, [{ ...shared, status: "failed" }]);
-    expect(rerunFailedConfig(run, paths, tests)).toBeNull();
-    expect(testsConfig(run, paths, "unknown plugin", tests)).toBeNull();
+    expect(await rerunFailedConfig(run, paths, tests)).toBeNull();
+    expect(await testsConfig(run, paths, "unknown plugin", tests)).toBeNull();
   });
 
   it("locate Kotlin tests with spaces in their names, behind a class loader prefix", () => {

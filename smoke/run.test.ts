@@ -185,7 +185,7 @@ async function runToEnd(config: RunConfig, timeoutMs = 8 * 60_000): Promise<{ id
 
 async function rerunFailedToEnd(id: string, timeout = 60_000): Promise<void> {
   const before = useRun.getState().sessions.find((s) => s.id === id)!.startedAt;
-  expect(rerunFailed(id), "Rerun Failed Tests is offered").toBe(true);
+  expect(await rerunFailed(id), "Rerun Failed Tests is offered").toBe(true);
   await expect
     .poll(
       () => {
