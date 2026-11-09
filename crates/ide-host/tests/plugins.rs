@@ -6144,11 +6144,15 @@ fn api14_stage3_configurations_test_results_and_content_actions_use_real_exports
 
 #[test]
 fn api14_fixture_exports_test_selection() {
-    let f = fixture(Limits::default());
+    // This checks the export contract, not scheduling latency on a loaded CI runner.
+    let f =
+        fixture(Limits { edit_soft: Duration::from_secs(5), edit_hard: Duration::from_secs(10), ..Limits::default() });
     f.install(&sample("api14"));
     assert_eq!(
         f.host.select_tests("main", "plugin:api14:tests", vec![vec!["Suite".into(), "Test".into()]]).unwrap(),
-        Some(vec!["Suite::Test".into()])
+        Some(vec!["Suite::Test".into()]),
+        "{:?}",
+        f.host.info_of("api14").unwrap().stats
     );
 }
 
