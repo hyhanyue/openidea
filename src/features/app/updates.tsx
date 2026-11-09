@@ -54,6 +54,7 @@ async function runCheck() {
       title,
       body: <UpdateBalloonBody task={CHECK_TASK_ID} />,
       key: UPDATE_KEY,
+      userInitiated: true,
     });
   try {
     const r = await Promise.race([call(commands.appCheckUpdate("github")), abandoned]);
@@ -64,6 +65,7 @@ async function runCheck() {
         title: t("app.update.disabled"),
         body: t("app.update.disabledBody"),
         key: UPDATE_KEY,
+        userInitiated: true,
       });
     } else if (!r.update) {
       const info = await commands.appBuildInfo();
@@ -71,12 +73,19 @@ async function runCheck() {
         level: "info",
         title: t("app.update.none", { version: info.version }),
         key: UPDATE_KEY,
+        userInitiated: true,
       });
     } else if (!installing) {
-      notifyUpdate(r.update);
+      notifyUpdate(r.update, true);
     }
   } catch (e) {
-    notifications().notify({ level: "error", title: t("app.update.failed"), body: errorText(e), key: UPDATE_KEY });
+    notifications().notify({
+      level: "error",
+      title: t("app.update.failed"),
+      body: errorText(e),
+      key: UPDATE_KEY,
+      userInitiated: true,
+    });
   } finally {
     upsertTask({ id: CHECK_TASK_ID, title, message: null, fraction: 1, done: true });
   }
@@ -89,7 +98,8 @@ export async function checkForUpdatesOnStartup(): Promise<void> {
   if (update) notifyUpdate(update);
 }
 
-export function notifyUpdate(update: UpdateInfo) {
+/** `userInitiated`: the update came from a manual check, so it pops up regardless of the balloon settings. */
+export function notifyUpdate(update: UpdateInfo, userInitiated = false) {
   notifications().notify({
     level: "info",
     title: t("app.update.available", { version: update.version }),
@@ -97,6 +107,7 @@ export function notifyUpdate(update: UpdateInfo) {
     sticky: true,
     key: UPDATE_KEY,
     actions: [{ label: t("app.update.install"), run: () => void installUpdate(update.version) }],
+    userInitiated,
   });
 }
 
@@ -137,6 +148,7 @@ async function runInstall(version: string) {
       sticky: true,
       key: UPDATE_KEY,
       actions,
+      userInitiated: true,
     });
   let installingShown = false;
   channel.onmessage = (p) => {
@@ -168,6 +180,7 @@ async function runInstall(version: string) {
         title: t("app.update.cancelled"),
         key: UPDATE_KEY,
         actions: [{ label: t("app.update.retry"), run: () => void installUpdate(version) }],
+        userInitiated: true,
       });
     } else {
       notifications().notify({
@@ -176,6 +189,7 @@ async function runInstall(version: string) {
         body: errorText(e),
         key: UPDATE_KEY,
         actions: [{ label: t("app.update.retry"), run: () => void installUpdate(version) }],
+        userInitiated: true,
       });
     }
     return;
@@ -191,6 +205,7 @@ async function runInstall(version: string) {
     sticky: true,
     key: UPDATE_KEY,
     actions: [{ label: t("app.update.restart"), run: restart }],
+    userInitiated: true,
   });
   restart();
 }

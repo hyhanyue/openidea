@@ -262,7 +262,7 @@ jobs:
       - name: Compile app and DMG without publishing or updater signing
         run: pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":false}}'
         env:
-          APPLE_SIGNING_IDENTITY: '-'
+          APPLE_SIGNING_IDENTITY: "-"
       - name: Archive app and record source checksums
         run: |
           version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')

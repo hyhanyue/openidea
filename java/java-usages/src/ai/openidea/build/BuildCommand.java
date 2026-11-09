@@ -32,7 +32,9 @@ public final class BuildCommand implements IDelegateCommandHandler {
             workspace.run(progress -> {
                 try {
                     // The client can also wait for a cancelled build to release this rule.
-                    result[0] = args.isEmpty() ? build(workspace, progress) : BuildWorkspaceStatus.SUCCEED;
+                    boolean full = !args.isEmpty() && Boolean.TRUE.equals(args.get(0));
+                    result[0] = args.isEmpty() || args.get(0) instanceof Boolean
+                            ? build(workspace, full, progress) : BuildWorkspaceStatus.SUCCEED;
                 } catch (IOException | UncheckedIOException e) {
                     throw new CoreException(Status.error("Cannot protect Java build outputs: " + e.getMessage(), e));
                 }
@@ -43,7 +45,7 @@ public final class BuildCommand implements IDelegateCommandHandler {
         return result[0].ordinal();
     }
 
-    private BuildWorkspaceStatus build(IWorkspace workspace, IProgressMonitor monitor)
+    private BuildWorkspaceStatus build(IWorkspace workspace, boolean full, IProgressMonitor monitor)
             throws CoreException, IOException {
         Set<IFolder> outputs = new LinkedHashSet<>();
         for (IProject project : workspace.getRoot().getProjects()) {
@@ -65,7 +67,7 @@ public final class BuildCommand implements IDelegateCommandHandler {
                     // Force all builders to run without invoking their separate clean hooks.
                     workspace.build(IncrementalProjectBuilder.FULL_BUILD, progress.split(1));
                 }
-                result = handler.buildWorkspace(false, progress.split(rebuild ? 1 : 2));
+                result = handler.buildWorkspace(full, progress.split(rebuild ? 1 : 2));
                 if (progress.isCanceled()) result = BuildWorkspaceStatus.CANCELLED;
                 return result;
             } catch (CoreException e) {

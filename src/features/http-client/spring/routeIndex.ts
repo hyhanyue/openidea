@@ -1,8 +1,8 @@
 /** Source-scoped Spring model shared by search, editor menus and request generation. */
 import { onEditorEvent } from "@/editor/api";
 import { call, commands, onIdeEvent } from "@/platform/ipc";
-import { useProject } from "@/platform/project";
 import { ipcPath, isSameOrInside } from "@/platform/paths";
+import { projectFolder, relativePath, useProject } from "@/platform/project";
 import { registerEndpointProvider, type EndpointEntry } from "@/workbench/contributions";
 import { projectControllers, springControllers, type Controller } from "./endpoints";
 import { MappingProject, type MappingSource } from "./mappings";
@@ -14,6 +14,7 @@ interface Index {
 }
 interface Pending<T> {
   root: string;
+  key: string;
   abort: AbortController;
   promise: Promise<T>;
 }
@@ -56,7 +57,10 @@ export function registerSpringEndpointProvider(): () => void {
     if ([...e.created, ...e.modified, ...e.removed].some((p) => isRouteSource(String(p)))) clearRouteIndex();
   });
   const unproject = useProject.subscribe((state, prior) => {
-    if (state.project?.root !== prior.project?.root) {
+    if (
+      state.project?.root !== prior.project?.root ||
+      JSON.stringify(state.project?.workspace?.projects) !== JSON.stringify(prior.project?.workspace?.projects)
+    ) {
       overlays.clear();
       clearRouteIndex();
     }
@@ -122,12 +126,18 @@ export async function controllersForSource(root: string | null, path: string, te
   }
 }
 
+function scopeKey(root: string): string {
+  const current = useProject.getState().project;
+  return JSON.stringify([root, current?.root === root ? current.workspace?.projects : null]);
+}
+
 function load(root: string): Promise<Index> {
   root = ipcPath(root).replace(/\/$/, "");
-  if (cached?.root === root) return cached.promise;
+  const key = scopeKey(root);
+  if (cached?.key === key) return cached.promise;
   cached?.abort.abort();
   const abort = new AbortController();
-  const entry: NonNullable<typeof cached> = { root, abort, promise: scan(root, abort.signal) };
+  const entry: NonNullable<typeof cached> = { root, key, abort, promise: scan(root, abort.signal) };
   cached = entry;
   void entry.promise.then(
     (index) => {
@@ -141,15 +151,25 @@ function load(root: string): Promise<Index> {
 }
 
 function loadSources(root: string): Promise<MappingSource[]> {
-  if (sources?.root === root) return sources.promise;
+  const key = scopeKey(root);
+  if (sources?.key === key) return sources.promise;
   sources?.abort.abort();
   const abort = new AbortController();
-  const entry = { root, abort, promise: readSources(root, abort.signal) };
+  const entry = { root, key, abort, promise: readSources(root, abort.signal) };
   sources = entry;
   void entry.promise.catch(() => {
     if (sources === entry) sources = null;
   });
   return entry.promise;
+}
+
+function sourceRoot(root: string, path: string): string | null {
+  const current = useProject.getState().project;
+  if (current && ipcPath(current.root).replace(/\/$/, "") === root) {
+    const folder = projectFolder(current, path)?.root;
+    return folder && isSameOrInside(path, ipcPath(folder)) ? folder : null;
+  }
+  return isSameOrInside(path, root) ? root : null;
 }
 
 async function readSources(root: string, signal: AbortSignal): Promise<MappingSource[]> {
@@ -159,7 +179,7 @@ async function readSources(root: string, signal: AbortSignal): Promise<MappingSo
   for (const source of raw) {
     check(signal);
     const path = ipcPath(source.path);
-    if (!isSameOrInside(path, root) || !isRouteSource(path) || source.text.length > MAX_SOURCE_TEXT) continue;
+    if (!sourceRoot(root, path) || !isRouteSource(path) || source.text.length > MAX_SOURCE_TEXT) continue;
     if (found.length >= MAX_FILES || size + source.text.length > MAX_TEXT) break;
     size += source.text.length;
     found.push({ path, text: source.text, file: parseSource(source.text) });
@@ -174,7 +194,7 @@ async function scan(root: string, signal: AbortSignal): Promise<Index> {
   check(signal);
   const files = new Map(disk.map((s) => [s.path, s]));
   for (const [path, source] of overlays)
-    if (isSameOrInside(path, root)) {
+    if (sourceRoot(root, path)) {
       if (source.text === null) files.delete(path);
       else files.set(path, { ...source, text: source.text, file: parseSource(source.text) });
     }
@@ -213,7 +233,7 @@ async function scan(root: string, signal: AbortSignal): Promise<Index> {
               controller: controller.name,
               methodName: endpoint.methodName,
               path,
-              rel: path.slice(root.length + 1),
+              rel: relativePath(sourceRoot(root, path) ?? root, path),
               line: at.line,
               col: at.col,
             });

@@ -14,6 +14,7 @@ import { javaAgentDebugger, notifications } from "@/workbench/contributions";
 import type { RunConfig } from "@/platform/ipc";
 import { isJvmApplication, JDWP_AGENT, jdwpListeningPort, resolveJavaModule } from "@/platform/javaLaunch";
 import { observeRunOutput, setDebugAttachment, startRun, stopSession, useRun, waitForExit } from "./store";
+import { applyBuildPolicyToCommand } from "./buildCommand";
 import { DELEGATED_DEBUG, DELEGATED_MAIN } from "./gradleRun";
 
 const isMavenTestGoal = (a: string) =>
@@ -40,6 +41,7 @@ function withProperty(args: readonly string[], key: string, value: string): stri
 
 /** The configuration with a waiting JDWP agent, or null when it starts no debuggable JVM. */
 export function jdwpLaunch(config: RunConfig): RunConfig | null {
+  config = applyBuildPolicyToCommand(config);
   if (config.kind === "tomcat") return { ...config, params: { ...config.params, tomcatDebug: "true" } };
   const args = config.args;
   // java-debug merges env into its tooling JVM's environment. Let the Run manager own
@@ -67,6 +69,12 @@ export function jdwpLaunch(config: RunConfig): RunConfig | null {
   if (config.kind === "gradle" || /(^|\/)gradlew?(\.bat)?$/.test(config.command)) {
     // A delegated Application: its init script adds the agent (port 0) to the JavaExec JVM.
     if (args.some((a) => a.startsWith(DELEGATED_MAIN)))
+      return args.includes(DELEGATED_DEBUG) ? config : { ...config, args: [...args, DELEGATED_DEBUG] };
+    // Gradle Test forks test workers: the init script gives them a dynamic JDWP port.
+    if (config.isTest || args.some((a) => /(^|:)(test|integrationTest)$/.test(a)))
+      return args.includes(DELEGATED_DEBUG) ? config : { ...config, args: [...args, DELEGATED_DEBUG] };
+    // BootRun's init script gives the forked application JVM a dynamic port.
+    if (args.some((a) => /(^|:)bootRun$/.test(a)))
       return args.includes(DELEGATED_DEBUG) ? config : { ...config, args: [...args, DELEGATED_DEBUG] };
     if (!args.some(isGradleJvmTask)) return null;
     return args.includes("--debug-jvm") ? config : { ...config, args: [...args, "--debug-jvm"] };

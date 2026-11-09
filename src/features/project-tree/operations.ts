@@ -5,6 +5,7 @@
 import { createElement, Fragment } from "react";
 import { askUsagesDetected, fileUsages, viewUsages } from "@/editor/refactor";
 import { executeAction, getAction } from "@/platform/actions";
+import { fileManagerPath } from "@/platform/fileManager";
 import { maybeEditorService, notifications } from "@/workbench/contributions";
 import { ask, confirmChecked } from "@/workbench/messages";
 import { osClipboard } from "./clipboard";
@@ -830,9 +831,7 @@ export async function copyPaths(kind: PathKind, nodes: ProjectNode[] = selectedN
 export function revealablePath(path: string): string | null {
   const session = useRemote.getState().session;
   if (session?.target.kind === "ssh") return null;
-  if (session?.target.kind !== "wsl" || usePlatform.getState().os !== "windows") return path;
-  if (!path.startsWith("/")) return path;
-  return `\\\\wsl.localhost\\${session.target.distro}${path.replaceAll("/", "\\")}`;
+  return fileManagerPath(path);
 }
 
 export function revealInFinder(nodes: ProjectNode[] = selectedNodes()) {

@@ -284,6 +284,21 @@ it("routes owned process output to its actual Debug console and ignores closed o
 });
 
 it("bridges real owned Run startup replay and live chunks into the actual Debug console store", async () => {
+  ipc.javaResolveLaunch.mockResolvedValueOnce({
+    status: "ok",
+    data: {
+      build: "succeeded",
+      projectRoot: "/p",
+      classPaths: ["lib/*"],
+      modulePaths: [],
+      javaHome: "/jdk",
+      javaExec: "/jdk/bin/java",
+      shortenCommandLine: null,
+      errors: [],
+      errorCount: 0,
+      hints: [],
+    },
+  });
   await debugWithAgent({ ...config, kind: "spring-boot", includeSystemEnv: false, args: ["-cp", "lib/*", "Main"] });
   const channel = ipc.runStart.mock.calls[0]![1] as {
     onmessage(chunk: { kind: "stdout" | "stderr"; text: string }): void;

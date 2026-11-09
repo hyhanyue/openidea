@@ -244,12 +244,13 @@ function BuildBanner({ info, tool }: { info: MavenModel | GradleModel; tool: Bui
 
 function NodeRow({ node, state }: { node: BuildNode; state: TreeRowState }) {
   const choices = useBuild((s) => s.settings.maven.profiles);
+  const skipTests = useBuild((s) => s.settings.maven.skipTests);
   if (node.kind === "profile") {
     return (
       <span className={styles.row} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
         <Checkbox
           checked={profileChecked(node.profile, choices)}
-          onChange={(v) => setProfile(node.profile.id, v)}
+          onChange={(v) => setProfile(node.profile, v)}
           label={node.profile.id}
           className={styles.profile}
         />
@@ -257,17 +258,27 @@ function NodeRow({ node, state }: { node: BuildNode; state: TreeRowState }) {
     );
   }
   const detail =
-    node.kind === "dependency" && node.dependency.scope !== "compile"
-      ? `(${node.dependency.scope}${node.dependency.optional ? ", optional" : ""})`
-      : node.kind === "dependency" && node.dependency.optional
-        ? "(optional)"
-        : node.kind === "task"
-          ? node.task.description
-          : null;
+    node.kind === "profiles" && node.projectRoot
+      ? node.projectRoot.split("/").pop()
+      : node.kind === "dependency" && node.dependency.scope !== "compile"
+        ? `(${node.dependency.scope}${node.dependency.optional ? ", optional" : ""})`
+        : node.kind === "dependency" && node.dependency.optional
+          ? "(optional)"
+          : node.kind === "task"
+            ? node.task.description
+            : null;
   return (
     <span className={styles.row} title={node.kind === "task" ? (node.task.description ?? undefined) : undefined}>
       <Icon name={nodeIcon(node)} size={16} className={styles.icon} />
-      <span className={clsx(styles.label, state.selected && styles.selectedLabel)}>{nodeLabel(node)}</span>
+      <span
+        className={clsx(
+          styles.label,
+          state.selected && styles.selectedLabel,
+          skipTests && node.kind === "phase" && node.phase === "test" && styles.skippedGoal,
+        )}
+      >
+        {nodeLabel(node)}
+      </span>
       {detail && <span className={styles.detail}>{detail}</span>}
     </span>
   );
@@ -419,7 +430,7 @@ function BuildToolView({ tool }: { tool: BuildTool }) {
           renderNode={(n, state) => <NodeRow node={n} state={state} />}
           onActivate={(n) => {
             if (n.kind === "profile") {
-              setProfile(n.profile.id, !profileChecked(n.profile, useBuild.getState().settings.maven.profiles));
+              setProfile(n.profile, !profileChecked(n.profile, useBuild.getState().settings.maven.profiles));
               return;
             }
             if (isRunnable(n)) run([n], "run");

@@ -1,5 +1,7 @@
 //! Maven / Gradle tool windows (the build model and its background sync) and
 //! Build › Build Project (compiling with the project's build system).
+mod workspace;
+
 use crate::ops::Channel;
 use crate::rpc::Dispatcher;
 use crate::trust::TrustStore;
@@ -11,10 +13,7 @@ use ide_build::pom_edit::{ArtifactKey, Exclusion};
 use ide_build::{BuildModel, BuildTool, MavenModel, SyncOptions, SyncProgress};
 use ide_core::settings::Settings;
 use ide_core::{FileEdit, IdeError, IdeEvent, IdeResult, Location, Pos, Range, RequestId, WorkspaceEdit};
-use ide_workspace::{
-    SettingsStore,
-    workspace::{self, Workspace},
-};
+use ide_workspace::{SettingsStore, workspace::Workspace};
 use std::path::{Path, PathBuf};
 
 fn join_err(e: tokio::task::JoinError) -> IdeError {
@@ -114,6 +113,7 @@ fn workspace_maven_model(
         let absolute =
             |path: &str| ide_core::ipc_path::to_ipc(&ide_core::project_roots::resolve(member, Path::new(path)));
         for p in &mut model.projects {
+            p.project_root = Some(ide_core::ipc_path::to_ipc(member));
             p.pom = absolute(&p.pom);
             p.dir = absolute(&p.dir);
             p.modules =
@@ -126,8 +126,9 @@ fn workspace_maven_model(
             }
         }
         merged.projects.extend(model.projects);
-        for profile in model.profiles {
-            if !merged.profiles.iter().any(|p| p.id == profile.id) {
+        for mut profile in model.profiles {
+            profile.project_root = Some(ide_core::ipc_path::to_ipc(member));
+            if !merged.profiles.iter().any(|p| p.id == profile.id && p.project_root == profile.project_root) {
                 merged.profiles.push(profile);
             }
         }
@@ -151,7 +152,13 @@ fn load_window(project: &Project, config_dir: &Path, trust: &TrustStore) -> IdeR
     Ok(match Workspace::load(&project.root)? {
         Some(workspace) => BuildModel {
             maven: workspace_maven_model(&workspace, trust, &cache, config_dir),
-            gradle: load_gradle(&project.root, &cache, &settings),
+            gradle: {
+                let scopes = workspace::scopes(project, config_dir)?
+                    .into_iter()
+                    .filter(|s| trust.trusted(&s.root).unwrap_or(false))
+                    .collect::<Vec<_>>();
+                workspace::load_scopes(&project.root, &scopes).gradle
+            },
         },
         None => load(&project.root, &cache, &settings),
     })
@@ -308,76 +315,98 @@ pub async fn build_sync(
 ) -> IdeResult<BuildModel> {
     host.require_trust(window)?;
     let project = host.project(window)?;
-    if tool == BuildTool::Maven && project.root.join(workspace::FILE).try_exists()? {
-        return sync_workspace_maven(host, window, project, request, offline, profiles, on_progress).await;
+    if tool == BuildTool::Maven && project.root.join(ide_workspace::workspace::FILE).try_exists()? {
+        return sync_workspace_maven(host, window, project, request, offline, profiles, build_dir, on_progress).await;
     }
-    let (root, cache, settings) = (project.root.clone(), project.build_cache_dir(), project.settings.effective());
-    let bridge_profiles = profiles.clone();
-    // What the Java language server and Build Project resolve the project with from now on.
-    let profiles_changed = tool == BuildTool::Maven
-        && ide_build::save_maven_profiles(&cache, &profiles).unwrap_or_else(|e| {
-            tracing::warn!("Maven profiles not saved: {e}");
-            false
-        });
-    if profiles_changed {
-        // The modules of the chosen profiles are read from the POMs with them from now on (the
-        // project tree's module folders too), whether or not Maven itself can run.
-        project.sink.emit(ide_core::IdeEvent::ProjectRootsChanged { root: project.root.clone().into() });
-    }
+    let trust = host.trust.clone();
     let token = host.begin_project_request(window, request);
     let completion_token = token.clone();
-    let original_links = settings.languages.java.gradle.linked_projects.clone();
-    let (config_dir, trust) = (host.config_dir.clone(), host.trust.clone());
-    let worker_project = project.clone();
+    let bridge_profiles = profiles.clone();
+    let p = project.clone();
+    let config = host.config_dir.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let current = load(&root, &cache, &settings);
-        let progress = |p: SyncProgress| {
-            let _ = on_progress.send(p);
-        };
-        match tool {
-            BuildTool::Maven => {
-                let options = maven_sync_options(&root, &settings, current.maven.as_ref(), offline, profiles);
-                ide_build::sync_maven(&root, &cache, &options, &token, &progress)?;
+        let scopes = workspace::scopes(&p, &config)?
+            .into_iter()
+            .filter(|s| trust.trusted(&s.root).unwrap_or(false))
+            .collect::<Vec<_>>();
+        let selected: Vec<_> =
+            scopes.iter().filter(|scope| workspace::selected(scope, &p.root, tool, build_dir.as_deref())).collect();
+        if selected.is_empty() {
+            return Err(IdeError::not_found("Build project is no longer linked"));
+        }
+        let mut profiles_changed = false;
+        for scope in selected {
+            if token.is_cancelled() {
+                return Err(IdeError::cancelled());
             }
-            BuildTool::Gradle => {
-                if let Some(dir) = &build_dir
-                    && !current.gradle.iter().any(|g| &g.dir == dir)
-                {
-                    return Err(IdeError::not_found("Gradle project is no longer linked"));
+            let (root, cache, settings) = (&scope.root, &scope.cache, &scope.settings);
+            let current = load(root, cache, settings);
+            if tool == BuildTool::Maven && current.maven.is_some() {
+                let changed = ide_build::save_maven_profiles(cache, &profiles).unwrap_or_else(|e| {
+                    tracing::warn!("Maven profiles not saved: {e}");
+                    false
+                });
+                if changed {
+                    p.sink.emit(IdeEvent::ProjectRootsChanged { root: p.root.clone().into() });
                 }
-                for g in current.gradle.iter().filter(|g| build_dir.as_ref().is_none_or(|dir| dir == &g.dir)) {
-                    if token.is_cancelled() {
-                        return Err(IdeError::cancelled());
+                profiles_changed |= changed;
+            }
+            let env = current
+                .maven
+                .as_ref()
+                .and_then(|m| m.projects.iter().find(|p| !p.env.is_empty()))
+                .map(|p| p.env.clone())
+                .unwrap_or_default();
+            let options = SyncOptions {
+                offline,
+                profiles: profiles.clone(),
+                env,
+                maven_command: ide_sdk::apply::maven_command(root, settings).map(|p| p.to_string_lossy().into_owned()),
+                maven_options: ide_sdk::apply::maven_options(root, settings),
+                maven_settings: settings.languages.java.maven.clone(),
+                gradle_command: None,
+            };
+            let progress = |p: SyncProgress| {
+                let _ = on_progress.send(p);
+            };
+            match tool {
+                BuildTool::Maven if current.maven.is_some() => {
+                    ide_build::sync_maven(root, cache, &options, &token, &progress)?
+                }
+                BuildTool::Maven => {}
+                BuildTool::Gradle => {
+                    for g in current
+                        .gradle
+                        .iter()
+                        .filter(|g| build_dir.as_ref().is_none_or(|dir| p.root.join(dir) == root.join(&g.dir)))
+                    {
+                        if token.is_cancelled() {
+                            return Err(IdeError::cancelled());
+                        }
+                        let options = SyncOptions {
+                            env: g.env.clone(),
+                            gradle_command: Some(g.command.clone()),
+                            ..options.clone()
+                        };
+                        ide_build::sync_gradle_model(root, cache, g, &options, &token, &progress)?;
                     }
-                    let options = SyncOptions {
-                        offline,
-                        env: g.env.clone(),
-                        gradle_command: Some(g.command.clone()),
-                        ..Default::default()
-                    };
-                    ide_build::sync_gradle_model(&root, &cache, g, &options, &token, &progress)?;
-                }
-                if token.is_cancelled() {
-                    return Err(IdeError::cancelled());
                 }
             }
         }
-        load_window(&worker_project, &config_dir, &trust)
+        let scopes = workspace::scopes(&p, &config)?
+            .into_iter()
+            .filter(|s| trust.trusted(&s.root).unwrap_or(false))
+            .collect::<Vec<_>>();
+        let model = workspace::load_scopes(&p.root, &scopes);
+        let updates = workspace::update_files(&p.root, &scopes, &model, tool);
+        Ok::<_, IdeError>((model, profiles_changed, updates))
     })
     .await
     .map_err(join_err);
     host.end_request(request);
-    let model = result??;
+    let (model, profiles_changed, updates) = result??;
     if completion_token.is_cancelled() {
         return Err(IdeError::cancelled());
-    }
-    if tool == BuildTool::Gradle && original_links != project.settings.effective().languages.java.gradle.linked_projects
-    {
-        // A late sync must not re-import a build that was unlinked while it ran.
-        let (config_dir, trust) = (host.config_dir.clone(), host.trust.clone());
-        return tokio::task::spawn_blocking(move || load_window(&project, &config_dir, &trust))
-            .await
-            .map_err(join_err)?;
     }
     if tool == BuildTool::Gradle {
         // The sync may report project folders outside the project (`includeFlat`): index and list them.
@@ -397,35 +426,23 @@ pub async fn build_sync(
     // to update the project configurations re-resolves them (#436). The same
     // holds for Gradle: it reuses its cached classpath on restart, so a
     // dependency added to `build.gradle` stays unresolved until told to sync.
-    let build_files: Vec<String> = match tool {
-        BuildTool::Maven => model.maven.iter().flat_map(|m| m.projects.iter().map(|p| p.pom.clone())).collect(),
-        BuildTool::Gradle => {
-            model.gradle.iter().flat_map(|g| g.projects.iter().filter_map(|p| p.build_file.clone())).collect()
-        }
-    };
     let lsp = project.lsp.clone();
-    // With a module of a reactor unlinked, jdtls imports the other modules one by one and
-    // not the reactor: naming the reactor here would import it again, all modules included.
-    let imported = match tool {
-        BuildTool::Maven => crate::project::jdtls_maven_import(&project.root, &project.settings.effective()).1,
-        BuildTool::Gradle => None,
-    };
-    let uris = match imported {
-        Some(files) => files.into_iter().filter(|f| f.ends_with("/pom.xml")).collect(),
-        None => build_files.iter().map(|f| ide_lsp::path_to_uri_string(&project.root.join(f))).collect(),
-    };
     tokio::spawn(async move {
         if profiles_changed {
             // jdtls takes the profiles from its Maven settings (see `ide_sdk::maven_profiles`).
             lsp.reconfigure().await;
         }
-        if let Err(e) = lsp.java_update_project_configs(&project.root, uris).await {
-            tracing::debug!("java/projectConfigurationsUpdate: {e}");
+        for file in updates {
+            let uri = ide_lsp::path_to_uri_string(&file);
+            if let Err(e) = lsp.java_update_project_configs(&file, vec![uri]).await {
+                tracing::debug!("java/projectConfigurationsUpdate: {e}");
+            }
         }
     });
     Ok(model)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn sync_workspace_maven(
     host: &Host,
     window: &str,
@@ -433,6 +450,7 @@ async fn sync_workspace_maven(
     request: RequestId,
     offline: bool,
     profiles: Vec<String>,
+    build_dir: Option<String>,
     on_progress: Channel<SyncProgress>,
 ) -> IdeResult<BuildModel> {
     let (config_dir, trust) = (host.config_dir.clone(), host.trust.clone());
@@ -448,7 +466,9 @@ async fn sync_workspace_maven(
         };
         let mut profiles_changed = false;
         let mut updates = Vec::new();
-        for member in trusted_members(&workspace, &trust) {
+        for member in trusted_members(&workspace, &trust)
+            .filter(|member| build_dir.as_ref().is_none_or(|dir| Path::new(dir) == member.as_path()))
+        {
             if token.is_cancelled() {
                 return Err(IdeError::cancelled());
             }
@@ -613,14 +633,23 @@ pub async fn gradle_dependencies(
 ) -> IdeResult<Vec<ide_build::GradleDependency>> {
     host.require_trust(window)?;
     let project = host.project(window)?;
-    let (root, cache, settings) = (project.root.clone(), project.build_cache_dir(), project.settings.effective());
+    let config = host.config_dir.clone();
+    let trust = host.trust.clone();
     let token = host.begin_project_request(window, request);
     let result = tokio::task::spawn_blocking(move || {
-        let model = load(&root, &cache, &settings);
+        let scopes = workspace::scopes(&project, &config)?;
+        let scope = scopes
+            .iter()
+            .find(|s| {
+                trust.trusted(&s.root).unwrap_or(false)
+                    && workspace::selected(s, &project.root, BuildTool::Gradle, build_dir.as_deref())
+            })
+            .ok_or_else(|| IdeError::not_found("Gradle project is no longer linked"))?;
+        let model = load(&scope.root, &scope.cache, &scope.settings);
         let gradle = model
             .gradle
             .iter()
-            .find(|g| build_dir.as_ref().is_none_or(|dir| &g.dir == dir))
+            .find(|g| build_dir.as_ref().is_none_or(|dir| project.root.join(dir) == scope.root.join(&g.dir)))
             .ok_or_else(|| IdeError::not_found("Gradle project is no longer linked"))?;
         let options = SyncOptions {
             offline,
@@ -628,7 +657,7 @@ pub async fn gradle_dependencies(
             gradle_command: Some(gradle.command.clone()),
             ..Default::default()
         };
-        ide_build::gradle_dependencies(&root, gradle, &options, &gradle_path, &configuration, &token)
+        ide_build::gradle_dependencies(&scope.root, gradle, &options, &gradle_path, &configuration, &token)
     })
     .await
     .map_err(join_err);

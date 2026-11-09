@@ -1,5 +1,8 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Settings } from "@/bindings";
+import { useProject } from "@/platform/project";
+import { provideEditorService } from "@/workbench/contributions";
 import { executeAction, registerAction } from "@/platform/actions";
 import { setContext } from "@/platform/context";
 import { installKeyboardDispatcher, useKeymap } from "@/platform/keymap";
@@ -12,11 +15,8 @@ import type { DiffData } from "../diffInput";
 import { VcsDialogHost } from "../dialogs";
 import { useVcs } from "../store";
 
-const openDiff = vi.hoisted(() => vi.fn());
-vi.mock("../diffInput", async (original) => ({
-  ...(await original<typeof import("../diffInput")>()),
-  openDiff,
-}));
+const openInput = vi.fn(async () => undefined);
+provideEditorService({ openInput } as never);
 vi.mock("../DiffEditor", () => ({
   DiffEditor: ({ input }: { input: { data: DiffData } }) => (
     <button data-autofocus>{input.data.chain?.map((item) => item.path).join(", ")}</button>
@@ -32,7 +32,8 @@ const file = (name: string) => ({
 });
 
 beforeEach(() => {
-  openDiff.mockClear();
+  openInput.mockClear();
+  useProject.setState({ settings: null });
   useVcs.setState({
     available: true,
     root: "/p",
@@ -53,6 +54,7 @@ describe("Commit dialog diff", () => {
     "opens above Commit by %s and preserves its state and focus",
     async (entry) => {
       setContext("vcsAvailable", true);
+      useProject.setState({ settings: { vcs: { commit: { nonModal: false } } } as Settings });
       const closeEditorTab = vi.fn();
       const dispose = [
         installKeyboardDispatcher(),
@@ -88,10 +90,10 @@ describe("Commit dialog diff", () => {
           fireEvent.click(screen.getByRole("menuitem", { name: /Show Diff/ }));
         } else await act(() => executeAction("vcs.showDiff"));
 
-        const diff = screen.getByRole("dialog", { name: "Diff" });
+        const diff = await screen.findByRole("dialog", { name: "Diff" });
         const diffContent = within(diff).getByRole("button", { name: "/p/Alpha.java, /p/Beta.java" });
         expect(diffContent).toHaveFocus();
-        expect(openDiff).not.toHaveBeenCalled();
+        expect(openInput).not.toHaveBeenCalled();
         fireEvent.keyDown(diffContent, entry === "F4" ? { key: "w", code: "KeyW", metaKey: true } : { key: "Escape" });
         expect(closeEditorTab).not.toHaveBeenCalled();
         expect(diff).not.toBeInTheDocument();
@@ -110,6 +112,9 @@ describe("Commit dialog diff", () => {
   it.each(["commit", "local"] as const)("keeps the %s tool window's editor preview", (mode) => {
     render(<ChangesTree mode={mode} />);
     fireEvent.doubleClick(screen.getByText("Alpha.java"));
-    expect(openDiff).toHaveBeenCalledWith(expect.objectContaining({ path: "/p/Alpha.java" }), { preview: true });
+    expect(openInput).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "diff", data: expect.objectContaining({ path: "/p/Alpha.java" }) }),
+      { preview: true, focus: true },
+    );
   });
 });

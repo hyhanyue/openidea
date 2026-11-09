@@ -773,13 +773,7 @@ pub fn launch_has_non_java_sources(root: &Path, model: &BuildModel, module: &Pat
     has_non_java_sources(module)
 }
 
-fn launch_plan(root: &Path, model: &BuildModel, module: &Path, test: bool) -> IdeResult<BuildPlan> {
-    let kind = if model.maven.as_ref().is_some_and(|m| m.projects.iter().any(|p| subdir(root, &p.dir) == module)) {
-        // JDT may have left newer error stubs in Maven's output directories.
-        BuildKind::Rebuild
-    } else {
-        BuildKind::Build
-    };
+fn launch_plan(root: &Path, model: &BuildModel, module: &Path, test: bool, kind: BuildKind) -> IdeResult<BuildPlan> {
     let mut plan = plan(root, model, kind, Some(module), None)?;
     if plan.system == BuildSystem::Maven && !test {
         for step in &mut plan.steps {
@@ -791,6 +785,12 @@ fn launch_plan(root: &Path, model: &BuildModel, module: &Path, test: bool) -> Id
     Ok(plan)
 }
 
+#[derive(Debug)]
+pub struct LaunchBuild {
+    pub class_dirs: Vec<PathBuf>,
+    pub failure: Option<String>,
+}
+
 /// Compiles the module at `module` with its build system before a JVM launch and
 /// returns the class directories it wrote, to put ahead of the jdtls classpath.
 pub fn build_for_launch(
@@ -798,9 +798,10 @@ pub fn build_for_launch(
     model: &BuildModel,
     module: &Path,
     test: bool,
+    kind: BuildKind,
     cancel: &CancellationToken,
-) -> IdeResult<Vec<PathBuf>> {
-    let plan = launch_plan(root, model, module, test)?;
+) -> IdeResult<LaunchBuild> {
+    let plan = launch_plan(root, model, module, test, kind)?;
     if cancel.is_cancelled() {
         return Err(IdeError::cancelled());
     }
@@ -817,32 +818,31 @@ pub fn build_for_launch(
     if cancel.is_cancelled() {
         return Err(IdeError::cancelled());
     }
-    if let Err(mut error) = run_for_launch(root, &plan, cancel) {
+    let result = run(root, &plan, cancel, &|_| {});
+    let failed = cancel.is_cancelled() || result.as_ref().map_or(true, |r| !r.success);
+    let mut restore_errors = Vec::new();
+    if failed {
         for backup in backups {
-            if let Err(restore) = backup.restore() {
-                tracing::error!(%restore, "Cannot roll back Maven launch outputs");
-                error.message.push_str(&format!("\n{restore}"));
+            if let Err(error) = backup.restore() {
+                tracing::error!(%error, "Cannot roll back Maven launch outputs");
+                restore_errors.push(error.to_string());
             }
         }
+    }
+    if !restore_errors.is_empty() {
+        let mut error = if cancel.is_cancelled() {
+            IdeError::cancelled()
+        } else {
+            result.err().unwrap_or_else(|| IdeError::internal("Build failed"))
+        };
+        error.message.push_str(&format!("\nCannot roll back Maven launch outputs:\n{}", restore_errors.join("\n")));
         return Err(error);
     }
-    if plan.system == BuildSystem::Maven
-        && let Some(m) = &model.maven
-    {
-        return Ok(maven_launch_projects(root, m, module, test)
-            .iter()
-            .flat_map(|p| launch_class_dirs(plan.system, &subdir(root, &p.dir), test && subdir(root, &p.dir) == module))
-            .collect());
-    }
-    Ok(launch_class_dirs(plan.system, module, test))
-}
-
-fn run_for_launch(root: &Path, plan: &BuildPlan, cancel: &CancellationToken) -> IdeResult<()> {
-    let result = run(root, plan, cancel, &|_| {})?;
     if cancel.is_cancelled() {
         return Err(IdeError::cancelled());
     }
-    if !result.success {
+    let result = result?;
+    let failure = if !result.success {
         let errors: Vec<String> = result
             .messages
             .iter()
@@ -853,9 +853,21 @@ fn run_for_launch(root: &Path, plan: &BuildPlan, cancel: &CancellationToken) -> 
                 _ => m.text.clone(),
             })
             .collect();
-        return Err(IdeError::internal(format!("Build failed:\n{}", errors.join("\n"))));
-    }
-    Ok(())
+        Some(format!("Build failed:\n{}", errors.join("\n")))
+    } else {
+        None
+    };
+    let class_dirs = if plan.system == BuildSystem::Maven
+        && let Some(m) = &model.maven
+    {
+        maven_launch_projects(root, m, module, test)
+            .iter()
+            .flat_map(|p| launch_class_dirs(plan.system, &subdir(root, &p.dir), test && subdir(root, &p.dir) == module))
+            .collect()
+    } else {
+        launch_class_dirs(plan.system, module, test)
+    };
+    Ok(LaunchBuild { class_dirs, failure })
 }
 
 fn launch_class_dirs(system: BuildSystem, module: &Path, test: bool) -> Vec<PathBuf> {
@@ -1342,13 +1354,17 @@ mod tests {
         write(root, "app/pom.xml", "<project/>");
         let model = reactor_model();
         for (test, goal) in [(false, "compile"), (true, "test-compile")] {
-            let plan = launch_plan(root, &model, &root.join("app"), test).unwrap();
+            // A normal launch is incremental: no `clean` (IDEA's Make, not Rebuild).
+            let plan = launch_plan(root, &model, &root.join("app"), test, BuildKind::Build).unwrap();
             let step = &plan.steps[0];
             assert_eq!(step.cwd, root);
             assert_eq!(step.program, "mvnw");
             assert_eq!(step.env["JAVA_HOME"], "/jdk");
+            assert_eq!(step.args, ["-B", "-Dstyle.color=never", "-s", "settings.xml", "-pl", "app", "-am", goal]);
+            // Rebuild cleans first, as IDEA's Rebuild does.
+            let plan = launch_plan(root, &model, &root.join("app"), test, BuildKind::Rebuild).unwrap();
             assert_eq!(
-                step.args,
+                plan.steps[0].args,
                 ["-B", "-Dstyle.color=never", "-s", "settings.xml", "-pl", "app", "-am", "clean", goal]
             );
         }
@@ -1370,9 +1386,10 @@ mod tests {
         std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut model = reactor_model();
         model.maven.as_mut().unwrap().projects[0].command = wrapper.to_string_lossy().into_owned();
-        let dirs = build_for_launch(root, &model, &root.join("app"), true, &CancellationToken::new()).unwrap();
+        let dirs = build_for_launch(root, &model, &root.join("app"), true, BuildKind::Build, &CancellationToken::new())
+            .unwrap();
         assert_eq!(
-            dirs,
+            dirs.class_dirs,
             ["app/target/test-classes", "app/target/classes", "middle/target/classes", "lib/target/classes"]
                 .map(|p| root.join(p))
         );
@@ -1381,12 +1398,16 @@ mod tests {
             "mvnw",
             "#!/bin/sh\necho '[ERROR] Kotlin compilation failed: unresolved reference broken' >&2\nexit 1\n",
         );
-        let error = build_for_launch(root, &model, &root.join("app"), false, &CancellationToken::new()).unwrap_err();
-        assert!(error.message.contains("Kotlin compilation failed"), "{}", error.message);
+        let error =
+            build_for_launch(root, &model, &root.join("app"), false, BuildKind::Build, &CancellationToken::new())
+                .unwrap()
+                .failure
+                .unwrap();
+        assert!(error.contains("Kotlin compilation failed"), "{error}");
         let cancel = CancellationToken::new();
         cancel.cancel();
         assert_eq!(
-            build_for_launch(root, &model, &root.join("app"), false, &cancel).unwrap_err().kind,
+            build_for_launch(root, &model, &root.join("app"), false, BuildKind::Build, &cancel).unwrap_err().kind,
             ide_core::error::ErrorKind::Cancelled
         );
     }
@@ -1430,7 +1451,12 @@ exit 1
         model.maven.as_mut().unwrap().projects[0].command = script.to_string_lossy().into_owned();
 
         let module = root.join("app");
-        assert!(build_for_launch(root, &model, &module, false, &CancellationToken::new()).is_err());
+        assert!(
+            build_for_launch(root, &model, &module, false, BuildKind::Build, &CancellationToken::new())
+                .unwrap()
+                .failure
+                .is_some()
+        );
         for (file, value) in previous {
             assert_eq!(fs::read_to_string(root.join(file)).unwrap(), value);
         }
@@ -1442,6 +1468,51 @@ exit 1
         let rebuild = plan(root, &model, BuildKind::Rebuild, Some(&module), None).unwrap();
         assert!(!run(root, &rebuild, &CancellationToken::new(), &|_| {}).unwrap().success);
         assert!(!root.join("app/target/classes/Main.class").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_maven_launch_restores_remaining_modules_after_restore_error() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "app/pom.xml", "<project/>");
+        // The reactor root is backed up before its child modules.
+        write(root, "target/classes/Root.class", "old root");
+        write(root, "target/test-classes/RootTest.class", "old root test");
+        write(root, "app/target/classes/Main.class", "old app");
+        write(
+            root,
+            "mvnw",
+            r#"#!/bin/sh
+rm -rf target app/target
+printf blocked > target
+mkdir -p app/target/classes
+printf partial > app/target/classes/Main.class
+exit 1
+"#,
+        );
+        let script = root.join("mvnw");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut model = reactor_model();
+        model.maven.as_mut().unwrap().projects[0].command = script.to_string_lossy().into_owned();
+
+        let error =
+            build_for_launch(root, &model, &root.join("app"), false, BuildKind::Build, &CancellationToken::new())
+                .unwrap_err();
+        assert!(error.message.contains("Build failed"), "{error}");
+        assert!(error.message.contains("target/classes"), "{error}");
+        assert!(error.message.contains("target/test-classes"), "{error}");
+        assert_eq!(fs::read_to_string(root.join("app/target/classes/Main.class")).unwrap(), "old app");
+        let retained = fs::read_dir(root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".openidea-launch-"))
+            .filter(|entry| entry.path().join("previous").is_dir())
+            .count();
+        assert_eq!(retained, 2, "both unrestorable outputs retain their backups");
     }
 
     #[cfg(unix)]
@@ -1473,7 +1544,8 @@ sleep 30
         let cancel = CancellationToken::new();
 
         std::thread::scope(|scope| {
-            let build = scope.spawn(|| build_for_launch(root, &model, &root.join("app"), true, &cancel));
+            let build =
+                scope.spawn(|| build_for_launch(root, &model, &root.join("app"), true, BuildKind::Build, &cancel));
             let start = Instant::now();
             while !root.join("building").is_file() && !build.is_finished() && start.elapsed() < Duration::from_secs(5) {
                 std::thread::sleep(Duration::from_millis(10));

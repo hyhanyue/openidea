@@ -135,9 +135,13 @@ async fn failed_jdtls_reactor_build_preserves_outputs_and_can_retry() {
     host.trust.decide(&root, true, false).unwrap();
     let project = host.open_project(WINDOW, &root).unwrap();
     let module = PathBuf::from("app");
-    let launch = || java_resolve_launch(&host, WINDOW, module.clone(), false, true, RequestId::next());
+    let launch = || {
+        java_resolve_launch(&host, WINDOW, module.clone(), false, ide_run::BuildPolicy::Automatic, RequestId::next())
+    };
     // Classpath resolution waits for Maven import even with autobuild disabled.
-    java_resolve_launch(&host, WINDOW, module.clone(), false, false, RequestId::next()).await.unwrap();
+    java_resolve_launch(&host, WINDOW, module.clone(), false, ide_run::BuildPolicy::NoBuild, RequestId::next())
+        .await
+        .unwrap();
     let good = launch().await.unwrap();
     assert_eq!(good.build, Some(JavaBuildStatus::Succeeded), "{good:?}");
     let java = good.java_exec.unwrap();
@@ -156,7 +160,7 @@ async fn failed_jdtls_reactor_build_preserves_outputs_and_can_retry() {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         // The watched-file notification is processed asynchronously by JDT LS.
-        let status = java_build_workspace(&host, WINDOW, module.clone()).await.unwrap();
+        let status = java_build_workspace(&host, WINDOW, module.clone(), None).await.unwrap();
         if status == JavaBuildStatus::WithErrors {
             break;
         }
@@ -182,7 +186,9 @@ async fn failed_jdtls_reactor_build_preserves_outputs_and_can_retry() {
     host.close_project(WINDOW);
     std::fs::write(&main, MAIN).unwrap();
     host.open_project(WINDOW, &root).unwrap();
-    java_resolve_launch(&host, WINDOW, module.clone(), false, false, RequestId::next()).await.unwrap();
+    java_resolve_launch(&host, WINDOW, module.clone(), false, ide_run::BuildPolicy::NoBuild, RequestId::next())
+        .await
+        .unwrap();
     let recovered = launch().await.unwrap();
     assert_eq!(recovered.build, Some(JavaBuildStatus::Succeeded), "{recovered:?}");
     assert!(new.is_file());

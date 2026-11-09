@@ -30,6 +30,7 @@
 //! Configurations not stored as project files live in the same format in the
 //! workspace-local, git-ignored `run.local.toml`.
 
+use crate::BuildPolicy;
 use crate::{BeforeLaunchTask, RunConfig, RunExtras, maven_rerun::MavenModuleTests};
 use ide_core::{IdeError, IdeResult, project_dir};
 use serde::Deserialize;
@@ -102,6 +103,8 @@ struct FileConfig {
     output_file: Option<String>,
     #[serde(default, alias = "beforeLaunch")]
     before_launch: Vec<BeforeLaunchTask>,
+    #[serde(alias = "buildPolicy")]
+    build_policy: Option<BuildPolicy>,
     #[serde(default)]
     compound: Vec<String>,
     #[serde(default, alias = "showOnStdout")]
@@ -174,6 +177,7 @@ fn convert(configs: Vec<FileConfig>, local: bool) -> Vec<RunConfig> {
                 stdin_file: non_empty(c.stdin_file),
                 output_file: non_empty(c.output_file),
                 before_launch: c.before_launch.into_iter().filter(|t| !t.kind.is_empty()).collect(),
+                build_policy: c.build_policy,
                 compound: c.compound,
                 show_on_stdout: c.show_on_stdout,
                 show_on_stderr: c.show_on_stderr,
@@ -285,6 +289,9 @@ fn to_table(c: &RunConfig) -> Table {
             tasks.push(it);
         }
         t.insert("before-launch", value(tasks));
+    }
+    if let Some(policy) = x.build_policy {
+        t.insert("build-policy", value(policy.key()));
     }
     if !x.compound.is_empty() {
         t.insert("compound", value(x.compound.iter().collect::<Array>()));

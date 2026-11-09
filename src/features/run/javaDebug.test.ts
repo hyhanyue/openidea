@@ -7,6 +7,21 @@ import { sessionDetail } from "./services";
 
 const ipc = vi.hoisted(() => ({
   channels: [] as Array<{ onmessage: ((chunk: { kind: "stdout" | "stderr"; text: string }) => void) | null }>,
+  javaResolveLaunch: vi.fn(async () => ({
+    status: "ok" as const,
+    data: {
+      build: "succeeded" as const,
+      projectRoot: "/p",
+      classPaths: ["lib/*"],
+      modulePaths: [],
+      javaHome: "/jdk8",
+      javaExec: "/jdk8/bin/java",
+      shortenCommandLine: null,
+      errors: [],
+      errorCount: 0,
+      hints: [],
+    },
+  })),
   runStart: vi.fn(async () => ({ status: "ok" as const, data: { id: 99, pty: false } })),
   runStop: vi.fn(async (_id: number) => ({ status: "ok" as const, data: null })),
 }));
@@ -78,6 +93,7 @@ it("probes availability before starting a suspended JVM", async () => {
 it("attaches successfully once per port and retains the owned JVM", async () => {
   await debugWithAgent(config);
   expect(prepare).toHaveBeenCalledWith(config, "");
+  expect(ipc.javaResolveLaunch).toHaveBeenCalledWith("", false, "automatic", expect.any(Number));
   expect(current().debugAttachment).toBe("waiting");
   announce();
   announce();

@@ -23,12 +23,12 @@ import { pomNavigationExtension } from "./pomNavigation";
 import { buildToolsRunAnything } from "./runAnything";
 import { versionCatalogExtension } from "./versionCatalog";
 import {
-  buildPath,
   expandableKeys,
   gradleChildren,
   gradleRoots,
   mavenChildren,
   mavenRoots,
+  mavenPomAtPath,
   gradleProjectKey,
 } from "./model";
 import {
@@ -89,7 +89,8 @@ function analyzerPom(arg: unknown): string | null {
   const a = (arg ?? {}) as { pom?: unknown; path?: unknown };
   if (typeof a.pom === "string") return a.pom;
   if (typeof a.path === "string" && root) {
-    return projects.find((p) => p.pom === a.path || buildPath(root, p.pom) === a.path)?.pom ?? null;
+    const pom = mavenPomAtPath(projects, root, a.path);
+    if (pom) return pom;
   }
   return current.maven ?? null;
 }
@@ -150,16 +151,12 @@ function apply(model: BuildModel | null, registered: Partial<Record<BuildTool, (
   }
   // Import each independent build once; linking another build must not be hidden by the first sync.
   const root = useBuild.getState().root;
-  const mavenKey = JSON.stringify([
-    "maven",
-    root,
-    useProject.getState().project?.workspace
-      ? model?.maven?.projects.filter((p) => !p.aggregated).map((p) => p.pom)
-      : null,
-  ]);
-  if (model?.maven?.projects.length && model.maven.syncedAt == null && !synced.has(mavenKey)) {
-    synced.add(mavenKey);
-    requestSync("maven");
+  for (const member of new Set(model?.maven?.projects.map((p) => p.projectRoot ?? null))) {
+    const key = JSON.stringify(["maven", root, member]);
+    if (model?.maven?.syncedAt == null && !synced.has(key)) {
+      synced.add(key);
+      requestSync("maven", member);
+    }
   }
   for (const build of model?.gradle ?? []) {
     const key = JSON.stringify([root, build.dir]);
@@ -221,7 +218,8 @@ export function activate(): () => void {
       items: (_menu, { paths, dirs }) => {
         const path = paths.length === 1 && !dirs?.[0] ? paths[0]! : null;
         if (!path || !path.endsWith("/pom.xml")) return [];
-        const pom = analyzerPom({ path });
+        const { model, root } = useBuild.getState();
+        const pom = mavenPomAtPath(model?.maven?.projects ?? [], root, path);
         if (!pom) return [];
         return [{ kind: "action", action: "maven.analyzeDependencies", arg: { pom }, label: "Analyze Dependencies…" }];
       },

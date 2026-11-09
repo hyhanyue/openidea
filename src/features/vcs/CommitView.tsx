@@ -3,8 +3,25 @@
  * parts also make the Git window's Local Changes / Stash tabs and the Commit dialog.
  */
 import { useWorkflowSettings } from "@/platform/workflowSettings";
-import { formatBinding, isMacHost, macStroke, normalizeBinding, registerKeyClaim, strokeOf } from "@/platform/keymap";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import {
+  formatBinding,
+  isMacHost,
+  macStroke,
+  normalizeBinding,
+  registerKeyClaim,
+  shortcutLabel,
+  strokeOf,
+} from "@/platform/keymap";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 import { tx } from "@/platform/i18n";
 import clsx from "clsx";
 import { executeAction } from "@/platform/actions";
@@ -33,7 +50,7 @@ import {
   type TreeHandle,
   T,
 } from "@/ui";
-import { editorService, useMenuSlotItems } from "@/workbench/contributions";
+import { editorService, maybeEditorService, type EditorInput, useMenuSlotItems } from "@/workbench/contributions";
 import { evaluateWhen, useContextKeys } from "@/platform/context";
 import { useToolWindowLayout } from "@/workbench/toolwindows/store";
 import {
@@ -41,12 +58,10 @@ import {
   buildChangeTree,
   checkOf,
   filesOf,
-  groupFileNodes,
   groupOf,
   ignoreTargets,
   isPartiallyStaged,
   planCommit,
-  stagingSide,
   toggledCheck,
   type ChangeNode,
 } from "./changes";
@@ -70,8 +85,15 @@ import {
 import { pushAfterCommit } from "./commitUi";
 import { rebaseAfterFixup } from "./rebase";
 import { stashTabOf, stashTabs, type ContentTab } from "./gitTabs";
-import { diffInput, openDiff, withChain, workingDiffData } from "./diffInput";
-import { openDiffDialog } from "./diffDialog";
+import {
+  DIFF_KIND,
+  changeNodeDiff,
+  changeNodeDiffData,
+  diffInput,
+  openVcsDiff,
+  vcsDiffInFront,
+  workingDiffData,
+} from "./diffInput";
 import { DiffEditor } from "./DiffEditor";
 import { KIND_COLOR, KIND_LABEL, fileCount, formatTime, stashLabel, stripSlash } from "./model";
 import { call, commands } from "@/platform/ipc";
@@ -187,16 +209,13 @@ const bottomLeft = (el: HTMLElement) => {
 
 /**
  * Opens a file's diff; F7 continues through the other files of its group, in tree
- * order. `dialog` opens it in a front dialog: an editor tab would sit behind the
- * modal Commit dialog, invisible until it closes (#1863).
+ * order. Where depends on the commit interface setting (openVcsDiff): a preview editor
+ * tab, or under the modal interface the front diff window, as an editor tab would sit
+ * behind the modal Commit dialog (#1863).
  */
-function openNode(n: ChangeNode, roots: readonly ChangeNode[], mode: "commit" | "local" | "dialog") {
+function openNode(n: ChangeNode, roots: readonly ChangeNode[]) {
   if (n.type !== "file" || !n.path) return;
-  const nodes = groupFileNodes(roots, n);
-  const items = nodes.map((f) => workingDiffData(f.path!, undefined, stagingSide(f.group, f.files[0]!)));
-  const data = withChain(items, Math.max(0, nodes.indexOf(n)));
-  if (mode === "dialog") openDiffDialog(data);
-  else void openDiff(data, { preview: true });
+  void openVcsDiff(changeNodeDiffData(roots, n), { preview: true });
 }
 
 /** Context menu of a change list's header: the list's own actions, then the bulk ones on its files. */
@@ -263,7 +282,7 @@ export function copyChangePaths(nodes: ChangeNode[], kind: "absolute" | "name") 
 export function nodeMenu(
   nodes: ChangeNode[],
   repos: readonly string[],
-  opts?: { mode?: "commit" | "local" | "dialog"; roots?: readonly ChangeNode[] },
+  opts?: { roots?: readonly ChangeNode[] },
 ): MenuItem[] {
   const files = filesOf(nodes);
   const deletable = deletableFiles(nodes);
@@ -293,15 +312,19 @@ export function nodeMenu(
       run: () => commitFiles(paths),
     },
     { kind: "separator" },
-    // In `dialog` mode an editor tab would sit behind the modal Commit dialog (#1863):
-    // open the diff in a front dialog, like double-click does.
-    opts?.mode === "dialog" && opts.roots && first
-      ? { label: "Show Diff", icon: "diff", shortcut: "F4", run: () => openNode(first, opts.roots!, "dialog") }
+    // Under the modal interface the node itself, like double-click, in the front window.
+    vcsDiffInFront() && opts?.roots && first
+      ? {
+          label: "Show Diff",
+          icon: "diff",
+          shortcut: shortcutLabel("vcs.showDiff"),
+          run: () => openNode(first, opts.roots!),
+        }
       : { kind: "action", action: "vcs.showDiff", arg: first?.path },
     {
       label: "Jump to Source",
       icon: "external-link",
-      shortcut: opts?.mode === "dialog" ? undefined : "F4",
+      shortcut: vcsDiffInFront() ? undefined : "F4",
       disabled: !first?.path || first.kind === "deleted",
       run: () => first?.path && void editorService().openFile(first.path, { focus: true }),
     },
@@ -528,15 +551,50 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
     return [m, up] as const;
   }, [roots]);
 
-  /** Select Opened File: reveals the focused editor's file in the tree. */
+  const [nodeToReveal, setNodeToReveal] = useState<{ key: string } | null>(null);
+  const revealNode = useCallback(
+    (node: ChangeNode) => {
+      const ancestors = new Set<string>();
+      for (let key = parents.get(node.key); key; key = parents.get(key)) ancestors.add(key);
+      setCollapsed((current) => new Set([...current].filter((key) => !ancestors.has(key))));
+      setNodeToReveal({ key: node.key });
+    },
+    [parents],
+  );
+
+  const followedDiff = useRef<string | null>(null);
+  useEffect(() => {
+    const editor = maybeEditorService();
+    const followDiff = (input: EditorInput | null) => {
+      if (input?.kind !== DIFF_KIND) {
+        followedDiff.current = null;
+        return;
+      }
+      if (input.key === followedDiff.current) return;
+      const node = [...byKey.values()].find((node) => {
+        if (node.type !== "file" || node.path !== input.path) return false;
+        return diffInput(changeNodeDiff(node)).key === input.key;
+      });
+      if (node) {
+        followedDiff.current = input.key;
+        revealNode(node);
+      } else {
+        followedDiff.current = null;
+      }
+    };
+    followDiff(editor?.activeInput?.() ?? null);
+    return editor?.onActiveInputChange?.(followDiff);
+  }, [byKey, revealNode]);
+
+  // Reveal only after the ancestors have expanded, without moving keyboard focus.
+  useLayoutEffect(() => {
+    if (nodeToReveal) treeRef.current?.reveal(nodeToReveal.key);
+  }, [nodeToReveal]);
+
   const selectOpened = () => {
     const path = editorService().activePath();
-    const node = path ? [...byKey.values()].find((n) => n.type === "file" && n.path === path) : undefined;
-    if (!node) return;
-    const ancestors: string[] = [];
-    for (let k = parents.get(node.key); k; k = parents.get(k)) ancestors.push(k);
-    setCollapsed((c) => new Set([...c].filter((k) => !ancestors.includes(k))));
-    requestAnimationFrame(() => treeRef.current?.reveal(node.key));
+    const node = path ? [...byKey.values()].find((node) => node.type === "file" && node.path === path) : undefined;
+    if (node) revealNode(node);
   };
   const expanded = useMemo(() => {
     const s = new Set<string>();
@@ -565,7 +623,7 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
   }, []);
 
   const selectedNodes = () => [...selected].map((k) => byKey.get(k)).filter((n): n is ChangeNode => !!n);
-  const showNodeDiff = (node: ChangeNode) => openNode(node, roots, mode);
+  const showNodeDiff = (node: ChangeNode) => openNode(node, roots);
   useEffect(() => {
     if (mode !== "dialog") return;
     return registerKeyClaim((e, stroke) => stroke === "F4" && treeWrapRef.current?.contains(e.target as Node) === true);
@@ -692,6 +750,7 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
             const nodes = [...sel].map((k) => byKey.get(k)).filter((n): n is ChangeNode => !!n);
             useCommit.setState({
               selection: filesOf(nodes).map((f) => f.path),
+              selectionKeys: [...sel],
               selectedList: nodes.find((n) => n.changelist)?.changelist ?? null,
             });
           }}
@@ -703,7 +762,7 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
               return;
             }
             const nodes = [...sel].map((k) => byKey.get(k)).filter((n): n is ChangeNode => !!n);
-            showContextMenu(e, nodeMenu(nodes.length ? nodes : [node], repos, { mode, roots }));
+            showContextMenu(e, nodeMenu(nodes.length ? nodes : [node], repos, { roots }));
           }}
           aria-label="Changes"
           empty={

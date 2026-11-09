@@ -31,7 +31,7 @@ export function syncSpringLaunchContext(): Promise<void> {
       )
         return;
       try {
-        await call(commands.pluginRunCommand(plugin, "openidea.setLaunchContext", context, null, [], "project"));
+        await call(commands.pluginRunCommand(plugin, "openidea.setLaunchContext", context, null, [], "project", null));
       } catch (error) {
         // A bounded/unsupported payload must never leave another selection's facts active.
         if (useProject.getState().project?.root !== projectRoot) return;
@@ -44,6 +44,7 @@ export function syncSpringLaunchContext(): Promise<void> {
               null,
               [],
               "project",
+              null,
             ),
           );
         } catch {

@@ -78,7 +78,7 @@ describe("Java debugging (java-debug through jdtls)", () => {
     expect(isJavaDebuggable({ ...app, kind: "maven" })).toBe(false);
     const l = await javaLaunchConfig(app, "/p");
     expect(invoked).toEqual([
-      ["javaResolveLaunch", ["api", false, true, expect.any(Number)]],
+      ["javaResolveLaunch", ["api", false, "automatic", expect.any(Number)]],
       ["javaDebugServer", ["api"]],
     ]);
     expect(l).toMatchObject({ adapter: "java-debug", request: "launch", cwd: "/p/api", args: [], env: { A: "1" } });
@@ -188,7 +188,7 @@ it.each(["sibling", "/outside/modules"])("debugs from %s with the main class mod
   for (const module of ["api", undefined]) {
     invoked.length = 0;
     const launch = await javaLaunchConfig({ ...app, module, cwd }, "/p");
-    expect(invoked).toContainEqual(["javaResolveLaunch", ["api", false, true, expect.any(Number)]]);
+    expect(invoked).toContainEqual(["javaResolveLaunch", ["api", false, "automatic", expect.any(Number)]]);
     expect(invoked).toContainEqual(["javaDebugServer", ["api"]]);
     expect(launch.cwd).toBe(cwd.startsWith("/") ? cwd : `/p/${cwd}`);
     expect(JSON.parse(launch.extraJson!).__javaModule).toBe("api");
@@ -261,4 +261,17 @@ it("honours an explicit Java 8 project runtime instead of the JDT tooling runtim
     vmArgs: "-Dspring.output.ansi.enabled=always -Dprobe=vm -Xmx1g",
     args: '--port "8081 x" --spring.profiles.active=prod',
   });
+});
+
+it("reports a save failure before starting Java Debug", async () => {
+  invoked.length = 0;
+  const saveAll = vi.fn().mockRejectedValue(new Error("save failed"));
+  await expect(
+    javaLaunchConfig(app, "/p", {
+      request: 1,
+      signal: new AbortController().signal,
+      saveAll,
+    }),
+  ).rejects.toThrow("save failed");
+  expect(invoked).toEqual([]);
 });
