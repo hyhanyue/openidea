@@ -6,7 +6,7 @@
  */
 import { Compartment, RangeSet, StateEffect, StateField, type Extension, type Text } from "@codemirror/state";
 import { EditorView, GutterMarker, ViewPlugin, gutter, type ViewUpdate } from "@codemirror/view";
-import type { EditorDocContext } from "@/editor/api";
+import { shownAgain, type EditorDocContext } from "@/editor/api";
 import { onLspRefresh } from "@/editor/lsp/availability";
 import { isSpringBeansPlugin, springLabels } from "./springLabels";
 import { navigationButton } from "./navigationButton";
@@ -93,6 +93,7 @@ class PluginMarker extends GutterMarker {
 class MarkersPlugin {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
+  private skipped = false;
   private shown = false;
   private off: () => void;
   private offIcons: () => void;
@@ -132,7 +133,7 @@ class MarkersPlugin {
   }
 
   update(u: ViewUpdate) {
-    if (u.docChanged) this.schedule();
+    if (u.docChanged || (this.skipped && shownAgain(u))) this.schedule();
   }
 
   private schedule() {
@@ -156,7 +157,9 @@ class MarkersPlugin {
           icon: await resolveMarkerIcon(marker.pluginId, marker.icon),
         })),
       );
-      if (gen !== this.generation || this.view.state.doc !== text || !this.view.dom.isConnected) return;
+      if (gen !== this.generation || this.view.state.doc !== text) return;
+      this.skipped = !this.view.dom.isConnected;
+      if (this.skipped) return;
       const placed = placeMarkers(text, resolved);
       if (!placed.length && !this.view.state.field(markersField).length) return;
       const effects: StateEffect<unknown>[] = [setMarkers.of(placed)];

@@ -71,6 +71,7 @@ pub enum Incoming {
 type Pending = HashMap<i64, (String, oneshot::Sender<Result<Value, DapError>>)>;
 
 struct Inner {
+    mapping: Option<crate::target::TargetMapping>,
     out: mpsc::UnboundedSender<Vec<u8>>,
     pending: Mutex<Pending>,
     seq: AtomicI64,
@@ -107,8 +108,21 @@ impl Connection {
     /// own output on stdout, decoded) to `on_output`.
     pub fn start_with_output<R, W>(
         reader: R,
+        writer: W,
+        on_output: Box<dyn Fn(String) + Send + Sync>,
+    ) -> (Self, mpsc::UnboundedReceiver<Incoming>)
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        Self::start_with_target(reader, writer, on_output, None)
+    }
+
+    pub fn start_with_target<R, W>(
+        reader: R,
         mut writer: W,
         on_output: Box<dyn Fn(String) + Send + Sync>,
+        target: Option<crate::target::TargetMapping>,
     ) -> (Self, mpsc::UnboundedReceiver<Incoming>)
     where
         R: AsyncRead + Unpin + Send + 'static,
@@ -117,6 +131,7 @@ impl Connection {
         let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (in_tx, in_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
+            mapping: target,
             out: out_tx,
             pending: Mutex::new(HashMap::new()),
             seq: AtomicI64::new(1),
@@ -187,8 +202,12 @@ impl Connection {
         if self.is_closed() {
             return Err(DapError::Closed);
         }
-        let body = serde_json::to_vec(value).map_err(|e| DapError::Protocol(e.to_string()))?;
-        trace_wire("-->", value, &body);
+        let mut value = value.clone();
+        if let Some(mapping) = self.inner.mapping.as_ref() {
+            mapping.rewrite(&mut value, ide_core::path_mapping::Direction::ToTarget);
+        }
+        let body = serde_json::to_vec(&value).map_err(|e| DapError::Protocol(e.to_string()))?;
+        trace_wire("-->", &value, &body);
         self.inner.out.send(body).map_err(|_| DapError::Closed)
     }
 
@@ -257,7 +276,7 @@ fn trace_wire(direction: &str, message: &Value, body: &[u8]) {
 }
 
 fn dispatch(inner: &Inner, incoming: &mpsc::UnboundedSender<Incoming>, body: &[u8]) {
-    let msg: Value = match serde_json::from_slice(body) {
+    let mut msg: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("dap: unparsable message: {e}");
@@ -265,6 +284,9 @@ fn dispatch(inner: &Inner, incoming: &mpsc::UnboundedSender<Incoming>, body: &[u
         }
     };
     trace_wire("<--", &msg, body);
+    if let Some(mapping) = inner.mapping.as_ref() {
+        mapping.rewrite(&mut msg, ide_core::path_mapping::Direction::ToHost);
+    }
     match msg.get("type").and_then(Value::as_str) {
         Some("response") => {
             let Some(request_seq) = msg.get("request_seq").and_then(Value::as_i64) else {

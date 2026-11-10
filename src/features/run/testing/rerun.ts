@@ -6,12 +6,13 @@ import { selectPluginTests } from "@/workbench/contributions";
 import { phpunitArgs, phpunitFilter } from "./phpunit";
 import type { MavenTestPlugin, RunConfig } from "@/platform/ipc";
 import { commandName } from "../commandName";
-import { formatArgs } from "../configs";
+import { formatArgs, parseArgs } from "../configs";
 import { appendScriptArgs } from "../scriptArgs";
 import { djangoTestsOf } from "../djangoTypes";
 import { goTestParts, withoutGoSelection } from "../goArguments";
 import { frameworkFor } from "./index";
 import { mavenResultModule } from "./jvm";
+import { dotnetFilter } from "./dotnet";
 import { nodeStatus, type TestNode, type TestResults } from "./results";
 
 /** Paths of failed tests: failed leaves, plus failed suites without any failed children reported. */
@@ -67,6 +68,11 @@ function cargoArgs(base: string[], paths: string[][]): string[] | null {
   const { before, after } = splitDashDash(base);
   const rest = (after ?? []).filter((a) => a !== "--exact");
   return [...before, "--", ...rest, ...names, "--exact"];
+}
+
+function dotnetArgs(base: string[], filter: string): string[] {
+  const { before, after } = splitDashDash(base);
+  return [...dropFlag(before, ["--filter"]), "--filter", filter, ...(after ? ["--", ...after] : [])];
 }
 
 function jsArgs(config: RunConfig, paths: string[][]): string[] | null {
@@ -277,6 +283,26 @@ function builtinTestsConfig(
   if (!paths.length) return null;
   let args: string[] | null;
   switch (frameworkFor(config)) {
+    case "dotnet": {
+      const filter = dotnetFilter(paths);
+      if (!filter) return null;
+      args = dotnetArgs(config.args, filter);
+      if (config.kind === "dotnet-test") {
+        return {
+          ...config,
+          args,
+          name,
+          detected: true,
+          env: { ...config.env },
+          params: {
+            ...config.params,
+            testMethods: JSON.stringify([...new Set(paths.map((p) => `${p[1]}.${p[2]}`))]),
+            programArgs: formatArgs(dotnetArgs(parseArgs(config.params?.programArgs || ""), filter)),
+          },
+        };
+      }
+      break;
+    }
     case "cargo":
       args = cargoArgs(config.args, paths);
       break;

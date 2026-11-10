@@ -8,6 +8,7 @@ const agentCommands = vi.fn();
 const agentCreate = vi.fn();
 const vcsBranches = vi.fn();
 const vcsBranchInfo = vi.fn();
+const clipboardImage = vi.fn();
 
 vi.mock("@/platform/ipc", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/platform/ipc")>();
@@ -18,6 +19,7 @@ vi.mock("@/platform/ipc", async (importOriginal) => {
       ...real.commands,
       agentCommands: (provider: string, task: string | null) => agentCommands(provider, task),
       agentCreate: (request: unknown) => agentCreate(request),
+      clipboardImage: () => clipboardImage(),
       vcsBranchInfo: (root: string | null) => vcsBranchInfo(root),
       vcsBranches: (root: string | null) => vcsBranches(root),
     },
@@ -34,7 +36,7 @@ import { defaultTaskProject } from "./project";
 import { HomeEditor } from "./HomeEditor";
 import composerStyles from "./Composer.module.css";
 import tagStyles from "@/ui/InlineTag.module.css";
-import { HOME, updateComposer, useAgents } from "./store";
+import { composerDraft, HOME, updateComposer, useAgents } from "./store";
 import { emptyDraft } from "./composerModel";
 
 const command = (name: string, description: string, source: "command" | "skill" = "command"): AgentCommand => ({
@@ -73,6 +75,7 @@ beforeEach(() => {
       Promise.resolve({ status: "ok", data: { head: root === "/project-b" ? "b-main" : "a-main" } }),
     );
   agentCommands.mockReset();
+  clipboardImage.mockReset().mockResolvedValue({ status: "ok", data: "data:image/png;base64,iVBORw0KGgo=" });
   agentCreate.mockReset().mockResolvedValue({ status: "error", error: { kind: "invalid", message: "stop here" } });
   useAgents.setState({
     providers: [claude],
@@ -327,6 +330,22 @@ describe("New Task model settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     fireEvent.click(screen.getByRole("option", { name: /GPT-5.6-LUNA/ }));
     expect(within(openSettings()).getByRole("slider", { name: "Reasoning" })).toHaveAttribute("max", "2");
+  });
+});
+
+describe("New Task composer paste", () => {
+  it("attaches the clipboard's image when WebKitGTK pastes an empty clipboardData", async () => {
+    render(<HomeEditor />);
+    fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { types: [], files: [] } });
+    await waitFor(() =>
+      expect(composerDraft(HOME).images).toEqual([{ mimeType: "image/png", data: "iVBORw0KGgo=", name: "image" }]),
+    );
+  });
+
+  it("leaves a text paste to the text box", () => {
+    render(<HomeEditor />);
+    fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { types: ["text/plain"], files: [] } });
+    expect(clipboardImage).not.toHaveBeenCalled();
   });
 });
 

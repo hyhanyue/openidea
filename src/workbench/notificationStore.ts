@@ -2,6 +2,7 @@
 import type { ReactNode } from "react";
 import { create } from "zustand";
 import { call, commands, onIdeEvent } from "@/platform/ipc";
+import { buildToolRecovery } from "@/platform/buildToolRecovery";
 import { txTemplate } from "@/platform/i18n";
 import { useProject } from "@/platform/project";
 import type { NotificationService } from "./contributions";
@@ -186,12 +187,10 @@ export function clearProjectNotifications() {
   useNotifications.setState((s) => ({ items: s.items.filter((x) => x.group === "updates") }));
 }
 
-/** The list was seen: everything is read and no longer shown as a balloon. */
+/** The list was seen: its entries are read; unlogged balloons were not shown there. */
 export function markAllNotificationsRead() {
   useNotifications.setState((s) => ({
-    items: s.items
-      .filter((x) => x.logged)
-      .map((x) => (x.read && !x.balloon ? x : { ...x, read: true, balloon: false })),
+    items: s.items.map((x) => (!x.logged || (x.read && !x.balloon) ? x : { ...x, read: true, balloon: false })),
   }));
 }
 
@@ -203,11 +202,13 @@ export const notificationServiceImpl: NotificationService = {
 export function installNotifyEvents(): () => void {
   return onIdeEvent("notify", (e) => {
     // Backend text may carry values (paths, names); `{name}` catalog templates translate it.
-    notify({
+    const recovery = e.body ? buildToolRecovery(e.body) : undefined;
+    void notify({
       key: e.title === "Maven project import failed" ? MAVEN_IMPORT_NOTIFICATION_KEY : undefined,
       level: e.level,
       title: txTemplate(e.title),
-      body: e.body ? txTemplate(e.body) : undefined,
+      ...recovery,
+      body: recovery ? txTemplate(recovery.body) : e.body ? txTemplate(e.body) : undefined,
     });
   });
 }

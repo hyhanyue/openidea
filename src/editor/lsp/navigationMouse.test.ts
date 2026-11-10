@@ -41,6 +41,7 @@ const { closePopup, openPopup, useLspPopup } = await import("./popupStore");
 const { registerLspActions } = await import("./actions");
 const { gotoTargets, navigationExtension } = await import("./navigation");
 const { lspDoc } = await import("./lsp");
+const { invalidateConfigurationNavigation } = await import("./configurationNavigation");
 const { provideEditorService } = await import("@/workbench/contributions");
 const openFile = vi.fn(async () => {});
 provideEditorService({ openFile } as never);
@@ -51,6 +52,7 @@ let removeAction: () => void;
 beforeEach(() => {
   usePlatform.setState({ os: "macos" });
   resetNavigationModifier();
+  invalidateConfigurationNavigation();
   vi.clearAllMocks();
   useKeymap.setState({
     preset: "intellij-macos",

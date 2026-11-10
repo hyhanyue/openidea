@@ -6,6 +6,7 @@ import { onRunExited, resetRuns, runtime, startRun, closeSession, stopSession, u
 import { sessionDetail } from "./services";
 
 const ipc = vi.hoisted(() => ({
+  debugFreePort: vi.fn(async () => ({ status: "ok" as const, data: 50123 })),
   channels: [] as Array<{ onmessage: ((chunk: { kind: "stdout" | "stderr"; text: string }) => void) | null }>,
   javaResolveLaunch: vi.fn(async () => ({
     status: "ok" as const,
@@ -296,4 +297,18 @@ it("disconnects the output bridge when its Run tab closes", async () => {
   expect(output).toHaveBeenCalledTimes(count);
   expect(useRun.getState().sessions.some((s) => s.id === id)).toBe(false);
   await new Promise((done) => setTimeout(done, 50));
+});
+
+it("pins Maven test attachment without losing owned-process cleanup", async () => {
+  attach.mockResolvedValueOnce(false);
+  await debugWithAgent({ ...config, kind: "maven", command: "mvn", args: ["verify"], isTest: true });
+  expect(ipc.debugFreePort).toHaveBeenCalledOnce();
+  expect(attach).toHaveBeenCalledWith(50123, 99, expect.any(AbortSignal), undefined);
+  expect(ipc.runStart).toHaveBeenCalledWith(
+    expect.objectContaining({ args: expect.arrayContaining([expect.stringContaining("address=127.0.0.1:50123")]) }),
+    expect.anything(),
+    expect.anything(),
+  );
+  expect(ipc.runStop).toHaveBeenCalledExactlyOnceWith(99);
+  expect(current()).toMatchObject({ status: "finished", debugAttachment: "failed" });
 });

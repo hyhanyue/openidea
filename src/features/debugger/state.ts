@@ -20,6 +20,7 @@ import {
   commands,
   isTauri,
   isCancelled,
+  nextRequestId,
   type DebugCapabilities,
   type DebugEvent,
   type DebugSessionId,
@@ -607,7 +608,12 @@ export async function startSession(
     await flushBreakpoints();
     signal?.throwIfAborted();
     const adapterStarted = performance.now();
-    const id = await call(commands.debugStart(launch));
+    const request = nextRequestId();
+    const cancel = () => void commands.cancelRequest(request).catch(() => undefined);
+    signal?.addEventListener("abort", cancel, { once: true });
+    const id = await call(commands.debugStart(launch, request)).finally(() =>
+      signal?.removeEventListener("abort", cancel),
+    );
     console.info("Debug adapter started", { name: launch.name, ms: performance.now() - adapterStarted });
     owned.add(id);
     if (afterDetach) dropFinished();

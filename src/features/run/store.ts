@@ -27,6 +27,7 @@ import {
   prepareJavaLaunch,
 } from "@/platform/javaLaunch";
 import { downloadJdkActions } from "@/platform/jdk";
+import { buildToolRecovery } from "@/platform/buildToolRecovery";
 import { useProject } from "@/platform/project";
 import { executeAction } from "@/platform/actions";
 import { workflowSettings } from "@/platform/workflowSettings";
@@ -45,6 +46,7 @@ import {
 } from "./testing";
 import { PluginTestOutput } from "./testing/plugin";
 import { GoTestOutput } from "./testing/go";
+import { DotnetReports } from "./testing/dotnet";
 import { moveToReportedClasses } from "./testing/jvm";
 import { RubyTestOutput } from "./testing/ruby";
 import { TeamcityOutput } from "./testing/teamcity";
@@ -112,6 +114,7 @@ interface CapturedOutput {
 }
 
 interface SessionRuntime {
+  dotnetReports?: DotnetReports;
   resolveRequest?: { id: RequestId; controller: AbortController };
   console: ConsoleModel;
   output?: CapturedOutput;
@@ -688,6 +691,7 @@ function newRuntime(config: RunConfig, captureOutput = false): SessionRuntime {
         if (pluginTests && kind !== "system") pluginTests.feed(text);
         if (parser && tests && kind !== "system" && !(kind === "stdout" && stdout)) tests.apply(parser.feed(text));
         if (kind !== "system") for (const l of runtime.lineListeners) l(text);
+        if (kind !== "system") runtime.dotnetReports?.feed(text);
       },
     }),
     queue: [],
@@ -946,17 +950,26 @@ export async function startRun(
     if ((options.launch || launch.isTest) && launch.emulateTerminal) launch = { ...launch, emulateTerminal: false };
     if (launch.emulateTerminal) rt.terminal = new TerminalOutput();
     patchSession(sessionId, { terminal: !!launch.emulateTerminal });
-    const started =
+    let started =
       launch.params?.framework === "plugin"
         ? launch
         : launch.isTest
           ? await gradleTestLaunch(withTestReporting(launch))
           : await gradleBootLaunch(launch);
+    if (launch.isTest && frameworkFor(launch) === "dotnet" && launch.params?.framework !== "plugin") {
+      rt.dotnetReports = new DotnetReports();
+      started = rt.dotnetReports.launch(started);
+    }
     if (runtimes.get(sessionId)?.generation !== generation) return getSession(sessionId) ?? null;
     const processStarted = performance.now();
+    const request = { id: nextRequestId(), controller: new AbortController() };
+    rt.resolveRequest = request;
     const info = await startWithRemedies(started, () => {
+      request.controller.signal.throwIfAborted();
       if (getSession(sessionId)?.stopped) throw new DOMException("Launch stopped", "AbortError");
-      return call(commands.runStart(started, channel));
+      return call(commands.runStart(started, channel, request.id));
+    }).finally(() => {
+      if (rt.resolveRequest === request) delete rt.resolveRequest;
     });
     console.info("Run process started", { name: config.name, ms: performance.now() - processStarted });
     if (runtimes.get(sessionId)?.generation !== generation) {
@@ -995,6 +1008,7 @@ export async function startRun(
       });
       return getSession(sessionId) ?? null;
     }
+    if (getSession(sessionId)?.stopped || isCancelled(e)) return getSession(sessionId) ?? null;
     const message = e instanceof Error ? e.message : String(e);
     enqueue(sessionId, { kind: "stderr", text: tx`Error running '${config.name}': ${message}\n` });
     flush(sessionId);
@@ -1007,7 +1021,7 @@ export async function startRun(
       group: "run",
       level: "error",
       title: `Error running '${remoteLabel(config)}'`,
-      body: message,
+      ...buildToolRecovery(message),
     });
   }
   return getSession(sessionId) ?? null;
@@ -1165,6 +1179,15 @@ function finishSession(sessionId: string, code: number | null) {
       if (runtimes.get(sessionId) !== rt) return;
       if (rt.tests && (rt.parser || rt.pluginTests)) {
         rt.tests.apply(rt.parser?.end?.() ?? []);
+        if (rt.dotnetReports) {
+          try {
+            const events = await rt.dotnetReports.read((path) => call(commands.fsReadText(path)));
+            if (runtimes.get(sessionId) !== rt) return;
+            rt.tests.apply(events);
+          } catch (e) {
+            rt.console.append({ kind: "system", text: tx`Could not read .NET test results: ${String(e)}\n` });
+          }
+        }
         // Surefire / Gradle print only failures and class totals: per-test results come from the XML reports.
         if (frameworkFor(session.config) === "jvm") {
           const reports = await jvmReports(session);
@@ -1293,6 +1316,21 @@ export function testReportEvents(reports: readonly TestCaseReport[]): TestEvent[
 function notifyExit(sessionId: string, code: number | null) {
   const session = getSession(sessionId);
   if (!session || session.stopped || code === 0 || code === null) return;
+  if (
+    session.config.kind === "go" &&
+    !useProject.getState().settings?.languages?.go?.goroot?.trim() &&
+    /No version (?:is )?set for (?:shim: )?go/i.test(runtimes.get(sessionId)?.console.text() ?? "")
+  ) {
+    notifications().notify({
+      group: "run",
+      level: "error",
+      key: `run-exit-${sessionId}`,
+      title: tx("Choose a Go SDK"),
+      body: tx("The Go version manager has no SDK selected. Choose an installed SDK in Go settings and run again."),
+      actions: [{ label: tx("Go Settings…"), run: () => void executeAction("file.settings", "languages.go") }],
+    });
+    return;
+  }
   let visible = true;
   try {
     visible = toolWindowService().isVisible("run");
@@ -1326,6 +1364,8 @@ export function onRunExited(runId: RunId, code: number | null) {
   const session = useRun.getState().sessions.find((s) => s.runId === runId);
   if (!session) {
     pendingExits.set(runId, code);
+    // Background project queries also use the process host without attaching a Run tab.
+    if (pendingExits.size > 128) pendingExits.delete(pendingExits.keys().next().value!);
     return;
   }
   finishSession(session.id, code);

@@ -67,3 +67,15 @@ it("keeps plugin Mapper file icons ahead of JVM interface presentation and resto
   }
   expect(icon("UserMapper.java", type("interface"))).toBe("interface");
 });
+
+it("passes the full path to explicit icon providers before JVM or Spring inference", () => {
+  const remove = addFileIconProvider((_name, path) =>
+    path === "/p/src/main/resources/application.yml" ? "file-docker" : null,
+  );
+  try {
+    expect(icon("src/main/resources/application.yml", null, true)).toBe("file-docker");
+    expect(icon("src/main/resources/application-other.yml", null, true)).toBe("spring-config");
+  } finally {
+    remove();
+  }
+});

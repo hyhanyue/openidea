@@ -24,6 +24,7 @@ const ipc = vi.hoisted(() => {
     runSaveConfigs: vi.fn(() => ok(null)),
     runStart: vi.fn(() => ok({ id: 1, pty: false })),
     runStop: vi.fn(() => ok(null)),
+    cancelRequest: vi.fn(() => ok(null)),
     javaResolveLaunch: vi.fn(() =>
       ok({
         build: "succeeded",
@@ -78,6 +79,7 @@ it.each(["sibling", "/outside/modules"])("runs from %s using the stored module's
   expect(ipc.runStart).toHaveBeenCalledWith(
     expect.objectContaining({ cwd, args: ["-cp", "/p/app/target/classes", "a.Main"] }),
     expect.anything(),
+    expect.any(Number),
   );
   expect(ipc.findFiles).not.toHaveBeenCalled();
 });
@@ -135,7 +137,11 @@ it("finds the source module for an old saved configuration without a module", as
   await startRun({ ...config, cwd: "/outside/modules" });
   expect(ipc.findFiles).toHaveBeenCalledWith("Main.java", 1000);
   expect(ipc.javaResolveLaunch).toHaveBeenCalledWith("app", false, "automatic", expect.any(Number));
-  expect(ipc.runStart).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/outside/modules" }), expect.anything());
+  expect(ipc.runStart).toHaveBeenCalledWith(
+    expect.objectContaining({ cwd: "/outside/modules" }),
+    expect.anything(),
+    expect.any(Number),
+  );
 });
 
 it.each([["-cp", "lib/*"], []])("colours Spring Boot runs without classpath resolution (%j)", async (...classpath) => {
@@ -146,6 +152,7 @@ it.each([["-cp", "lib/*"], []])("colours Spring Boot runs without classpath reso
   expect(ipc.runStart).toHaveBeenCalledWith(
     expect.objectContaining({ args: ["-Dspring.output.ansi.enabled=always", ...args] }),
     expect.anything(),
+    expect.any(Number),
   );
   expect(ipc.javaResolveLaunch).toHaveBeenCalledWith("app", false, "automatic", expect.any(Number));
   expect(boot.args).toBe(args);
@@ -155,14 +162,14 @@ it.each([["-cp", "lib/*"], []])("colours Spring Boot runs without classpath reso
 it.each(["never", "detect", "always"])("preserves an explicit Spring Boot console setting (%s)", async (value) => {
   const args = [`-Dspring.output.ansi.enabled=${value}`, "-cp", "lib/*", "a.Main"];
   await startRun({ ...config, kind: "spring-boot", args });
-  expect(ipc.runStart).toHaveBeenCalledWith(expect.objectContaining({ args }), expect.anything());
+  expect(ipc.runStart).toHaveBeenCalledWith(expect.objectContaining({ args }), expect.anything(), expect.any(Number));
   expect(ipc.javaResolveLaunch).toHaveBeenCalledWith("app", false, "automatic", expect.any(Number));
 });
 
 it("keeps plain Java runs with an explicit classpath free of Spring Boot options", async () => {
   const args = ["-cp", "lib/*", "a.Main"];
   await startRun({ ...config, args });
-  expect(ipc.runStart).toHaveBeenCalledWith(expect.objectContaining({ args }), expect.anything());
+  expect(ipc.runStart).toHaveBeenCalledWith(expect.objectContaining({ args }), expect.anything(), expect.any(Number));
   expect(ipc.javaResolveLaunch).toHaveBeenCalledWith("app", false, "automatic", expect.any(Number));
 });
 
@@ -173,6 +180,7 @@ it("adds the Spring Boot console option once when resolving the module classpath
       args: ["-Dspring.output.ansi.enabled=always", "-cp", "/p/app/target/classes", "a.Main"],
     }),
     expect.anything(),
+    expect.any(Number),
   );
 });
 
@@ -301,6 +309,7 @@ it("runs with the resolved project Java 8 SDK while keeping the tooling Java hom
       ],
     }),
     expect.anything(),
+    expect.any(Number),
   );
 });
 
@@ -336,7 +345,7 @@ it("honours Stop while native process creation is still in flight", async () => 
   await vi.waitFor(() => expect(ipc.runStart).toHaveBeenCalled());
   const id = useRun.getState().sessions[0]!.id;
   await stopSession(id);
-  expect(useRun.getState().sessions[0]).toMatchObject({ stopped: true, springBoot: { phase: "stopping" } });
+  expect(useRun.getState().sessions[0]).toMatchObject({ stopped: true, springBoot: { phase: "stopped" } });
   resolve({ status: "ok", data: { id: 99, pty: false } });
   await launching;
   expect(ipc.runStop).toHaveBeenCalledWith(99);

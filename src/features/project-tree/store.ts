@@ -9,6 +9,8 @@ import { call } from "@/platform/ipc";
 import { commands, type FileEntry, type OutlineItem } from "@/bindings";
 import { withDocument } from "@/editor/lsp/files";
 import { IpcError } from "@/platform/ipc";
+import { libraryEntryPaths } from "@/platform/virtualDocs";
+import { ipcPath } from "@/platform/paths";
 import {
   DEFAULT_TREE_OPTIONS,
   GROUP_PREFIX,
@@ -35,7 +37,12 @@ import {
 } from "./model";
 import { projectFs } from "./fs";
 import { javaLibraryEntries } from "./javaLibraryPath";
-import { projectViewRoots, useProjectViewRoots, type ProjectViewRootContribution } from "@/workbench/contributions";
+import {
+  projectViewRoots,
+  useProjectViewRoots,
+  type ProjectViewLead,
+  type ProjectViewRootContribution,
+} from "@/workbench/contributions";
 import { ancestorsWithin, isSameOrInside, joinPath, nameOf, parentOf, type PackageKind } from "./paths";
 
 export interface ViewOptions extends TreeOptions {
@@ -222,7 +229,7 @@ export function selectModel(s: ProjectTreeState): TreeModel {
   const contributed = projectViewRoots(extras);
   const memberRoots = s.members
     ?.map((path) => ({ path, label: nameOf(path), icon: "", detail: path }))
-    .sort((a, b) => compareNames(a.label, b.label));
+    .sort((a, b) => (a.path === s.root ? -1 : b.path === s.root ? 1 : compareNames(a.label, b.label)));
   const project = () =>
     memberRoots
       ? withExtraRoots(EMPTY_MODEL, memberRoots, s.listings, options, placeholder)
@@ -404,6 +411,14 @@ export function setSelection(selected: ReadonlySet<string>, lead: string | null)
   set({ selected, lead });
 }
 
+/** The selection's lead node, in the shape the navigation bar shows (IDEA's bar follows the tree). */
+export function leadSelection(): ProjectViewLead | null {
+  const { lead, selected } = get();
+  const node = currentModel().byKey.get(lead ?? [...selected][0] ?? "");
+  if (!node || node.placeholder || node.group) return null;
+  return { path: node.path, dir: node.dir };
+}
+
 export function setViewOption<K extends keyof ViewOptions>(key: K, value: ViewOptions[K]) {
   const options = { ...get().options, [key]: value };
   set({ options });
@@ -462,7 +477,12 @@ export function loadDir(path: string, force = false): Promise<void> {
 }
 
 /** Applies a backend `fsChanged` event: reloads affected loaded folders only. */
-export async function applyFsChange(event: { created: string[]; modified: string[]; removed: string[] }) {
+export async function applyFsChange(event: {
+  created: string[];
+  modified: string[];
+  removed: string[];
+  ignoreRules?: string[];
+}) {
   const s = get();
   if (!s.root) return;
   const plan = planRefresh(event, new Set(s.listings.keys()));
@@ -615,14 +635,28 @@ export async function revealEditorPath(
 }
 
 /** Expands the ancestors of `path` and selects it once visible. */
-export function revealPath(path: string, focus = false, archiveRoot?: string) {
+export function revealPath(requested: string, focus = false, archiveRoot?: string) {
   const seq = ++revealSeq;
   const { expanded } = get();
   const project = get().root;
-  const root = project
-    ? (archiveRoot ?? memberRootOf(path) ?? (isSameOrInside(path, project) ? project : extraRootOf(path)))
-    : null;
-  if (!root) return false;
+  if (!project) return false;
+  // Registered archive roots by their `/`-separated form, which candidate paths use.
+  const archiveRoots = new Map(
+    extraFolders(projectViewRoots(useProjectViewRoots.getState().roots)).flatMap((r) =>
+      r.path?.endsWith("!") ? [[ipcPath(r.path), r.path] as const] : [],
+    ),
+  );
+  const archives = [...archiveRoots.keys()];
+  const rootOf = (p: string) => {
+    if (archiveRoot) return archiveRoot;
+    const archive = p.indexOf("!/");
+    if (archive !== -1) return archiveRoots.get(ipcPath(p.slice(0, archive + 1))) ?? null;
+    return memberRootOf(p) ?? (isSameOrInside(p, project) ? project : extraRootOf(p));
+  };
+  // Library documents (`jdt://`, `jar:` URIs) are shown as entries of their archive under External Libraries.
+  const path = [requested, ...libraryEntryPaths(requested, archives)].find((p) => rootOf(p) !== null);
+  if (!path) return false;
+  const root = rootOf(path)!;
   // Library folders sit below group nodes (External Libraries › SDK), keyed in their own namespace.
   const model = currentModel();
   const modelKey = model.keyOfPath.get(root);

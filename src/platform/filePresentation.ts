@@ -120,7 +120,7 @@ export function presentationIcon(
   spring: boolean,
 ): IconName {
   const name = basename(path);
-  const explicit = fileIconOverrideName(name);
+  const explicit = fileIconOverrideName(name, path);
   if (explicit) return explicit;
   const role = root ? rootFor(roots, relativePath(root, path))?.kind : null;
   if (

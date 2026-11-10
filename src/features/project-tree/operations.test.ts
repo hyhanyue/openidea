@@ -527,33 +527,24 @@ describe("reveal in the local file manager", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("leaves WSL paths alone on non-Windows desktops", () => {
+  it("does not reveal WSL paths on non-Windows desktops", () => {
     usePlatform.setState({ os: "macos" });
     useRemote.setState({
       session: { target: { kind: "wsl", distro: "Ubuntu" }, root: "/p", host: "Ubuntu", os: "linux", commands: [] },
     });
-    expect(revealablePath("/home/me/app")).toBe("/home/me/app");
+    expect(revealablePath("/home/me/app")).toBeNull();
   });
 
-  it("blocks an SSH ancestor selected from the File Path popup", async () => {
+  it("blocks the File Path popup for an unmapped SSH project", () => {
     usePlatform.setState({ os: "macos" });
     useRemote.setState({ session: ssh });
+    useLspPopup.setState({ popup: null });
     showFilePathPopup("/srv/remote-only/package.json");
-    const popup = useLspPopup.getState().popup;
-    expect(popup?.kind).toBe("list");
-    if (popup?.kind !== "list") return;
-    expect(popup.items.map((item) => item.id)).toEqual([
-      "/srv/remote-only/package.json",
-      "/srv/remote-only",
-      "/srv",
-      "/",
-    ]);
-    await popup.items[3]!.run();
+    expect(useLspPopup.getState().popup).toBeNull();
     expect(revealItemInDir).not.toHaveBeenCalled();
     expect(notify).toHaveBeenCalledExactlyOnceWith({
       level: "warning",
-      title: "Cannot reveal in Finder",
-      body: "This SSH project has no local filesystem mapping.",
+      title: "Remote project files cannot be shown in Finder",
     });
   });
 });

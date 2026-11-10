@@ -8,7 +8,7 @@
  * `exec:java`) get the agent through `MAVEN_OPTS`; any other configuration set to the Java
  * debugger (a script such as `catalina.sh run`) through `JAVA_TOOL_OPTIONS`, which every JVM reads.
  */
-import { isCancelled } from "@/platform/ipc";
+import { call, commands, isCancelled } from "@/platform/ipc";
 import { tx } from "@/platform/i18n";
 import { javaAgentDebugger, notifications } from "@/workbench/contributions";
 import type { RunConfig } from "@/platform/ipc";
@@ -39,14 +39,18 @@ function withProperty(args: readonly string[], key: string, value: string): stri
   return out;
 }
 
-/** The configuration with a waiting JDWP agent, or null when it starts no debuggable JVM. */
-export function jdwpLaunch(config: RunConfig): RunConfig | null {
+/** The configuration with a waiting JDWP agent, or null when it starts no debuggable JVM.
+ *  `jdwpPort`: pin a Surefire / Failsafe fork to this port — its "Listening for transport"
+ *  line stays buffered until the tests run, which `suspend=y` prevents, so the port must be
+ *  known without it. */
+export function jdwpLaunch(config: RunConfig, jdwpPort?: number): RunConfig | null {
   config = applyBuildPolicyToCommand(config);
   if (config.kind === "tomcat") return { ...config, params: { ...config.params, tomcatDebug: "true" } };
   const args = config.args;
   // java-debug merges env into its tooling JVM's environment. Let the Run manager own
   // isolated project JVMs instead, then attach the same debugger over loopback JDWP.
-  if (isJvmApplication(config) && config.includeSystemEnv === false) return { ...config, args: [JDWP_AGENT, ...args] };
+  if (config.kind === "jar-application" || (isJvmApplication(config) && config.includeSystemEnv === false))
+    return { ...config, args: [JDWP_AGENT, ...args] };
   // A single source file (`java Hi.java`): the agent goes before the file. Compiled first
   // (`javac … && java -cp …`): through `JDK_JAVA_OPTIONS`, which only the `java` launcher reads.
   if (config.kind === "java-file")
@@ -58,8 +62,9 @@ export function jdwpLaunch(config: RunConfig): RunConfig | null {
       return { ...config, args: withProperty(args, "spring-boot.run.jvmArguments", JDWP_AGENT) };
     if (config.isTest || args.some(isMavenTestGoal)) {
       const failsafe = args.some((a) => /integration-test|verify|failsafe/.test(a));
-      let out = withProperty(args, "maven.surefire.debug", JDWP_AGENT);
-      if (failsafe) out = withProperty(out, "maven.failsafe.debug", JDWP_AGENT);
+      const agent = jdwpPort ? JDWP_AGENT.replace("address=127.0.0.1:0", `address=127.0.0.1:${jdwpPort}`) : JDWP_AGENT;
+      let out = withProperty(args, "maven.surefire.debug", agent);
+      if (failsafe) out = withProperty(out, "maven.failsafe.debug", agent);
       return { ...config, args: out };
     }
     if (JVM_ADAPTERS.includes(config.debugAdapter ?? "") || args.some(isMavenInProcessGoal))
@@ -85,9 +90,16 @@ export function jdwpLaunch(config: RunConfig): RunConfig | null {
   return null;
 }
 
+/** A Maven test launch: its Surefire / Failsafe fork holds the "Listening" line, so pin its JDWP port. */
+function needsPinnedPort(config: RunConfig): boolean {
+  if (config.kind !== "maven" && !/(^|\/)mvnw?(\.cmd)?$/.test(config.command)) return false;
+  return config.isTest || config.args.some(isMavenTestGoal);
+}
+
 /** Runs an owned JVM only after the adapter is available; failed attach releases that exact process. */
 export async function debugWithAgent(config: RunConfig, show?: boolean): Promise<boolean> {
-  const launch = jdwpLaunch(config);
+  const pinned = needsPinnedPort(config) ? await call(commands.debugFreePort()).catch(() => null) : null;
+  const launch = jdwpLaunch(config, pinned ?? undefined);
   if (!launch) return false;
   let prepared;
   try {
@@ -191,6 +203,7 @@ export async function debugWithAgent(config: RunConfig, show?: boolean): Promise
     const run = current();
     if (!run || run.stopped || run.status !== "running") dispose();
   });
+  if (pinned !== null) waiting.add(pinned);
   await Promise.all([...waiting].map(attach));
   return true;
 }

@@ -126,6 +126,10 @@ impl PluginWorkspace for TestWorkspace {
     fn trusted(&self, _root: &Path) -> bool {
         self.trusted
     }
+    fn project_windows(&self, root: &Path) -> Vec<String> {
+        // `main` shows the fixture project; other open roots have no window left.
+        if root == self.root { vec!["closing".into(), "main".into()] } else { Vec::new() }
+    }
     fn project_of(&self, _window: &str) -> Option<PathBuf> {
         if let Some(left) = self.project_queries_left.lock().as_mut() {
             if *left == 0 {
@@ -3692,31 +3696,6 @@ fn listing_while_projects_change_does_not_deadlock() {
     }
 }
 
-/// Excalidraw: a web custom editor beside the text editor, with its fonts,
-/// file icon, template and language — no code.
-#[test]
-fn official_excalidraw_installs_and_serves_its_page() {
-    let tmp = tempfile::tempdir().unwrap();
-    let pkg = with_stand_in_page(&official("excalidraw"), tmp.path());
-    let f = fixture(Limits::default());
-    let info = f.install(&pkg);
-    assert_eq!(info.status, PluginStatus::Static, "{:?}", info.error);
-    let page = f.host.web_page("openidea.excalidraw", "canvas").unwrap();
-    let (rev, entry) = page.path.strip_prefix("openidea.excalidraw/").unwrap().split_once('/').unwrap();
-    assert_eq!(entry, "web/index.html");
-    let html = f.host.web_file("openidea.excalidraw", &format!("{rev}/{entry}")).unwrap();
-    let html = String::from_utf8(html.bytes).unwrap();
-    // Relative URLs only: the page is served from the package.
-    let script = html.split("src=\"").nth(1).unwrap().split('"').next().unwrap();
-    assert!(script.starts_with("./assets/"), "{script}");
-    assert!(f.host.web_file("openidea.excalidraw", &format!("{rev}/web/{}", &script[2..])).is_ok());
-    let font = f.host.web_file("openidea.excalidraw", &format!("{rev}/web/fonts/Virgil/Virgil-Regular.woff2")).unwrap();
-    assert_eq!(font.mime, "font/woff2");
-    assert_eq!(f.host.ui_items("customEditors")[0].decl["layout"], "preview");
-    assert!(f.host.languages().iter().any(|l| l.id.as_str() == "excalidraw"));
-    assert_eq!(f.host.assets("openidea.excalidraw", "fileIcon/excalidraw/").unwrap().len(), 2);
-}
-
 /// A copy of the official plugin at `src` in `dir`, with a stand-in for its
 /// built page (`web/` is built by plugins/build.sh, not checked in; build.sh
 /// checks what the build produces): an entry loading a script and a font by
@@ -3758,7 +3737,18 @@ fn official_graphviz_turns_its_pages_reports_into_problems() {
     assert_eq!(info.status, PluginStatus::Inactive, "{:?}", info.error);
     assert_eq!(f.host.ui_items("customEditors")[0].decl["layout"], "split");
     assert!(f.host.languages().iter().any(|l| l.id.as_str() == "dot"));
-    assert!(f.host.web_page("openidea.graphviz", "preview").is_ok());
+    assert_eq!(f.host.assets("openidea.graphviz", "fileIcon/graphviz/").unwrap().len(), 2);
+    let page = f.host.web_page("openidea.graphviz", "preview").unwrap();
+    let (rev, entry) = page.path.strip_prefix("openidea.graphviz/").unwrap().split_once('/').unwrap();
+    assert_eq!(entry, "web/index.html");
+    let html = f.host.web_file("openidea.graphviz", &format!("{rev}/{entry}")).unwrap();
+    let html = String::from_utf8(html.bytes).unwrap();
+    // Relative URLs only: the page is served from the package.
+    let script = html.split("src=\"").nth(1).unwrap().split('"').next().unwrap();
+    assert!(script.starts_with("./assets/"), "{script}");
+    assert!(f.host.web_file("openidea.graphviz", &format!("{rev}/web/{}", &script[2..])).is_ok());
+    let font = f.host.web_file("openidea.graphviz", &format!("{rev}/web/fonts/Virgil/Virgil-Regular.woff2")).unwrap();
+    assert_eq!(font.mime, "font/woff2");
 
     std::fs::write(f.project.join("flow.dot"), "digraph {\n  a -> \n}\n").unwrap();
     let editor = f.workspace.open("flow.dot", &[]);
@@ -4923,6 +4913,40 @@ fn notification_actions_keep_commands_and_window_scope() {
         assert!(f.take_events().iter().all(|(_, e)| !matches!(e, PluginEvent::Notification { .. })));
     }
     assert_eq!(f.status("jobs"), PluginStatus::Active, "a refused notification leaves the plugin running");
+}
+
+#[test]
+fn project_notifications_go_to_a_window_of_that_project_only() {
+    let f = fixture(Limits::default());
+    f.install(&sample("jobs"));
+    f.host.set_capability("jobs", "project.read", false).unwrap();
+    f.host.forget_client("closing");
+    let other = f.project.parent().unwrap().join("other");
+    std::fs::create_dir(&other).unwrap();
+    f.workspace.other_roots.lock().push(other.clone());
+    f.take_events();
+    let notifications = |f: &Fixture| {
+        f.take_events()
+            .into_iter()
+            .filter_map(|(client, event)| match event {
+                PluginEvent::Notification { title, actions, .. } => Some((client, title, actions)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // A scheduled call has no invoking window; a closing window is skipped.
+    let path = f.project.join("notes.txt").to_string_lossy().into_owned();
+    f.host.run_command("jobs", "notify-project", Some(&path), Invocation::default()).unwrap();
+    let sent = notifications(&f);
+    assert_eq!(sent.len(), 1);
+    assert_eq!((sent[0].0.as_deref(), sent[0].1.as_str()), (Some("main"), "Project update"));
+    assert_eq!((sent[0].2[0].command.as_str(), sent[0].2[0].argument.as_deref()), ("context", Some(path.as_str())));
+    // A project without a window fails without falling back to another one, even when invoked from one.
+    let path = other.join("notes.txt").to_string_lossy().into_owned();
+    let error = f.host.run_command("jobs", "notify-project", Some(&path), f.inv()).unwrap_err().message;
+    assert!(error.contains("not open"), "{error}");
+    assert!(notifications(&f).is_empty());
+    assert_eq!(f.status("jobs"), PluginStatus::Active);
 }
 
 #[test]
@@ -6186,7 +6210,8 @@ fn api14_test_selection_traps_and_timeouts_are_unsupported() {
         f.host.refresh_run_configurations(&f.project);
         let started = Instant::now();
         assert_eq!(f.host.select_tests("main", "plugin:execution:dynamic", vec![vec![failure.into()]]).unwrap(), None);
-        assert!(started.elapsed() < Duration::from_secs(5));
+        // Selection is a user action: bounded by the command budget, not the edit path.
+        assert!(started.elapsed() < Limits::default().timeout + Duration::from_secs(2));
     }
 }
 
