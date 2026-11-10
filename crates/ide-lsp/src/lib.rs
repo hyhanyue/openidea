@@ -3298,11 +3298,16 @@ impl LspManager {
             join_all(servers.iter().map(|s| self.stop_instance(s, true))).await;
             return;
         }
+        let servers: Vec<Arc<Server>> = self.servers.lock().clone();
         self.reconfigure_jdtls_workspace().await;
         self.stop_unlisted().await;
         let Some(me) = self.me.upgrade() else { return };
-        let servers: Vec<Arc<Server>> = self.servers.lock().clone();
         for s in servers {
+            // Replacement instances configure themselves during startup. Comparing their
+            // unset effective configuration here can restart the same new JVM twice.
+            if !self.servers.lock().iter().any(|current| current.id == s.id) {
+                continue;
+            }
             // The settings hook may run tools (`npm root -g`), as when the server starts.
             let next = match tokio::task::spawn_blocking({
                 let (me, s) = (me.clone(), s.clone());

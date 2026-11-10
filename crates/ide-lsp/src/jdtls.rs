@@ -740,6 +740,10 @@ impl LspManager {
     /// The jdtls instance serving `path` (a module directory or source file),
     /// started if needed and waited for.
     pub(crate) async fn jdtls(&self, path: &Path, cancel: &CancellationToken) -> IdeResult<(Arc<Server>, Running)> {
+        // Root-marker lookup starts at a file's parent. Module-directory requests
+        // must include the module itself instead of creating an unrelated root server.
+        let lookup = path.is_dir().then(|| path.join(".openidea-lsp-request"));
+        let path = lookup.as_deref().unwrap_or(path);
         let java = LanguageId::new("java");
         let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
         loop {

@@ -736,11 +736,64 @@ async fn java_classpath_waits_for_a_config_restart_that_is_reaping_startup() {
             assert!(result.unwrap_err().message.contains("restart configuration error"));
         } else {
             assert!(result.is_ok(), "a configuration restart is transient: {result:?}");
-            assert_eq!(state.launches.load(Ordering::SeqCst), 2);
+            assert_eq!(state.launches.load(Ordering::SeqCst), 2, "shared={shared}, failed={failed}");
             assert_eq!(h.mgr.servers()[0].id != old, shared);
         }
         h.mgr.shutdown_all().await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn java_directory_queries_reuse_the_module_server() {
+    let h = harness_for("java", "java", &[("jdtls", incremental_caps())], &[]);
+    let path = java_siblings(&h).remove(0);
+    h.mgr.did_open(DocId::next(), &path, &h.lang, 1, "class Main {}");
+    h.wait_status("jdtls", ServerStatus::Ready).await;
+    let module = path.parent().unwrap();
+    h.mgr.java_classpath(module, false, &Default::default()).await.unwrap();
+    assert_eq!(h.launcher.state("jdtls").launches.load(Ordering::SeqCst), 1);
+    let servers = h.mgr.servers();
+    assert_eq!(servers.len(), 1);
+    assert_eq!(servers[0].root.as_ref(), module);
+    h.mgr.shutdown_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn java_workspace_replacement_configures_once_without_restarting_its_startup() {
+    let h = harness_for("java", "java", &[("jdtls", incremental_caps())], &[]);
+    let shared = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    h.mgr.set_jdtls_shared_hook(Box::new({
+        let shared = shared.clone();
+        move || shared.load(Ordering::SeqCst)
+    }));
+    let gate = Arc::new(Gate::default());
+    h.mgr.set_config_hook(Box::new({
+        let shared = shared.clone();
+        let gate = gate.clone();
+        move |cfg, _| {
+            if shared.load(Ordering::SeqCst) {
+                gate.hold();
+                cfg.env.insert("MOCK_CONFIG_REVISION".into(), "shared".into());
+            }
+        }
+    }));
+    let state = h.launcher.state("jdtls");
+    let path = java_siblings(&h).remove(0);
+    h.mgr.did_open(DocId::next(), &path, &h.lang, 1, "class Main {}");
+    h.wait_status("jdtls", ServerStatus::Ready).await;
+    shared.store(true, Ordering::SeqCst);
+    let mut switching = tokio::spawn({
+        let manager = h.mgr.clone();
+        async move { manager.reconfigure().await }
+    });
+    eventually(|| gate.entered()).await;
+    let completed = tokio::time::timeout(Duration::from_secs(2), &mut switching).await;
+    gate.open();
+    assert!(completed.is_ok(), "reconfiguration must not reconfigure its replacement's pending startup");
+    completed.unwrap().unwrap();
+    h.wait_status("jdtls", ServerStatus::Ready).await;
+    assert_eq!(state.launches.load(Ordering::SeqCst), 2);
+    h.mgr.shutdown_all().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
